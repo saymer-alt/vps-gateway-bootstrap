@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,7 @@ import (
 // FileExecutor implements only owned file mutations. It never accepts
 // arbitrary shell commands and refuses paths outside its configured root.
 type FileExecutor struct {
-	Root string
+	Root    string
 	Backups string
 	Actions map[string]state.Action
 }
@@ -40,7 +39,7 @@ func (e *FileExecutor) Backup(actionID, resource string) error {
 	if err := os.WriteFile(filepath.Join(backupDir, "content"), data, 0600); err != nil { return err }
 	info, err := os.Stat(path)
 	if err != nil { return err }
-	return os.WriteFile(meta, []byte(fmt.Sprintf("PRESENT\nmode=%o\nsha256=%s\n", info.Mode().Perm(), checksum(data)), 0600)
+	return os.WriteFile(meta, []byte(fmt.Sprintf("PRESENT\nmode=%o\nsha256=%s\n", info.Mode().Perm(), checksum(data))), 0600)
 }
 
 func (e *FileExecutor) Apply(actionID, resource, kind string) error {
@@ -67,7 +66,10 @@ func (e *FileExecutor) Validate(actionID, resource string) error {
 	if a.Spec == nil || a.Spec.File == nil { return nil }
 	path, err := e.safePath(a.Spec.File.Path)
 	if err != nil { return err }
-	if a.Spec.File.Delete { if _, err := os.Stat(path); os.IsNotExist(err) { return nil }; return fmt.Errorf("file still exists: %s", a.Spec.File.Path) }
+	if a.Spec.File.Delete {
+		if _, err := os.Stat(path); os.IsNotExist(err) { return nil }
+		return fmt.Errorf("file still exists: %s", a.Spec.File.Path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil { return err }
 	if checksum(data) != checksum([]byte(a.Spec.File.Content)) { return errors.New("effective file content checksum mismatch") }
@@ -90,7 +92,12 @@ func (e *FileExecutor) Rollback(actionID, resource string) error {
 	data, err := os.ReadFile(filepath.Join(backupDir, "content"))
 	if err != nil { return err }
 	mode := os.FileMode(0600)
-	for _, line := range strings.Split(string(meta), "\n") { if strings.HasPrefix(line, "mode=") { var n uint64; if _, err := fmt.Sscanf(strings.TrimPrefix(line, "mode="), "%o", &n); err == nil { mode = os.FileMode(n) } } }
+	for _, line := range strings.Split(string(meta), "\n") {
+		if strings.HasPrefix(line, "mode=") {
+			var n uint64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "mode="), "%o", &n); err == nil { mode = os.FileMode(n) }
+		}
+	}
 	return atomicWrite(path, data, mode)
 }
 
@@ -113,7 +120,7 @@ func (e *FileExecutor) safePath(p string) (string, error) {
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".vps-gateway-* ")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".vps-gateway-*")
 	if err != nil { return err }
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
@@ -125,4 +132,3 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 func checksum(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
-var _ io.Reader
