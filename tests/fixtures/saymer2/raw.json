@@ -1,0 +1,11 @@
+{
+  "ip -j link": "[{\"ifindex\":2,\"ifname\":\"eth0\",\"mtu\":1500,\"operstate\":\"UP\",\"address\":\"52:54:00:11:22:33\",\"link_type\":\"ether\",\"altnames\":[\"enp0s3\",\"ens3\"]},{\"ifindex\":3,\"ifname\":\"tun-mihomo\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"tun\"},{\"ifindex\":4,\"ifname\":\"wg0\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"wireguard\"},{\"ifindex\":5,\"ifname\":\"amn0\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"wireguard\"},{\"ifindex\":6,\"ifname\":\"docker0\",\"mtu\":1500,\"operstate\":\"DOWN\",\"address\":\"02:42:ac:11:00:01\",\"link_type\":\"ether\"}]",
+  "ip -j addr": "[{\"ifname\":\"eth0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"5.175.236.20\",\"prefixlen\":24},{\"family\":\"inet6\",\"local\":\"2001:db8::20\",\"prefixlen\":64}]},{\"ifname\":\"tun-mihomo\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.255.255.1\",\"prefixlen\":30}]},{\"ifname\":\"wg0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.8.0.1\",\"prefixlen\":24}]},{\"ifname\":\"amn0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.9.0.1\",\"prefixlen\":24}]},{\"ifname\":\"docker0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"172.17.0.1\",\"prefixlen\":16}]}]",
+  "ip -j route show default": "[{\"dst\":\"default\",\"gateway\":\"5.175.236.1\",\"dev\":\"eth0\",\"protocol\":\"dhcp\",\"metric\":100}]",
+  "ip -j rule": "[{\"priority\":0,\"from\":\"all\",\"table\":\"local\"},{\"priority\":32766,\"from\":\"all\",\"table\":\"main\"},{\"priority\":32767,\"from\":\"all\",\"table\":\"default\"}]",
+  "ip -j route show table all": "[{\"dst\":\"default\",\"gateway\":\"5.175.236.1\",\"dev\":\"eth0\",\"table\":254,\"metric\":100},{\"dst\":\"default\",\"dev\":\"lo\",\"table\":255}]",
+  "sshd -T": "port 2222\npasswordauthentication no\npubkeyauthentication yes\npermitrootlogin prohibit-password\n",
+  "systemctl is-active ssh.socket": "inactive\n",
+  "ss -H -lntp": "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:((\"sshd\",pid=123,fd=3))\n",
+  "ss -H -lnup": "UNCONN 0 0 0.0.0.0:40000 0.0.0.0:* users:((\"mita\",pid=234,fd=5))\n"
+}
