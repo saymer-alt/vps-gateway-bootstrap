@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "discovery_version": "0.2.0",
+  "host": {"hostname": "Saymer2"},
+  "system": {"os": {"id": "debian", "version_id": "12"}, "kernel": {"release": "6.1.0-52-amd64", "architecture": "x86_64"}, "cpu": {"count": 2}, "memory": {"total_mb": 925}, "swap": {"total_mb": 1536}},
+  "network": {"external_interface": "eth0", "default_gateway": "5.175.236.1", "ipv4": true, "ipv6": true, "interfaces": [{"name":"eth0","mtu":1500,"alt_names":["enp0s3","ens3"]},{"name":"tun-mihomo","mtu":1420},{"name":"wg0","mtu":1420},{"name":"amn0","mtu":1420},{"name":"docker0","mtu":1500}]},
+  "routing": {"rules": [], "tables": []},
+  "docker": {"installed": true, "active": true, "version": "29.7.2"},
+  "gateway": {"mihomo":{"installed":true},"mieru":{"installed":true},"wireguard":{"installed":true,"interfaces":["wg0"]},"amnezia":{"installed":true,"interfaces":["amn0"]}}
+}
