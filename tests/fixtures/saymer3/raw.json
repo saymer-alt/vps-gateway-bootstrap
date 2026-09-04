@@ -1,0 +1,11 @@
+{
+  "ip -j link": "[{\"ifindex\":2,\"ifname\":\"ens3\",\"mtu\":1500,\"operstate\":\"UP\",\"address\":\"52:54:00:44:55:66\",\"link_type\":\"ether\",\"altnames\":[\"enp0s3\"]},{\"ifindex\":3,\"ifname\":\"tun-mihomo\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"tun\"},{\"ifindex\":4,\"ifname\":\"wg0\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"wireguard\"},{\"ifindex\":5,\"ifname\":\"amn0\",\"mtu\":1420,\"operstate\":\"UNKNOWN\",\"address\":\"00:00:00:00:00:00\",\"link_type\":\"wireguard\"},{\"ifindex\":6,\"ifname\":\"docker0\",\"mtu\":1500,\"operstate\":\"DOWN\",\"address\":\"02:42:ac:11:00:01\",\"link_type\":\"ether\"}]",
+  "ip -j addr": "[{\"ifname\":\"ens3\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"192.0.2.20\",\"prefixlen\":24}]},{\"ifname\":\"tun-mihomo\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.255.255.1\",\"prefixlen\":30}]},{\"ifname\":\"wg0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.8.0.1\",\"prefixlen\":24}]},{\"ifname\":\"amn0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.9.0.1\",\"prefixlen\":24}]},{\"ifname\":\"docker0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"172.17.0.1\",\"prefixlen\":16}]}]",
+  "ip -j route show default": "[{\"dst\":\"default\",\"gateway\":\"192.0.2.1\",\"dev\":\"ens3\",\"protocol\":\"static\"}]",
+  "ip -j rule": "[{\"priority\":0,\"from\":\"all\",\"table\":\"local\"},{\"priority\":40,\"from\":\"all\",\"fwmark\":136,\"table\":\"main\"},{\"priority\":100,\"from\":\"172.29.172.0/24\",\"table\":\"mihomo\"},{\"priority\":32766,\"from\":\"all\",\"table\":\"main\"},{\"priority\":32767,\"from\":\"all\",\"table\":\"default\"}]",
+  "ip -j route show table all": "[{\"dst\":\"default\",\"gateway\":\"192.0.2.1\",\"dev\":\"ens3\",\"table\":254},{\"dst\":\"default\",\"dev\":\"tun-mihomo\",\"table\":100},{\"dst\":\"172.29.172.0/24\",\"dev\":\"docker0\",\"table\":254}]",
+  "sshd -T": "port 2222\npasswordauthentication no\npubkeyauthentication yes\npermitrootlogin prohibit-password\n",
+  "systemctl is-active ssh.socket": "active\n",
+  "ss -H -lntp": "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:((\"sshd\",pid=123,fd=3))\nLISTEN 0 128 127.0.0.1:7890 0.0.0.0:* users:((\"mihomo\",pid=456,fd=7))\n",
+  "ss -H -lnup": "UNCONN 0 0 0.0.0.0:40000 0.0.0.0:* users:((\"mita\",pid=234,fd=5))\n"
+}
