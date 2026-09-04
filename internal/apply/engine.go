@@ -7,10 +7,8 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
-// Engine executes an already approved plan as a transaction. The engine does
-// not know how SSH, firewall, routing or services are changed; those details
-// belong to ActionExecutor. This keeps dangerous operations typed and
-// auditable instead of turning Apply into an arbitrary shell runner.
+// Engine executes an already approved plan as a transaction. Dangerous
+// platform operations remain behind ActionExecutor.
 type Engine struct {
 	Executor ActionExecutor
 	Now      func() time.Time
@@ -22,17 +20,10 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 	if e.Now != nil { now = e.Now }
 	started := now()
 	t := Transaction{ID: transactionID(started, e.ID), StartedAt: started, Status: StatusReady}
-
-	if p.Blocked {
-		return blocked(t, p.BlockReasons)
-	}
-	if gate != nil && !gate.Ready() {
-		return blocked(t, gate.Reasons())
-	}
+	if p.Blocked { return blocked(t, p.BlockReasons) }
+	if gate != nil && !gate.Ready() { return blocked(t, gate.Reasons()) }
 	if e.Executor == nil {
-		t.Status = StatusFailed
-		t.Error = "no action executor configured"
-		t.EndedAt = now()
+		t.Status, t.Error, t.EndedAt = StatusFailed, "no action executor configured", now()
 		return t
 	}
 
@@ -42,56 +33,52 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 		if err := e.Executor.Backup(a.ID, a.Resource); err != nil {
 			result.Status, result.Error = "BACKUP_FAILED", err.Error()
 			t.Actions = append(t.Actions, result)
-			t.Status = StatusFailed
-			t.Error = fmt.Sprintf("backup %s: %v", a.Resource, err)
-			t.EndedAt = now()
+			t.Status, t.Error, t.EndedAt = StatusFailed, fmt.Sprintf("backup %s: %v", a.Resource, err), now()
 			return t
 		}
 		if err := e.Executor.Apply(a.ID, a.Resource, string(a.Kind)); err != nil {
 			result.Status, result.Error = "APPLY_FAILED", err.Error()
 			t.Actions = append(t.Actions, result)
-			rollback(t, completed, e.Executor)
-			t.Status = StatusRolledBack
-			t.Error = fmt.Sprintf("apply %s: %v", a.Resource, err)
-			t.EndedAt = now()
+			rollback(&t, completed, e.Executor)
+			// An executor may have changed state before returning an error.
+			if rerr := e.Executor.Rollback(a.ID, a.Resource); rerr == nil {
+				result.RolledBack, result.Status = true, "ROLLED_BACK"
+			} else { result.Error += "; rollback: " + rerr.Error() }
+			t.Actions[len(t.Actions)-1] = result
+			t.Status, t.Error, t.EndedAt = StatusRolledBack, fmt.Sprintf("apply %s: %v", a.Resource, err), now()
 			return t
 		}
 		if err := e.Executor.Validate(a.ID, a.Resource); err != nil {
 			result.Status, result.Error = "VALIDATION_FAILED", err.Error()
 			t.Actions = append(t.Actions, result)
 			completed = append(completed, result)
-			rollback(t, completed, e.Executor)
-			t.Status = StatusRolledBack
-			t.Error = fmt.Sprintf("validate %s: %v", a.Resource, err)
-			t.EndedAt = now()
+			rollback(&t, completed, e.Executor)
+			t.Status, t.Error, t.EndedAt = StatusRolledBack, fmt.Sprintf("validate %s: %v", a.Resource, err), now()
 			return t
 		}
 		result.Status = "APPLIED"
 		t.Actions = append(t.Actions, result)
 		completed = append(completed, result)
 	}
-
-	t.Status = StatusApplied
-	t.EndedAt = now()
+	t.Status, t.EndedAt = StatusApplied, now()
 	return t
 }
 
-func rollback(t Transaction, completed []ActionResult, ex ActionExecutor) {
-	for i := len(completed) - 1; i >= 0; i-- {
-		r := &t.Actions[actionIndex(t.Actions, completed[i].ActionID)]
-		if err := ex.Rollback(r.ActionID, r.Resource); err != nil {
-			r.Status = "ROLLBACK_FAILED"
-			r.Error = err.Error()
+func rollback(t *Transaction, completed []ActionResult, ex ActionExecutor) {
+	for i := len(completed)-1; i >= 0; i-- {
+		idx := actionIndex(t.Actions, completed[i].ActionID)
+		if idx < 0 { continue }
+		if err := ex.Rollback(t.Actions[idx].ActionID, t.Actions[idx].Resource); err != nil {
+			t.Actions[idx].Status, t.Actions[idx].Error = "ROLLBACK_FAILED", err.Error()
 		} else {
-			r.RolledBack = true
-			r.Status = "ROLLED_BACK"
+			t.Actions[idx].RolledBack, t.Actions[idx].Status = true, "ROLLED_BACK"
 		}
 	}
 }
 
 func actionIndex(actions []ActionResult, id string) int {
 	for i := len(actions)-1; i >= 0; i-- { if actions[i].ActionID == id { return i } }
-	return 0
+	return -1
 }
 
 func blocked(t Transaction, reasons []string) Transaction {
