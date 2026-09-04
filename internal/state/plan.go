@@ -1,19 +1,21 @@
 package state
 
+import "strconv"
+
 // ActionKind is a typed, auditable operation. Plan deliberately does not
 // contain arbitrary shell snippets: executors decide how to perform actions.
 type ActionKind string
 
 const (
-	ActionCreateFile       ActionKind = "CREATE_FILE"
-	ActionUpdateFile       ActionKind = "UPDATE_FILE"
-	ActionDeleteOwnedFile  ActionKind = "DELETE_OWNED_FILE"
-	ActionFirewall         ActionKind = "FIREWALL"
-	ActionRouting          ActionKind = "ROUTING"
-	ActionService          ActionKind = "SERVICE"
-	ActionInstaller        ActionKind = "INSTALLER"
-	ActionValidate         ActionKind = "VALIDATE"
-	ActionReboot           ActionKind = "REBOOT"
+	ActionCreateFile      ActionKind = "CREATE_FILE"
+	ActionUpdateFile      ActionKind = "UPDATE_FILE"
+	ActionDeleteOwnedFile ActionKind = "DELETE_OWNED_FILE"
+	ActionFirewall        ActionKind = "FIREWALL"
+	ActionRouting         ActionKind = "ROUTING"
+	ActionService         ActionKind = "SERVICE"
+	ActionInstaller       ActionKind = "INSTALLER"
+	ActionValidate        ActionKind = "VALIDATE"
+	ActionReboot          ActionKind = "REBOOT"
 )
 
 type Risk string
@@ -77,20 +79,13 @@ func BuildPlan(m Model) Plan {
 			})
 		case Conflict, UnknownDiff, Unsupported:
 			p.Blocked = true
-			p.BlockReasons = append(p.BlockReasons, d.Resource+": "+d.Kind+" — "+d.Reason)
+			p.BlockReasons = append(p.BlockReasons, d.Resource+": "+string(d.Kind)+" — "+d.Reason)
 		}
 	}
 	return p
 }
 
-func actionID(i int, resource string) string { return "action-" + itoa(i) + "-" + resource }
-func itoa(i int) string {
-	if i == 0 { return "0" }
-	b := [20]byte{}
-	p := len(b)
-	for i > 0 { p--; b[p] = byte('0' + i%10); i /= 10 }
-	return string(b[p:])
-}
+func actionID(i int, resource string) string { return "action-" + strconv.Itoa(i) + "-" + resource }
 
 func actionForResource(resource string, diff DiffKind) ActionKind {
 	switch {
