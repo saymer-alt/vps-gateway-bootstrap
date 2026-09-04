@@ -38,5 +38,5 @@ func (c *Collector) Discover(ctx context.Context) Result {
 
 func addObservation(dst *[]Observation, code, component, message string) { *dst = append(*dst, Observation{Code: code, Component: component, Message: message}) }
 func output(c *Collector, ctx context.Context, name string, args ...string) ([]byte, error) { return c.Run.Run(ctx, name, args...) }
-func text(c *Collector, ctx context.Context, name string, args ...string) string { b, _ := output(c, name, args...); return strings.TrimSpace(string(b)) }
+func text(c *Collector, ctx context.Context, name string, args ...string) string { b, _ := output(c, ctx, name, args...); return strings.TrimSpace(string(b)) }
 func jsonOut(c *Collector, ctx context.Context, dst any, name string, args ...string) error { b, err := output(c, ctx, name, args...); if err != nil { return err }; return json.Unmarshal(b, dst) }
