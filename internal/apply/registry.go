@@ -6,9 +6,6 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
-// Registry dispatches each planned action to the executor responsible for its kind.
-// The action registry is explicit so Backup/Validate/Rollback cannot guess a kind
-// from a resource name that may be handled differently in another profile.
 type Registry struct {
 	ByKind  map[state.ActionKind]ActionExecutor
 	Actions map[string]state.Action
