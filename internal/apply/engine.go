@@ -17,11 +17,17 @@ type Engine struct {
 
 func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 	now := time.Now
-	if e.Now != nil { now = e.Now }
+	if e.Now != nil {
+		now = e.Now
+	}
 	started := now()
 	t := Transaction{ID: transactionID(started, e.ID), StartedAt: started, Status: StatusReady}
-	if p.Blocked { return blocked(t, p.BlockReasons) }
-	if gate != nil && !gate.Ready() { return blocked(t, gate.Reasons()) }
+	if p.Blocked {
+		return blocked(t, p.BlockReasons)
+	}
+	if gate != nil && !gate.Ready() {
+		return blocked(t, gate.Reasons())
+	}
 	if e.Executor == nil {
 		t.Status, t.Error, t.EndedAt = StatusFailed, "no action executor configured", now()
 		return t
@@ -33,7 +39,10 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 		if err := e.Executor.Backup(a.ID, a.Resource); err != nil {
 			result.Status, result.Error = "BACKUP_FAILED", err.Error()
 			t.Actions = append(t.Actions, result)
-			t.Status, t.Error, t.EndedAt = StatusFailed, fmt.Sprintf("backup %s: %v", a.Resource, err), now()
+			// A later backup can fail after earlier actions have already changed
+			// the machine. Roll those completed actions back before returning.
+			rollback(&t, completed, e.Executor)
+			t.Status, t.Error, t.EndedAt = StatusRolledBack, fmt.Sprintf("backup %s: %v", a.Resource, err), now()
 			return t
 		}
 		if err := e.Executor.Apply(a.ID, a.Resource, string(a.Kind)); err != nil {
@@ -43,7 +52,9 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 			// An executor may have changed state before returning an error.
 			if rerr := e.Executor.Rollback(a.ID, a.Resource); rerr == nil {
 				result.RolledBack, result.Status = true, "ROLLED_BACK"
-			} else { result.Error += "; rollback: " + rerr.Error() }
+			} else {
+				result.Error += "; rollback: " + rerr.Error()
+			}
 			t.Actions[len(t.Actions)-1] = result
 			t.Status, t.Error, t.EndedAt = StatusRolledBack, fmt.Sprintf("apply %s: %v", a.Resource, err), now()
 			return t
@@ -65,9 +76,11 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 }
 
 func rollback(t *Transaction, completed []ActionResult, ex ActionExecutor) {
-	for i := len(completed)-1; i >= 0; i-- {
+	for i := len(completed) - 1; i >= 0; i-- {
 		idx := actionIndex(t.Actions, completed[i].ActionID)
-		if idx < 0 { continue }
+		if idx < 0 {
+			continue
+		}
 		if err := ex.Rollback(t.Actions[idx].ActionID, t.Actions[idx].Resource); err != nil {
 			t.Actions[idx].Status, t.Actions[idx].Error = "ROLLBACK_FAILED", err.Error()
 		} else {
@@ -77,17 +90,25 @@ func rollback(t *Transaction, completed []ActionResult, ex ActionExecutor) {
 }
 
 func actionIndex(actions []ActionResult, id string) int {
-	for i := len(actions)-1; i >= 0; i-- { if actions[i].ActionID == id { return i } }
+	for i := len(actions) - 1; i >= 0; i-- {
+		if actions[i].ActionID == id {
+			return i
+		}
+	}
 	return -1
 }
 
 func blocked(t Transaction, reasons []string) Transaction {
 	t.Status = StatusBlocked
-	if len(reasons) > 0 { t.Error = reasons[0] }
+	if len(reasons) > 0 {
+		t.Error = reasons[0]
+	}
 	return t
 }
 
 func transactionID(t time.Time, custom func(time.Time) string) string {
-	if custom != nil { return custom(t) }
+	if custom != nil {
+		return custom(t)
+	}
 	return fmt.Sprintf("tx-%d", t.UnixNano())
 }
