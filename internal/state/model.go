@@ -47,7 +47,7 @@ type Model struct {
 	Capabilities     Capabilities `json:"capabilities"`
 	Constraints      []Constraint `json:"constraints"`
 	Diff             []DiffItem `json:"diff"`
-	Status           Status `json:"status"`
+	Status            Status `json:"status"`
 }
 
 type Actual struct {
@@ -61,7 +61,7 @@ type Actual struct {
 
 type SystemActual struct { OS string `json:"os,omitempty"`; Kernel string `json:"kernel,omitempty"`; Architecture string `json:"architecture,omitempty"` }
 type NetworkActual struct { ExternalInterface string `json:"external_interface,omitempty"`; DefaultGateway string `json:"default_gateway,omitempty"`; IPv4 bool `json:"ipv4"`; IPv6 bool `json:"ipv6"` }
-type SecurityActual struct { SSHPorts []int `json:"ssh_ports,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
+type SecurityActual struct { SSHPorts []int `json:"ssh_ports,omitempty"`; SSHArchitecture string `json:"ssh_architecture,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
 type ContainersActual struct { DockerInstalled bool `json:"docker_installed"`; DockerActive bool `json:"docker_active"` }
 type ServiceActual struct { Name string `json:"name"`; Enabled bool `json:"enabled"`; Active bool `json:"active"`; SubState string `json:"substate,omitempty"` }
 type GatewayActual struct { MihomoInstalled bool `json:"mihomo_installed"`; MihomoActive bool `json:"mihomo_active"`; MieruInstalled bool `json:"mieru_installed"`; MieruActive bool `json:"mieru_active"`; WireGuardInstalled bool `json:"wireguard_installed"`; AmneziaInstalled bool `json:"amnezia_installed"` }
