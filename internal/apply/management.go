@@ -2,8 +2,6 @@ package apply
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 )
 
@@ -13,18 +11,25 @@ import (
 // controller-side probe.
 type ManagementProbe func(host string, port int, timeout time.Duration) error
 
-// ValidateManagementEndpoint performs the minimum safe local preflight for a
-// management endpoint. It validates address construction only; it never
-// treats that as proof of remote reachability.
+// ValidateManagementEndpoint performs deterministic local validation only.
+// DNS resolution and network reachability belong to the actual management
+// probe and must not be hidden inside this validation helper.
 func ValidateManagementEndpoint(host string, port int) error {
-	if host == "" { return fmt.Errorf("management host is empty") }
-	if port <= 0 || port > 65535 { return fmt.Errorf("invalid management port %d", port) }
-	if _, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, strconv.Itoa(port))); err != nil { return err }
+	if host == "" {
+		return fmt.Errorf("management host is empty")
+	}
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("invalid management port %d", port)
+	}
 	return nil
 }
 
 func probeManagement(probe ManagementProbe, host string, port int, timeout time.Duration) error {
-	if err := ValidateManagementEndpoint(host, port); err != nil { return err }
-	if probe == nil { return fmt.Errorf("remote management probe is not configured") }
+	if err := ValidateManagementEndpoint(host, port); err != nil {
+		return err
+	}
+	if probe == nil {
+		return fmt.Errorf("remote management probe is not configured")
+	}
 	return probe(host, port, timeout)
 }
