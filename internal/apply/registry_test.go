@@ -1,7 +1,6 @@
 package apply
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
@@ -37,5 +36,3 @@ func TestRegistryRejectsMissingExecutor(t *testing.T) {
 	r := Registry{Actions: map[string]state.Action{"a1": a}}
 	if err := r.Validate("a1", "svc.test"); err == nil { t.Fatal("expected missing executor") }
 }
-
-var _ = errors.New
