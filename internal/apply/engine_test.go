@@ -2,6 +2,8 @@ package apply
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -201,4 +203,77 @@ func TestApplyWithoutExecutorFailsBeforeMutation(t *testing.T) {
 	if tr.Error != "no action executor configured" {
 		t.Fatalf("error=%q", tr.Error)
 	}
+}
+
+func finalSSHAction() state.Action {
+	a := sshAction(2222, 2200)
+	a.Kind = state.ActionSSHFinalize
+	a.Spec.SSH.ConfigPath = "/etc/ssh/sshd_config.d/99-vps-gateway.conf"
+	a.Spec.SSH.ConfigContent = "Port 2222\nPort 2200\n"
+	a.Spec.SSH.RequireOldListener = true
+	a.Spec.SSH.RequireNewListener = true
+	return a
+}
+
+func TestSSHFinalizeRequiresRemoteProbe(t *testing.T) {
+	a := finalSSHAction()
+	root := t.TempDir()
+	config := filepath.Join(root, "etc/ssh/sshd_config.d/99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(config, []byte(a.Spec.SSH.ConfigContent), 0600); err != nil { t.Fatal(err) }
+	a.Spec.SSH.ConfigPath = config
+
+	e := &SSHFinalizeExecutor{Base: &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
+		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
+		return "", nil
+	}}
+	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err == nil {
+		t.Fatal("expected missing management probe to block finalization")
+	}
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != a.Spec.SSH.ConfigContent { t.Fatalf("config changed despite failed probe: %q", got) }
+}
+
+func TestSSHFinalizeProbeFailureLeavesDualListener(t *testing.T) {
+	a := finalSSHAction()
+	root := t.TempDir()
+	config := filepath.Join(root, "etc/ssh/sshd_config.d/99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(config, []byte(a.Spec.SSH.ConfigContent), 0600); err != nil { t.Fatal(err) }
+	a.Spec.SSH.ConfigPath = config
+	base := &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
+		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
+		return "", nil
+	}}
+	e := &SSHFinalizeExecutor{Base: base, Probe: func(string, int, time.Duration) error { return errors.New("unreachable") }, ManagementHost: "controller.example", ManagementPort: 2200}
+	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err == nil { t.Fatal("expected probe failure") }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != a.Spec.SSH.ConfigContent { t.Fatalf("config changed after failed probe: %q", got) }
+}
+
+func TestSSHFinalizeSuccessfulProbeRemovesOldListener(t *testing.T) {
+	a := finalSSHAction()
+	root := t.TempDir()
+	config := filepath.Join(root, "etc/ssh/sshd_config.d/99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(config, []byte(a.Spec.SSH.ConfigContent), 0600); err != nil { t.Fatal(err) }
+	a.Spec.SSH.ConfigPath = config
+	ssCalls := 0
+	base := &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
+		if name == "ss" {
+			ssCalls++
+			if ssCalls <= 2 { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
+			return "LISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil
+		}
+		return "", nil
+	}}
+	probed := false
+	e := &SSHFinalizeExecutor{Base: base, Probe: func(host string, port int, timeout time.Duration) error { probed = host == "controller.example" && port == 2200; return nil }, ManagementHost: "controller.example", ManagementPort: 2200}
+	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err != nil { t.Fatal(err) }
+	if !probed { t.Fatal("management probe was not called with controller endpoint") }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != "Port 2200\n" { t.Fatalf("final config=%q", got) }
 }
