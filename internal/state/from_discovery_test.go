@@ -37,5 +37,5 @@ func TestFromDiscoveryPreservesActualState(t *testing.T) {
 	if m.Actual.Security.PasswordAuthentication == nil || *m.Actual.Security.PasswordAuthentication { t.Fatal("SSH authentication state not preserved") }
 	if !m.Actual.Gateway.MihomoInstalled || !m.Actual.Gateway.MieruInstalled || !m.Actual.Gateway.AmneziaInstalled { t.Fatalf("gateway state not preserved: %#v", m.Actual.Gateway) }
 	if !m.Capabilities.Systemd || !m.Capabilities.WireGuard { t.Fatalf("capabilities not preserved: %#v", m.Capabilities) }
-	if !m.Desired.Forwarding == nil { t.Fatal("unspecified desired state must remain unspecified") }
+	if m.Desired.Forwarding != nil { t.Fatal("unspecified desired state must remain unspecified") }
 }
