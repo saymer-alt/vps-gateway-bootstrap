@@ -1,0 +1,113 @@
+package state
+
+// ActionKind is a typed, auditable operation. Plan deliberately does not
+// contain arbitrary shell snippets: executors decide how to perform actions.
+type ActionKind string
+
+const (
+	ActionCreateFile       ActionKind = "CREATE_FILE"
+	ActionUpdateFile       ActionKind = "UPDATE_FILE"
+	ActionDeleteOwnedFile  ActionKind = "DELETE_OWNED_FILE"
+	ActionFirewall         ActionKind = "FIREWALL"
+	ActionRouting          ActionKind = "ROUTING"
+	ActionService          ActionKind = "SERVICE"
+	ActionInstaller        ActionKind = "INSTALLER"
+	ActionValidate         ActionKind = "VALIDATE"
+	ActionReboot           ActionKind = "REBOOT"
+)
+
+type Risk string
+
+const (
+	RiskLow      Risk = "LOW"
+	RiskMedium   Risk = "MEDIUM"
+	RiskHigh     Risk = "HIGH"
+	RiskCritical Risk = "CRITICAL"
+)
+
+type Plan struct {
+	SchemaVersion int      `json:"schema_version"`
+	Profile       string   `json:"profile"`
+	Actions       []Action `json:"actions"`
+	Blocked       bool     `json:"blocked"`
+	BlockReasons  []string `json:"block_reasons,omitempty"`
+}
+
+type Action struct {
+	ID           string     `json:"id"`
+	Resource     string     `json:"resource"`
+	Kind         ActionKind `json:"kind"`
+	Ownership    Ownership  `json:"ownership"`
+	Why          string     `json:"why"`
+	Dependencies []string   `json:"dependencies,omitempty"`
+	Risk         Risk       `json:"risk"`
+	Validation   string     `json:"validation"`
+	Rollback     string     `json:"rollback"`
+}
+
+// BuildPlan converts a State Model diff into a deterministic action plan.
+// It is pure: no commands, files, services, firewall rules or routes are
+// touched here. Any unsafe/ambiguous diff blocks the plan rather than being
+// silently converted into a mutation.
+func BuildPlan(m Model) Plan {
+	p := Plan{SchemaVersion: SchemaVersion, Profile: m.Profile}
+	for i, d := range m.Diff {
+		switch d.Kind {
+		case NoChange, Skip:
+			continue
+		case ExternalDiff:
+			p.Actions = append(p.Actions, Action{
+				ID: actionID(i, d.Resource), Resource: d.Resource, Kind: ActionValidate,
+				Ownership: d.Ownership, Why: d.Reason,
+				Risk: RiskLow, Validation: "re-discover effective external state",
+				Rollback: "none; external resource is not modified",
+			})
+		case Create, Update, Remove:
+			if d.Ownership != Owned {
+				p.Blocked = true
+				p.BlockReasons = append(p.BlockReasons, d.Resource+": mutation requires OWNED resource")
+				continue
+			}
+			kind := actionForResource(d.Resource, d.Kind)
+			p.Actions = append(p.Actions, Action{
+				ID: actionID(i, d.Resource), Resource: d.Resource, Kind: kind,
+				Ownership: d.Ownership, Why: d.Reason,
+				Risk: riskForResource(d.Resource), Validation: "re-discover effective state and validate result",
+				Rollback: "restore transaction backup and re-validate recovery",
+			})
+		case Conflict, UnknownDiff, Unsupported:
+			p.Blocked = true
+			p.BlockReasons = append(p.BlockReasons, d.Resource+": "+d.Kind+" — "+d.Reason)
+		}
+	}
+	return p
+}
+
+func actionID(i int, resource string) string { return "action-" + itoa(i) + "-" + resource }
+func itoa(i int) string {
+	if i == 0 { return "0" }
+	b := [20]byte{}
+	p := len(b)
+	for i > 0 { p--; b[p] = byte('0' + i%10); i /= 10 }
+	return string(b[p:])
+}
+
+func actionForResource(resource string, diff DiffKind) ActionKind {
+	switch {
+	case resource == "ssh.port" || resource == "ssh.password_authentication":
+		return ActionUpdateFile
+	case resource == "mihomo.integration":
+		if diff == Create { return ActionInstaller }
+		return ActionService
+	case resource == "mieru.enabled":
+		return ActionService
+	default:
+		return ActionValidate
+	}
+}
+
+func riskForResource(resource string) Risk {
+	if resource == "ssh.port" { return RiskCritical }
+	if resource == "ssh.password_authentication" { return RiskHigh }
+	return RiskMedium
+}
