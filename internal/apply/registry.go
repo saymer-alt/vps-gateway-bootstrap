@@ -6,44 +6,56 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
-// Registry dispatches a plan action to the executor responsible for its kind.
-// An action without a registered executor is rejected instead of being guessed.
+// Registry dispatches each planned action to the executor responsible for its kind.
+// The action registry is explicit so Backup/Validate/Rollback cannot guess a kind
+// from a resource name that may be handled differently in another profile.
 type Registry struct {
-	ByKind map[state.ActionKind]ActionExecutor
+	ByKind  map[state.ActionKind]ActionExecutor
+	Actions map[string]state.Action
+}
+
+func (r Registry) action(id, resource string) (state.Action, error) {
+	a, ok := r.Actions[id]
+	if !ok || a.Resource != resource { return state.Action{}, fmt.Errorf("unknown action %q", id) }
+	return a, nil
 }
 
 func (r Registry) executor(kind state.ActionKind) (ActionExecutor, error) {
-	if r.ByKind == nil {
-		return nil, fmt.Errorf("no action executors registered")
-	}
+	if r.ByKind == nil { return nil, fmt.Errorf("no action executors registered") }
 	ex, ok := r.ByKind[kind]
-	if !ok || ex == nil {
-		return nil, fmt.Errorf("no executor registered for action kind %q", kind)
-	}
+	if !ok || ex == nil { return nil, fmt.Errorf("no executor registered for action kind %q", kind) }
 	return ex, nil
 }
 
+func (r Registry) forAction(actionID, resource string) (ActionExecutor, state.Action, error) {
+	a, err := r.action(actionID, resource)
+	if err != nil { return nil, state.Action{}, err }
+	ex, err := r.executor(a.Kind)
+	if err != nil { return nil, state.Action{}, err }
+	return ex, a, nil
+}
+
 func (r Registry) Backup(actionID, resource string) error {
-	return r.call(state.ActionKindForResource(resource), func(ex ActionExecutor) error { return ex.Backup(actionID, resource) })
+	ex, _, err := r.forAction(actionID, resource)
+	if err != nil { return err }
+	return ex.Backup(actionID, resource)
 }
 
 func (r Registry) Apply(actionID, resource, kind string) error {
-	k := state.ActionKind(kind)
-	ex, err := r.executor(k)
+	ex, a, err := r.forAction(actionID, resource)
 	if err != nil { return err }
+	if a.Kind != state.ActionKind(kind) { return fmt.Errorf("action %q kind mismatch: plan=%q requested=%q", actionID, a.Kind, kind) }
 	return ex.Apply(actionID, resource, kind)
 }
 
 func (r Registry) Validate(actionID, resource string) error {
-	return r.call(state.ActionKindForResource(resource), func(ex ActionExecutor) error { return ex.Validate(actionID, resource) })
+	ex, _, err := r.forAction(actionID, resource)
+	if err != nil { return err }
+	return ex.Validate(actionID, resource)
 }
 
 func (r Registry) Rollback(actionID, resource string) error {
-	return r.call(state.ActionKindForResource(resource), func(ex ActionExecutor) error { return ex.Rollback(actionID, resource) })
-}
-
-func (r Registry) call(kind state.ActionKind, fn func(ActionExecutor) error) error {
-	ex, err := r.executor(kind)
+	ex, _, err := r.forAction(actionID, resource)
 	if err != nil { return err }
-	return fn(ex)
+	return ex.Rollback(actionID, resource)
 }
