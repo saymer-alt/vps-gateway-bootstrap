@@ -35,6 +35,21 @@ type Plan struct {
 	BlockReasons  []string `json:"block_reasons,omitempty"`
 }
 
+// ActionSpec carries typed parameters required by an executor. It is
+// deliberately declarative: it contains no shell command and no implicit
+// discovery or mutation logic.
+type ActionSpec struct {
+	File *FileActionSpec `json:"file,omitempty"`
+}
+
+type FileActionSpec struct {
+	Path          string `json:"path"`
+	Content       string `json:"content,omitempty"`
+	Mode          uint32 `json:"mode,omitempty"`
+	Delete        bool   `json:"delete,omitempty"`
+	ValidatePath  string `json:"validate_path,omitempty"`
+}
+
 type Action struct {
 	ID           string     `json:"id"`
 	Resource     string     `json:"resource"`
@@ -45,6 +60,7 @@ type Action struct {
 	Risk         Risk       `json:"risk"`
 	Validation   string     `json:"validation"`
 	Rollback     string     `json:"rollback"`
+	Spec         *ActionSpec `json:"spec,omitempty"`
 }
 
 // BuildPlan converts a State Model diff into a deterministic action plan.
