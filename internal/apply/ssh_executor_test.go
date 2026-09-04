@@ -33,7 +33,7 @@ func TestSSHExecutorReloadAndValidateNewListener(t *testing.T) {
 	}}
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionUpdateFile)); err != nil { t.Fatal(err) }
 	if err := e.Validate("ssh1", "ssh.port"); err != nil { t.Fatal(err) }
-	if len(calls) != 4 || calls[0][0] != "ss" || calls[1][1] != "reload" || calls[2][0] != "ss" || calls[3][0] != "ss" { t.Fatalf("calls=%v", calls) }
+	if len(calls) != 5 || calls[0][0] != "ss" || calls[1][1] != "reload" || calls[2][0] != "ss" || calls[3][0] != "ss" || calls[4][0] != "ss" { t.Fatalf("calls=%v", calls) }
 }
 
 func TestSSHExecutorRejectsExternal(t *testing.T) {
