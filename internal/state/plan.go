@@ -1,39 +1,90 @@
 package state
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
 
 type ActionKind string
+
 const (
-	ActionCreateFile ActionKind = "CREATE_FILE"
-	ActionUpdateFile ActionKind = "UPDATE_FILE"
+	ActionCreateFile      ActionKind = "CREATE_FILE"
+	ActionUpdateFile      ActionKind = "UPDATE_FILE"
 	ActionDeleteOwnedFile ActionKind = "DELETE_OWNED_FILE"
-	ActionFirewall ActionKind = "FIREWALL"
-	ActionRouting ActionKind = "ROUTING"
-	ActionService ActionKind = "SERVICE"
-	ActionSSH ActionKind = "SSH"
-	ActionInstaller ActionKind = "INSTALLER"
-	ActionValidate ActionKind = "VALIDATE"
-	ActionReboot ActionKind = "REBOOT"
+	ActionFirewall        ActionKind = "FIREWALL"
+	ActionRouting         ActionKind = "ROUTING"
+	ActionService         ActionKind = "SERVICE"
+	ActionSSH             ActionKind = "SSH"
+	ActionInstaller       ActionKind = "INSTALLER"
+	ActionValidate        ActionKind = "VALIDATE"
+	ActionReboot          ActionKind = "REBOOT"
 )
 
 type Risk string
+
 const (
-	RiskLow Risk = "LOW"
-	RiskMedium Risk = "MEDIUM"
-	RiskHigh Risk = "HIGH"
+	RiskLow      Risk = "LOW"
+	RiskMedium   Risk = "MEDIUM"
+	RiskHigh     Risk = "HIGH"
 	RiskCritical Risk = "CRITICAL"
 )
 
-type Plan struct { SchemaVersion int `json:"schema_version"`; Profile string `json:"profile"`; Actions []Action `json:"actions"`; Blocked bool `json:"blocked"`; BlockReasons []string `json:"block_reasons,omitempty"` }
+type Plan struct {
+	SchemaVersion int      `json:"schema_version"`
+	Profile       string   `json:"profile"`
+	Actions      []Action `json:"actions"`
+	Blocked      bool     `json:"blocked"`
+	BlockReasons []string `json:"block_reasons,omitempty"`
+}
 
-type ActionSpec struct { File *FileActionSpec `json:"file,omitempty"`; Service *ServiceActionSpec `json:"service,omitempty"`; SSH *SSHActionSpec `json:"ssh,omitempty"` }
-type FileActionSpec struct { Path string `json:"path"`; Content string `json:"content,omitempty"`; Mode uint32 `json:"mode,omitempty"`; Delete bool `json:"delete,omitempty"`; ValidatePath string `json:"validate_path,omitempty"` }
-type ServiceActionSpec struct { Name string `json:"name"`; Operation string `json:"operation"`; ExpectedState string `json:"expected_state,omitempty"`; RollbackOperation string `json:"rollback_operation,omitempty"` }
-type SSHActionSpec struct { Unit string `json:"unit,omitempty"`; NewPort int `json:"new_port,omitempty"`; OldPort int `json:"old_port,omitempty"`; RequireOldListener bool `json:"require_old_listener,omitempty"`; RequireNewListener bool `json:"require_new_listener,omitempty"` }
-type Action struct { ID string `json:"id"`; Resource string `json:"resource"`; Kind ActionKind `json:"kind"`; Ownership Ownership `json:"ownership"`; Why string `json:"why"`; Dependencies []string `json:"dependencies,omitempty"`; Risk Risk `json:"risk"`; Validation string `json:"validation"`; Rollback string `json:"rollback"`; Spec *ActionSpec `json:"spec,omitempty"` }
+type ActionSpec struct {
+	File    *FileActionSpec    `json:"file,omitempty"`
+	Service *ServiceActionSpec `json:"service,omitempty"`
+	SSH     *SSHActionSpec     `json:"ssh,omitempty"`
+}
+
+type FileActionSpec struct {
+	Path         string `json:"path"`
+	Content      string `json:"content,omitempty"`
+	Mode         uint32 `json:"mode,omitempty"`
+	Delete       bool   `json:"delete,omitempty"`
+	ValidatePath string `json:"validate_path,omitempty"`
+}
+
+type ServiceActionSpec struct {
+	Name             string `json:"name"`
+	Operation        string `json:"operation"`
+	ExpectedState    string `json:"expected_state,omitempty"`
+	RollbackOperation string `json:"rollback_operation,omitempty"`
+}
+
+// SSHActionSpec describes a complete, rollback-safe port transition. The
+// executor owns the managed fragment and runtime reload as one transaction.
+type SSHActionSpec struct {
+	Unit                   string `json:"unit,omitempty"`
+	NewPort                int    `json:"new_port,omitempty"`
+	OldPort                int    `json:"old_port,omitempty"`
+	RequireOldListener     bool   `json:"require_old_listener,omitempty"`
+	RequireNewListener     bool   `json:"require_new_listener,omitempty"`
+	ConfigPath             string `json:"config_path,omitempty"`
+	ConfigContent          string `json:"config_content,omitempty"`
+	ConfigMode             uint32 `json:"config_mode,omitempty"`
+	SocketActivation       bool   `json:"socket_activation,omitempty"`
+}
+
+type Action struct {
+	ID           string       `json:"id"`
+	Resource     string       `json:"resource"`
+	Kind         ActionKind   `json:"kind"`
+	Ownership    Ownership   `json:"ownership"`
+	Why          string       `json:"why"`
+	Dependencies []string     `json:"dependencies,omitempty"`
+	Risk         Risk         `json:"risk"`
+	Validation   string       `json:"validation"`
+	Rollback     string       `json:"rollback"`
+	Spec         *ActionSpec  `json:"spec,omitempty"`
+}
 
 func BuildPlan(m Model) Plan {
 	p := Plan{SchemaVersion: SchemaVersion, Profile: m.Profile}
@@ -42,14 +93,26 @@ func BuildPlan(m Model) Plan {
 		case NoChange, Skip:
 			continue
 		case ExternalDiff:
-			p.Actions = append(p.Actions, Action{ID: actionID(i,d.Resource), Resource:d.Resource, Kind:ActionValidate, Ownership:d.Ownership, Why:d.Reason, Risk:RiskLow, Validation:"re-discover effective external state", Rollback:"none; external resource is not modified"})
+			p.Actions = append(p.Actions, Action{ID: actionID(i, d.Resource), Resource: d.Resource, Kind: ActionValidate, Ownership: d.Ownership, Why: d.Reason, Risk: RiskLow, Validation: "re-discover effective external state", Rollback: "none; external resource is not modified"})
 		case Create, Update, Remove:
-			if d.Ownership != Owned { p.Blocked=true; p.BlockReasons=append(p.BlockReasons,d.Resource+": mutation requires OWNED resource"); continue }
-			a := Action{ID:actionID(i,d.Resource), Resource:d.Resource, Kind:actionForResource(d.Resource,d.Kind), Ownership:d.Ownership, Why:d.Reason, Risk:riskForResource(d.Resource), Validation:"re-discover effective state and validate result", Rollback:"restore transaction backup and re-validate recovery"}
-			if d.Resource == "ssh.port" { a.Spec = sshPortSpec(m, d) }
+			if d.Ownership != Owned {
+				p.Blocked = true
+				p.BlockReasons = append(p.BlockReasons, d.Resource+": mutation requires OWNED resource")
+				continue
+			}
+			a := Action{ID: actionID(i, d.Resource), Resource: d.Resource, Kind: actionForResource(d.Resource, d.Kind), Ownership: d.Ownership, Why: d.Reason, Risk: riskForResource(d.Resource), Validation: "re-discover effective state and validate result", Rollback: "restore transaction backup and re-validate recovery"}
+			if d.Resource == "ssh.port" {
+				a.Spec = sshPortSpec(m, d)
+				if a.Spec == nil || a.Spec.SSH == nil {
+					p.Blocked = true
+					p.BlockReasons = append(p.BlockReasons, "ssh.port: unable to build safe typed transition")
+					continue
+				}
+			}
 			p.Actions = append(p.Actions, a)
 		case Conflict, UnknownDiff, Unsupported:
-			p.Blocked=true; p.BlockReasons=append(p.BlockReasons,d.Resource+": "+string(d.Kind)+" — "+d.Reason)
+			p.Blocked = true
+			p.BlockReasons = append(p.BlockReasons, d.Resource+": "+string(d.Kind)+" — "+d.Reason)
 		}
 	}
 	return p
@@ -57,14 +120,63 @@ func BuildPlan(m Model) Plan {
 
 func sshPortSpec(m Model, d DiffItem) *ActionSpec {
 	newPort, ok := d.Desired.(int)
-	if !ok || newPort <= 0 || newPort > 65535 { return nil }
+	if !ok || newPort <= 0 || newPort > 65535 {
+		return nil
+	}
 	oldPort := 0
-	if len(m.Actual.Security.SSHPorts) == 1 { oldPort = m.Actual.Security.SSHPorts[0] }
+	if len(m.Actual.Security.SSHPorts) == 1 {
+		oldPort = m.Actual.Security.SSHPorts[0]
+	}
 	unit := "ssh.service"
-	if strings.Contains(strings.ToLower(m.Actual.Security.SSHArchitecture), "socket") { unit = "ssh.socket" }
-	return &ActionSpec{SSH:&SSHActionSpec{Unit:unit, OldPort:oldPort, NewPort:newPort, RequireOldListener:oldPort > 0, RequireNewListener:true}}
+	socket := strings.Contains(strings.ToLower(m.Actual.Security.SSHArchitecture), "socket")
+	if socket {
+		unit = "ssh.socket"
+	}
+	configPath := "/etc/ssh/sshd_config.d/99-vps-gateway.conf"
+	content := fmt.Sprintf("# Managed by vps-gateway; do not edit.\nPort %d\n", newPort)
+	if socket {
+		configPath = "/etc/systemd/system/ssh.socket.d/99-vps-gateway.conf"
+		content = fmt.Sprintf("# Managed by vps-gateway; do not edit.\n[Socket]\nListenStream=\nListenStream=%d\n", newPort)
+	}
+	return &ActionSpec{SSH: &SSHActionSpec{
+		Unit:               unit,
+		OldPort:            oldPort,
+		NewPort:            newPort,
+		RequireOldListener: oldPort > 0,
+		RequireNewListener: true,
+		ConfigPath:         configPath,
+		ConfigContent:      content,
+		ConfigMode:         0600,
+		SocketActivation:   socket,
+	}}
 }
 
-func actionID(i int, resource string) string { return "action-"+strconv.Itoa(i)+"-"+resource }
-func actionForResource(resource string, diff DiffKind) ActionKind { switch { case resource=="ssh.port": return ActionSSH; case resource=="ssh.password_authentication": return ActionUpdateFile; case resource=="mihomo.integration": if diff==Create{return ActionInstaller}; return ActionService; case resource=="mieru.enabled": return ActionService; default:return ActionValidate } }
-func riskForResource(resource string) Risk { if resource=="ssh.port"{return RiskCritical}; if resource=="ssh.password_authentication"{return RiskHigh}; return RiskMedium }
+func actionID(i int, resource string) string { return "action-" + strconv.Itoa(i) + "-" + resource }
+
+func actionForResource(resource string, diff DiffKind) ActionKind {
+	switch {
+	case resource == "ssh.port":
+		return ActionSSH
+	case resource == "ssh.password_authentication":
+		return ActionUpdateFile
+	case resource == "mihomo.integration":
+		if diff == Create {
+			return ActionInstaller
+		}
+		return ActionService
+	case resource == "mieru.enabled":
+		return ActionService
+	default:
+		return ActionValidate
+	}
+}
+
+func riskForResource(resource string) Risk {
+	if resource == "ssh.port" {
+		return RiskCritical
+	}
+	if resource == "ssh.password_authentication" {
+		return RiskHigh
+	}
+	return RiskMedium
+}
