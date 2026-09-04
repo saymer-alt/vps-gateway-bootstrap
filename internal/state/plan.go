@@ -13,6 +13,7 @@ const (
 	ActionFirewall ActionKind = "FIREWALL"
 	ActionRouting ActionKind = "ROUTING"
 	ActionService ActionKind = "SERVICE"
+	ActionSSH ActionKind = "SSH"
 	ActionInstaller ActionKind = "INSTALLER"
 	ActionValidate ActionKind = "VALIDATE"
 	ActionReboot ActionKind = "REBOOT"
@@ -65,5 +66,5 @@ func sshPortSpec(m Model, d DiffItem) *ActionSpec {
 }
 
 func actionID(i int, resource string) string { return "action-"+strconv.Itoa(i)+"-"+resource }
-func actionForResource(resource string, diff DiffKind) ActionKind { switch { case resource=="ssh.port"||resource=="ssh.password_authentication": return ActionUpdateFile; case resource=="mihomo.integration": if diff==Create{return ActionInstaller}; return ActionService; case resource=="mieru.enabled": return ActionService; default:return ActionValidate } }
+func actionForResource(resource string, diff DiffKind) ActionKind { switch { case resource=="ssh.port": return ActionSSH; case resource=="ssh.password_authentication": return ActionUpdateFile; case resource=="mihomo.integration": if diff==Create{return ActionInstaller}; return ActionService; case resource=="mieru.enabled": return ActionService; default:return ActionValidate } }
 func riskForResource(resource string) Risk { if resource=="ssh.port"{return RiskCritical}; if resource=="ssh.password_authentication"{return RiskHigh}; return RiskMedium }
