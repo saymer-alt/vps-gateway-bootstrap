@@ -25,9 +25,10 @@ const (
 
 type Plan struct { SchemaVersion int `json:"schema_version"`; Profile string `json:"profile"`; Actions []Action `json:"actions"`; Blocked bool `json:"blocked"`; BlockReasons []string `json:"block_reasons,omitempty"` }
 
-type ActionSpec struct { File *FileActionSpec `json:"file,omitempty"`; Service *ServiceActionSpec `json:"service,omitempty"` }
+type ActionSpec struct { File *FileActionSpec `json:"file,omitempty"`; Service *ServiceActionSpec `json:"service,omitempty"`; SSH *SSHActionSpec `json:"ssh,omitempty"` }
 type FileActionSpec struct { Path string `json:"path"`; Content string `json:"content,omitempty"`; Mode uint32 `json:"mode,omitempty"`; Delete bool `json:"delete,omitempty"`; ValidatePath string `json:"validate_path,omitempty"` }
 type ServiceActionSpec struct { Name string `json:"name"`; Operation string `json:"operation"`; ExpectedState string `json:"expected_state,omitempty"`; RollbackOperation string `json:"rollback_operation,omitempty"` }
+type SSHActionSpec struct { Unit string `json:"unit,omitempty"`; NewPort int `json:"new_port,omitempty"`; OldPort int `json:"old_port,omitempty"`; RequireOldListener bool `json:"require_old_listener,omitempty"`; RequireNewListener bool `json:"require_new_listener,omitempty"` }
 type Action struct { ID string `json:"id"`; Resource string `json:"resource"`; Kind ActionKind `json:"kind"`; Ownership Ownership `json:"ownership"`; Why string `json:"why"`; Dependencies []string `json:"dependencies,omitempty"`; Risk Risk `json:"risk"`; Validation string `json:"validation"`; Rollback string `json:"rollback"`; Spec *ActionSpec `json:"spec,omitempty"` }
 
 func BuildPlan(m Model) Plan {
