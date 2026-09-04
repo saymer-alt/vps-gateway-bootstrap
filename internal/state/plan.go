@@ -53,24 +53,26 @@ type FileActionSpec struct {
 }
 
 type ServiceActionSpec struct {
-	Name             string `json:"name"`
-	Operation        string `json:"operation"`
-	ExpectedState    string `json:"expected_state,omitempty"`
+	Name              string `json:"name"`
+	Operation         string `json:"operation"`
+	ExpectedState     string `json:"expected_state,omitempty"`
 	RollbackOperation string `json:"rollback_operation,omitempty"`
 }
 
-// SSHActionSpec describes a complete, rollback-safe port transition. The
-// executor owns the managed fragment and runtime reload as one transaction.
+// SSHActionSpec describes a staged, rollback-safe port transition. A port
+// migration keeps the old listener while bringing up the new one. Removing
+// the old listener is a separate, explicitly validated operation so a local
+// reload can never strand the management connection.
 type SSHActionSpec struct {
-	Unit                   string `json:"unit,omitempty"`
-	NewPort                int    `json:"new_port,omitempty"`
-	OldPort                int    `json:"old_port,omitempty"`
-	RequireOldListener     bool   `json:"require_old_listener,omitempty"`
-	RequireNewListener     bool   `json:"require_new_listener,omitempty"`
-	ConfigPath             string `json:"config_path,omitempty"`
-	ConfigContent          string `json:"config_content,omitempty"`
-	ConfigMode             uint32 `json:"config_mode,omitempty"`
-	SocketActivation       bool   `json:"socket_activation,omitempty"`
+	Unit               string `json:"unit,omitempty"`
+	NewPort            int    `json:"new_port,omitempty"`
+	OldPort            int    `json:"old_port,omitempty"`
+	RequireOldListener bool   `json:"require_old_listener,omitempty"`
+	RequireNewListener bool   `json:"require_new_listener,omitempty"`
+	ConfigPath         string `json:"config_path,omitempty"`
+	ConfigContent      string `json:"config_content,omitempty"`
+	ConfigMode         uint32 `json:"config_mode,omitempty"`
+	SocketActivation   bool   `json:"socket_activation,omitempty"`
 }
 
 type Action struct {
@@ -133,10 +135,21 @@ func sshPortSpec(m Model, d DiffItem) *ActionSpec {
 		unit = "ssh.socket"
 	}
 	configPath := "/etc/ssh/sshd_config.d/99-vps-gateway.conf"
-	content := fmt.Sprintf("# Managed by vps-gateway; do not edit.\nPort %d\n", newPort)
+	var content strings.Builder
+	content.WriteString("# Managed by vps-gateway; do not edit.\n")
 	if socket {
 		configPath = "/etc/systemd/system/ssh.socket.d/99-vps-gateway.conf"
-		content = fmt.Sprintf("# Managed by vps-gateway; do not edit.\n[Socket]\nListenStream=\nListenStream=%d\n", newPort)
+		content.WriteString("[Socket]\n")
+		content.WriteString("ListenStream=\n")
+		if oldPort > 0 && oldPort != newPort {
+			fmt.Fprintf(&content, "ListenStream=%d\n", oldPort)
+		}
+		fmt.Fprintf(&content, "ListenStream=%d\n", newPort)
+	} else {
+		if oldPort > 0 && oldPort != newPort {
+			fmt.Fprintf(&content, "Port %d\n", oldPort)
+		}
+		fmt.Fprintf(&content, "Port %d\n", newPort)
 	}
 	return &ActionSpec{SSH: &SSHActionSpec{
 		Unit:               unit,
@@ -145,7 +158,7 @@ func sshPortSpec(m Model, d DiffItem) *ActionSpec {
 		RequireOldListener: oldPort > 0,
 		RequireNewListener: true,
 		ConfigPath:         configPath,
-		ConfigContent:      content,
+		ConfigContent:      content.String(),
 		ConfigMode:         0600,
 		SocketActivation:   socket,
 	}}
