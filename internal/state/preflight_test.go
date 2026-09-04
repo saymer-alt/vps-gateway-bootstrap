@@ -1,6 +1,9 @@
 package state
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestBuildPreflightBlocksBadManagementState(t *testing.T) {
 	m := Model{Actual: Actual{System: SystemActual{OS: "Ubuntu 24.04"}, Network: NetworkActual{ExternalInterface: "ens3", DefaultGateway: "10.0.0.1"}}}
@@ -10,7 +13,7 @@ func TestBuildPreflightBlocksBadManagementState(t *testing.T) {
 }
 
 func TestBuildPreflightAcceptsCompleteModelWhenRoot(t *testing.T) {
-	if testing.Short() { t.Skip("environment-dependent root check") }
+	if os.Geteuid() != 0 { t.Skip("preflight root acceptance requires root") }
 	m := Model{
 		Actual: Actual{
 			System: SystemActual{OS: "Ubuntu 24.04", Kernel: "6.8", Architecture: "amd64"},
