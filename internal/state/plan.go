@@ -1,6 +1,9 @@
 package state
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 type ActionKind string
 const (
@@ -35,18 +38,32 @@ func BuildPlan(m Model) Plan {
 	p := Plan{SchemaVersion: SchemaVersion, Profile: m.Profile}
 	for i, d := range m.Diff {
 		switch d.Kind {
-		case NoChange, Skip: continue
+		case NoChange, Skip:
+			continue
 		case ExternalDiff:
 			p.Actions = append(p.Actions, Action{ID: actionID(i,d.Resource), Resource:d.Resource, Kind:ActionValidate, Ownership:d.Ownership, Why:d.Reason, Risk:RiskLow, Validation:"re-discover effective external state", Rollback:"none; external resource is not modified"})
 		case Create, Update, Remove:
 			if d.Ownership != Owned { p.Blocked=true; p.BlockReasons=append(p.BlockReasons,d.Resource+": mutation requires OWNED resource"); continue }
-			p.Actions = append(p.Actions, Action{ID:actionID(i,d.Resource), Resource:d.Resource, Kind:actionForResource(d.Resource,d.Kind), Ownership:d.Ownership, Why:d.Reason, Risk:riskForResource(d.Resource), Validation:"re-discover effective state and validate result", Rollback:"restore transaction backup and re-validate recovery"})
+			a := Action{ID:actionID(i,d.Resource), Resource:d.Resource, Kind:actionForResource(d.Resource,d.Kind), Ownership:d.Ownership, Why:d.Reason, Risk:riskForResource(d.Resource), Validation:"re-discover effective state and validate result", Rollback:"restore transaction backup and re-validate recovery"}
+			if d.Resource == "ssh.port" { a.Spec = sshPortSpec(m, d) }
+			p.Actions = append(p.Actions, a)
 		case Conflict, UnknownDiff, Unsupported:
 			p.Blocked=true; p.BlockReasons=append(p.BlockReasons,d.Resource+": "+string(d.Kind)+" — "+d.Reason)
 		}
 	}
 	return p
 }
+
+func sshPortSpec(m Model, d DiffItem) *ActionSpec {
+	newPort, ok := d.Desired.(int)
+	if !ok || newPort <= 0 || newPort > 65535 { return nil }
+	oldPort := 0
+	if len(m.Actual.Security.SSHPorts) == 1 { oldPort = m.Actual.Security.SSHPorts[0] }
+	unit := "ssh.service"
+	if strings.Contains(strings.ToLower(m.Actual.Security.SSHArchitecture), "socket") { unit = "ssh.socket" }
+	return &ActionSpec{SSH:&SSHActionSpec{Unit:unit, OldPort:oldPort, NewPort:newPort, RequireOldListener:oldPort > 0, RequireNewListener:true}}
+}
+
 func actionID(i int, resource string) string { return "action-"+strconv.Itoa(i)+"-"+resource }
 func actionForResource(resource string, diff DiffKind) ActionKind { switch { case resource=="ssh.port"||resource=="ssh.password_authentication": return ActionUpdateFile; case resource=="mihomo.integration": if diff==Create{return ActionInstaller}; return ActionService; case resource=="mieru.enabled": return ActionService; default:return ActionValidate } }
 func riskForResource(resource string) Risk { if resource=="ssh.port"{return RiskCritical}; if resource=="ssh.password_authentication"{return RiskHigh}; return RiskMedium }
