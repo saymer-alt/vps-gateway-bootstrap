@@ -27,35 +27,36 @@ READY
 - [x] Build environment matrix
 - [x] Record operational lessons learned
 - [x] Preserve historical archaeology separately from current design
-- [ ] Define discovery contract
-- [ ] Define state model
-- [ ] Define ownership model
-- [ ] Define plan/apply/rollback model
+- [x] Define discovery contract
+- [x] Define state model
+- [x] Define ownership model
+- [x] Define plan/apply/rollback model
+- [x] Define discovery schema
 
 ## Phase 1 — Discovery Engine
 
 Implement read-only discovery before any destructive configuration.
 
-- [ ] OS and distribution version
-- [ ] Kernel and architecture
-- [ ] CPU/RAM/swap/disk
-- [ ] Default route and external interface
-- [ ] Interface addresses and MTU
-- [ ] IPv4/IPv6 state
-- [ ] DNS state
-- [ ] Firewall backend and effective rules
-- [ ] SSH architecture and effective port
-- [ ] systemd/socket activation state
+- [x] OS and distribution version
+- [x] Kernel and architecture
+- [x] CPU/RAM/swap/disk
+- [x] Default route and external interface
+- [x] Interface addresses and MTU
+- [x] IPv4/IPv6 state
+- [x] DNS state
+- [x] Firewall backend and effective rules
+- [x] SSH architecture and effective port
+- [x] systemd/socket activation state
 - [ ] Docker daemon, containers, networks and published ports
-- [ ] Existing services and units
+- [x] Existing services and units
 - [ ] Tunnel interfaces
-- [ ] `ip rule` and routing tables
-- [ ] Listening sockets / occupied ports
+- [x] `ip rule` and routing tables
+- [x] Listening sockets / occupied ports
 - [ ] Existing Mihomo state
 - [ ] Existing Mieru state
 - [ ] Existing Amnezia/WireGuard state
 
-Output should be a structured discovery model suitable for later planning.
+Initial `vps-gateway discover` implementation now produces a normalized machine-readable result for the core discovery set. Remaining component-specific collectors are deliberately deferred until the core has been exercised against real VPS environments.
 
 ## Phase 2 — State Model
 
@@ -137,7 +138,7 @@ Implement modules in dependency order.
 
 ### Security
 
-- [ ] SSH discovery
+- [x] SSH discovery
 - [ ] Safe SSH migration
 - [ ] Key-only hardening
 - [ ] fail2ban installation/configuration
@@ -145,7 +146,7 @@ Implement modules in dependency order.
 
 ### Firewall
 
-- [ ] Detect UFW/nftables/iptables architecture
+- [x] Detect UFW/nftables/iptables architecture
 - [ ] Establish deny-incoming/allow-outgoing baseline where appropriate
 - [ ] Managed rule ownership
 - [ ] No global reset
@@ -153,8 +154,8 @@ Implement modules in dependency order.
 
 ### Routing
 
-- [ ] Route discovery
-- [ ] Rule discovery
+- [x] Route discovery
+- [x] Rule discovery
 - [ ] Named table management
 - [ ] Forwarding
 - [ ] NAT primitives
