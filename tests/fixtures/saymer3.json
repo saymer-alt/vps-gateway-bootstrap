@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "discovery_version": "0.2.0",
+  "host": {"hostname": "Saymer3"},
+  "system": {"os": {"id": "ubuntu", "version_id": "24.04"}, "kernel": {"release": "6.8.0-111-generic", "architecture": "x86_64"}, "cpu": {"count": 2}, "memory": {"total_mb": 913}, "swap": {"total_mb": 1536}},
+  "network": {"external_interface": "ens3", "ipv4": true, "interfaces": [{"name":"ens3","mtu":1500,"alt_names":["enp0s3"]},{"name":"tun-mihomo","mtu":1420},{"name":"wg0","mtu":1420},{"name":"amn0","mtu":1420},{"name":"docker0","mtu":1500}]},
+  "routing": {"rules":[{"priority":40,"table":"main"},{"priority":100,"selector":"172.29.172.0/24","table":"mihomo"}],"tables":[{"name":"mihomo","routes":[{"destination":"default","device":"tun-mihomo","table":"mihomo"}]}]},
+  "docker": {"installed": true},
+  "gateway": {"mihomo":{"installed":true},"mieru":{"installed":true},"wireguard":{"installed":true,"interfaces":["wg0"]},"amnezia":{"installed":true,"interfaces":["amn0"]}}
+}
