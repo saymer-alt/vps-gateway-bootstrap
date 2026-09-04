@@ -23,6 +23,7 @@ func FromDiscovery(r discovery.Result) Model {
 			},
 			Security: SecurityActual{
 				SSHPorts: append([]int(nil), r.SSH.EffectivePorts...),
+				SSHArchitecture: r.SSH.Architecture,
 				PasswordAuthentication: r.SSH.PasswordAuthentication,
 			},
 			Containers: ContainersActual{
