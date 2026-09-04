@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -18,23 +17,15 @@ func (c *Collector) collectRouteTables(ctx context.Context, r *Result) {
 		table := fmtAny(x["table"])
 		if table == "" { continue }
 		id, _ := strconv.Atoi(table)
-		t := findTable(r.Routing.Tables, id)
-		if t == nil {
-			r.Routing.Tables = append(r.Routing.Tables, RouteTable{ID: id, Name: routeTableName(id)})
-			t = &r.Routing.Tables[len(r.Routing.Tables)-1]
-		}
-		dst, _ := x["dst"].(string)
-		if dst == "" { dst = "default" }
+		idx := -1
+		for i := range r.Routing.Tables { if r.Routing.Tables[i].ID == id { idx = i; break } }
+		if idx < 0 { r.Routing.Tables = append(r.Routing.Tables, RouteTable{ID: id, Name: routeTableName(id)}); idx = len(r.Routing.Tables)-1 }
+		dst, _ := x["dst"].(string); if dst == "" { dst = "default" }
 		dev, _ := x["dev"].(string)
 		gw, _ := x["gateway"].(string)
 		metric, _ := x["metric"].(float64)
-		t.Routes = append(t.Routes, Route{Destination: dst, Gateway: gw, Device: dev, Table: table, Metric: int(metric)})
+		r.Routing.Tables[idx].Routes = append(r.Routing.Tables[idx].Routes, Route{Destination: dst, Gateway: gw, Device: dev, Table: table, Metric: int(metric)})
 	}
-}
-
-func findTable(tables []RouteTable, id int) *RouteTable {
-	for i := range tables { if tables[i].ID == id { return &tables[i] } }
-	return nil
 }
 
 func routeTableName(id int) string {
@@ -72,5 +63,3 @@ func processService(s string) string {
 	}
 	return ""
 }
-
-var _ = net.IPv4len
