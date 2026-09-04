@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 type fakeRunner struct { outputs map[string][]byte }
 
 func (f fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	key := name
+	key := filepath.Base(name)
 	for _, arg := range args { key += " " + arg }
 	if out, ok := f.outputs[key]; ok { return out, nil }
 	return nil, os.ErrNotExist
@@ -73,4 +74,36 @@ func TestRealVPSRawFixtures(t *testing.T) {
 			if !foundUDP { t.Fatalf("Mieru UDP listener not parsed: %#v", r.Ports) }
 		})
 	}
+}
+
+func TestDiscoveryParserHelpers(t *testing.T) {
+	var ssh SSH
+	parseSSH("port 2222\npasswordauthentication no\npubkeyauthentication yes\npermitrootlogin prohibit-password\n", &ssh)
+	if len(ssh.EffectivePorts) != 1 || ssh.EffectivePorts[0] != 2222 { t.Fatalf("SSH port parse failed: %#v", ssh) }
+	if ssh.PasswordAuthentication == nil || *ssh.PasswordAuthentication { t.Fatal("passwordauthentication parser failed") }
+	if ssh.PubkeyAuthentication == nil || !*ssh.PubkeyAuthentication { t.Fatal("pubkeyauthentication parser failed") }
+	if ssh.PermitRootLogin != "prohibit-password" { t.Fatalf("permitrootlogin = %q", ssh.PermitRootLogin) }
+
+	if got := splitCSV("80/tcp, 443/tcp,, 7890/tcp"); len(got) != 3 { t.Fatalf("splitCSV = %#v", got) }
+	if got := firstLine("Mihomo Meta v1.19.30\nextra"); got != "Mihomo Meta v1.19.30" { t.Fatalf("firstLine = %q", got) }
+	if got := processService("users:((\"mita\",pid=234,fd=5))"); got != "mita" { t.Fatalf("processService = %q", got) }
+	if got := processService("users:((\"unknown\",pid=1,fd=1))"); got != "" { t.Fatalf("unknown process classified as %q", got) }
+	if !strings.Contains(strings.Join(fields("wg0 amn0"), ","), "wg0") { t.Fatal("fields helper failed") }
+}
+
+func TestDiscoveryNegativeRawInput(t *testing.T) {
+	c := &Collector{Run: fakeRunner{outputs: map[string][]byte{
+		"ip -j link": []byte(`[]`),
+		"ip -j addr": []byte(`[]`),
+		"ip -j route show default": []byte(`[]`),
+		"ip -j rule": []byte(`[]`),
+		"ip -j route show table all": []byte(`[]`),
+	}}}
+	r := Result{Status: "OK"}
+	c.collectNetwork(context.Background(), &r)
+	c.collectRouting(context.Background(), &r)
+	c.collectRouteTables(context.Background(), &r)
+	if r.Network.ExternalInterface != "" || r.Network.DefaultGateway != "" { t.Fatalf("empty route input produced network state: %#v", r.Network) }
+	if r.Network.IPv4 || r.Network.IPv6 { t.Fatalf("empty address input produced IP state: %#v", r.Network) }
+	if len(r.Routing.Rules) != 0 || len(r.Routing.DefaultRoutes) != 0 { t.Fatalf("empty routing input produced routes: %#v", r.Routing) }
 }
