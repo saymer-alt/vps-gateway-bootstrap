@@ -16,20 +16,36 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
-// recording executor: proves whether a mutation was attempted at all.
+// recording executor: proves whether a mutation was attempted at all and
+// which stage of the transaction was reached.
 type recordingExecutor struct {
-	calls []string
-	failApply bool
+	calls        []string
+	failBackup   bool
+	failApply    bool
+	failValidate bool
+	failRollback bool
 }
 
-func (e *recordingExecutor) Backup(id, resource string) error { e.calls = append(e.calls, "backup:"+resource); return nil }
+func (e *recordingExecutor) Backup(id, resource string) error {
+	e.calls = append(e.calls, "backup:"+resource)
+	if e.failBackup { return errors.New("backup failed") }
+	return nil
+}
 func (e *recordingExecutor) Apply(id, resource, kind string) error {
 	e.calls = append(e.calls, "apply:"+resource)
 	if e.failApply { return errors.New("apply failed") }
 	return nil
 }
-func (e *recordingExecutor) Validate(id, resource string) error { e.calls = append(e.calls, "validate:"+resource); return nil }
-func (e *recordingExecutor) Rollback(id, resource string) error { e.calls = append(e.calls, "rollback:"+resource); return nil }
+func (e *recordingExecutor) Validate(id, resource string) error {
+	e.calls = append(e.calls, "validate:"+resource)
+	if e.failValidate { return errors.New("validation failed") }
+	return nil
+}
+func (e *recordingExecutor) Rollback(id, resource string) error {
+	e.calls = append(e.calls, "rollback:"+resource)
+	if e.failRollback { return errors.New("rollback failed") }
+	return nil
+}
 
 func makeDiscovery(fail2banActive bool) discovery.Result {
 	no := false
@@ -118,8 +134,9 @@ func TestPrepareReadyForFail2BanRepair(t *testing.T) {
 
 func TestExecuteHappyPath(t *testing.T) {
 	svc := &recordingExecutor{}
-	// Discovery call #1: fail2ban failed. Call #2 (re-discovery): repaired.
-	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
+	// Discovery calls: #1 Prepare, #2 staleness re-check under the lock,
+	// #3 re-discovery after the applied transaction.
+	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	p := o.Prepare(fail2banConfig(), rootOn())
@@ -131,7 +148,7 @@ func TestExecuteHappyPath(t *testing.T) {
 	if out.Stage != StageCompleted { t.Fatalf("stage=%s blockers=%v", out.Stage, out.Blockers) }
 	if !out.Persisted { t.Fatal("state must be persisted on success") }
 	if _, err := os.Stat(o.StatePath); err != nil { t.Fatalf("persisted state missing: %v", err) }
-	if *calls != 2 { t.Fatalf("discovery must run twice (plan + re-discover), got %d", *calls) }
+	if *calls != 3 { t.Fatalf("discovery must run three times (plan + staleness + re-discover), got %d", *calls) }
 	want := []string{
 		"backup:service.fail2ban.service",
 		"apply:service.fail2ban.service",
@@ -183,10 +200,19 @@ func TestExecuteBlockedWhenLockHeld(t *testing.T) {
 func TestExecuteRequiresManagementProbeForFinalize(t *testing.T) {
 	svc := &recordingExecutor{}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
-		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionSSHFinalize: svc},
+		// Both kinds registered so executor coverage passes and the probe
+		// requirement is what is actually under test.
+		ByKind: map[state.ActionKind]apply.ActionExecutor{
+			state.ActionService:      svc,
+			state.ActionSSHFinalize: svc,
+		},
 	}, nil)
 	p := o.Prepare(fail2banConfig(), rootOn())
 	p.Ready = true // direct plan injection: finalize action under test
+	// Finalize plans are built programmatically (BuildPlan never emits
+	// SSH_FINALIZE), so they do not come from Prepare and skip the staleness
+	// re-check by design; the probe requirement below is what is under test.
+	p.prepared = false
 	port := 2200
 	p.Plan.Actions = []state.Action{{
 		ID: "ssh-finalize-1", Resource: "ssh.port", Kind: state.ActionSSHFinalize, Ownership: state.Owned,
@@ -206,12 +232,19 @@ func TestExecuteRequiresManagementProbeForFinalize(t *testing.T) {
 	good := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: port}, Reachable: true, Attempts: 1}}
 	out, err = o.Execute(p, conf, good)
 	if err != nil { t.Fatal(err) }
-	if out.Stage != StageFailedTransaction { t.Fatalf("with a reachable probe execution must proceed, stage=%s blockers=%v", out.Stage, out.Blockers) }
+	if out.Stage == StageBlocked {
+		t.Fatalf("with a reachable probe execution must proceed, stage=%s blockers=%v", out.Stage, out.Blockers)
+	}
+	if len(svc.calls) == 0 {
+		t.Fatal("with a reachable probe the transaction must have been attempted")
+	}
 }
 
 func TestExecuteTransactionFailureSkipsRediscoveryAndPersist(t *testing.T) {
 	svc := &recordingExecutor{failApply: true}
-	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
+	// Discovery calls: #1 Prepare, #2 staleness re-check. Re-discovery must
+	// NOT run after a failed transaction.
+	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	p := o.Prepare(fail2banConfig(), rootOn())
@@ -222,7 +255,7 @@ func TestExecuteTransactionFailureSkipsRediscoveryAndPersist(t *testing.T) {
 	if out.Stage != StageFailedTransaction { t.Fatalf("stage=%s", out.Stage) }
 	if out.ReDiscovery != nil { t.Fatal("re-discovery must not run after a failed transaction") }
 	if out.Persisted { t.Fatal("failed transaction must never be persisted") }
-	if *calls != 1 { t.Fatalf("discovery calls=%d, want 1", *calls) }
+	if *calls != 2 { t.Fatalf("discovery calls=%d, want 2 (prepare + staleness, no re-discovery)", *calls) }
 	if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) { t.Fatalf("state file must not exist: %v", err) }
 }
 
@@ -230,7 +263,7 @@ func TestExecuteConvergenceFailureDoesNotPersist(t *testing.T) {
 	svc := &recordingExecutor{}
 	// Re-discovery still reports fail2ban failed: the transaction claimed
 	// success but the machine did not converge.
-	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false)}, apply.Registry{
+	o, calls := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false), makeDiscovery(false)}, apply.Registry{
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	p := o.Prepare(fail2banConfig(), rootOn())
@@ -240,7 +273,7 @@ func TestExecuteConvergenceFailureDoesNotPersist(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if out.Stage != StageFailedFinalValidation { t.Fatalf("stage=%s blockers=%v", out.Stage, out.Blockers) }
 	if out.Persisted { t.Fatal("non-converged state must never be persisted") }
-	if *calls != 2 { t.Fatalf("discovery calls=%d, want 2", *calls) }
+	if *calls != 3 { t.Fatalf("discovery calls=%d, want 3", *calls) }
 	found := false
 	for _, b := range out.Blockers {
 		if strings.Contains(b, "did not converge") { found = true }

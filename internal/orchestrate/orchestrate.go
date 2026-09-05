@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
@@ -55,6 +56,14 @@ type Plan struct {
 	Config    *pipeline.Config
 	Ready     bool
 	Blockers  []string
+
+	// prepared marks plans produced by Prepare. Execute re-checks staleness
+	// only for such plans: a re-discovery under the lock rebuilds the plan
+	// and any drift between planning and execution blocks the mutation.
+	// Manually built plans (e.g. programmatic finalize flows) skip the extra
+	// discovery and remain the caller's responsibility.
+	opts     pipeline.Options
+	prepared bool
 }
 
 // Fingerprint returns the canonical identity of a plan. A Confirmation is
@@ -138,6 +147,8 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 	if p.Plan.Blocked { p.Blockers = append(p.Blockers, p.Plan.BlockReasons...) }
 	if p.Preflight.Status != state.PreflightReady { p.Blockers = append(p.Blockers, p.Preflight.Blocking...) }
 	p.Ready = !p.Plan.Blocked && p.Preflight.Status == state.PreflightReady
+	p.opts = opts
+	p.prepared = true
 	return p
 }
 
@@ -209,6 +220,27 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		out.Blockers = append(out.Blockers, p.Blockers...)
 		return out, nil
 	}
+	// Structural re-checks, independent of the caller's Ready claim: a
+	// hand-built or stale Plan must not reach a mutation through Execute.
+	if p.Plan.Blocked {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, "plan is blocked: "+strings.Join(p.Plan.BlockReasons, "; "))
+		return out, nil
+	}
+	if p.Preflight.Status != state.PreflightReady {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, "preflight is not ready")
+		return out, nil
+	}
+	registered := map[state.ActionKind]bool{}
+	for kind, ex := range o.Registry.ByKind {
+		if ex != nil { registered[kind] = true }
+	}
+	if missing := state.MissingExecutors(p.Plan, registered); len(missing) > 0 {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, "executor-coverage: "+coverageReason(missing))
+		return out, nil
+	}
 	if err := o.Confirm(p, c); err != nil {
 		out.Stage = StageBlocked
 		out.Blockers = append(out.Blockers, "confirmation: "+err.Error())
@@ -227,6 +259,18 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		return out, nil
 	}
 	defer l.Release()
+
+	// Staleness gate: re-discover under the lock and rebuild the plan. If the
+	// machine changed since planning, the rebuilt plan differs and the
+	// mutation is refused — a stale plan must be regenerated, never applied.
+	if p.prepared {
+		fresh := pipeline.Assemble(o.Discover(), p.Config, p.opts)
+		if Fingerprint(fresh.Plan) != Fingerprint(p.Plan) {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "plan is stale: the machine changed since planning; regenerate the plan")
+			return out, nil
+		}
+	}
 
 	// The plan is the source of truth for which actions exist: derive the
 	// registry's action map from it so the executor set never depends on a
