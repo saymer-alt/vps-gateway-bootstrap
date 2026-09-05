@@ -114,7 +114,7 @@ func fingerprintPrefix(t *testing.T, p orchestrate.Plan) string {
 func TestApplyDryRunStopsBeforeConfirmation(t *testing.T) {
 	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
 	var out bytes.Buffer
-	code := runApply([]string{"--dry-run", "--config", experimentConfig(t)}, o, strings.NewReader(""), &out, &out)
+	code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t)}, o, rootOpts(), strings.NewReader(""), &out, &out)
 	if code != 0 { t.Fatalf("exit=%d output=%s", code, out.String()) }
 	if len(rec.calls) != 0 { t.Fatalf("dry-run performed executor calls: %v", rec.calls) }
 	if !strings.Contains(out.String(), "Plan fingerprint:") || !strings.Contains(out.String(), "SERVICE service.fail2ban.service") {
@@ -128,7 +128,7 @@ func TestApplyDryRunStopsBeforeConfirmation(t *testing.T) {
 func TestApplyRefusesWithoutConfirmation(t *testing.T) {
 	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
 	var out bytes.Buffer
-	code := runApply([]string{"--config", experimentConfig(t)}, o, strings.NewReader(""), &out, &out)
+	code := runApplyWith([]string{"--config", experimentConfig(t)}, o, rootOpts(), strings.NewReader(""), &out, &out)
 	if code != 2 { t.Fatalf("exit=%d, want 2", code) }
 	if len(rec.calls) != 0 { t.Fatalf("mutation without confirmation: %v", rec.calls) }
 }
@@ -170,7 +170,7 @@ func TestApplyRejectsForeignFingerprint(t *testing.T) {
 	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
 	var out bytes.Buffer
 	foreign := orchestrate.Fingerprint(state.Plan{SchemaVersion: state.SchemaVersion})[:12]
-	code := runApply([]string{"--config", experimentConfig(t), "--confirm", foreign}, o, strings.NewReader(""), &out, &out)
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", foreign}, o, rootOpts(), strings.NewReader(""), &out, &out)
 	if code != 2 { t.Fatalf("exit=%d, want 2", code) }
 	if len(rec.calls) != 0 { t.Fatalf("mutation with foreign fingerprint: %v", rec.calls) }
 }
@@ -194,7 +194,7 @@ func TestApplyRejectsSecondAction(t *testing.T) {
 	rec := &cliRecordingExecutor{}
 	o, _, _ := applyTestOrchestrator(t, []discovery.Result{disc}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: rec}})
 	var out bytes.Buffer
-	code := runApply([]string{"--config", twoConfig}, o, strings.NewReader(""), &out, &out)
+	code := runApplyWith([]string{"--config", twoConfig}, o, rootOpts(), strings.NewReader(""), &out, &out)
 	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
 	if !strings.Contains(out.String(), "first production experiment") { t.Fatalf("guard message missing: %s", out.String()) }
 	if len(rec.calls) != 0 { t.Fatalf("mutation with smuggled action: %v", rec.calls) }
@@ -207,7 +207,7 @@ func TestApplyRejectsUnknownOwnership(t *testing.T) {
 		"desired": map[string]any{"services": []map[string]any{{"name": "fail2ban.service", "active": true}}},
 	})
 	var out bytes.Buffer
-	code := runApply([]string{"--config", noOwnership}, o, strings.NewReader(""), &out, &out)
+	code := runApplyWith([]string{"--config", noOwnership}, o, rootOpts(), strings.NewReader(""), &out, &out)
 	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
 	if len(rec.calls) != 0 { t.Fatalf("mutation with UNKNOWN ownership: %v", rec.calls) }
 }
