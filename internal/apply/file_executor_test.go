@@ -57,6 +57,19 @@ func TestFileExecutorRequiresOwned(t *testing.T) {
 	if err := e.Apply("a1", "managed.file", string(state.ActionUpdateFile)); err == nil { t.Fatal("expected ownership rejection") }
 }
 
+// UNKNOWN ownership is not a permission to modify: an undeclared owner must
+// be rejected exactly like an explicitly external resource.
+func TestFileExecutorRejectsUnknownOwnership(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "etc", "vps-gateway", "test.conf")
+	a := fileAction(path, "x")
+	a.Ownership = state.Unknown
+	e := &FileExecutor{Root: root, Actions: map[string]state.Action{"a1": a}}
+	if err := e.Backup("a1", "managed.file"); err == nil { t.Fatal("expected UNKNOWN ownership rejection on backup") }
+	if err := e.Apply("a1", "managed.file", string(state.ActionUpdateFile)); err == nil { t.Fatal("expected UNKNOWN ownership rejection") }
+	if err := e.Validate("a1", "managed.file"); err == nil { t.Fatal("expected UNKNOWN ownership rejection on validate") }
+}
+
 func TestFileExecutorDeleteRestoresOnRollback(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "etc", "vps-gateway", "old.conf")

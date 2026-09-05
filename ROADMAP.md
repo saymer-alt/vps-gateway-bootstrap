@@ -20,6 +20,14 @@ VALIDATE
 READY
 ```
 
+## Implementation status (2026-09-05)
+
+- Discovery — live, read-only, validated against four real VPS hosts.
+- State — in-memory model; last-known-good persistence primitive exists (verified state only).
+- Plan — proposed mutations only; ownership-gated.
+- Apply — engine and executors implemented and tested, but **internal and unreachable from the CLI**; not production-ready. The CLI refuses a bare `install` (regression-tested).
+- Management probe — interface/model only (`docs/management-probe.md`); hard prerequisite for SSH finalization; not wired.
+
 ## Phase 0 — Documentation and design
 
 - [x] Define architecture and abstraction boundaries
@@ -110,17 +118,17 @@ UNKNOWN
 
 Build reusable primitives before implementing the major modules.
 
-- [ ] Root/privilege checks
-- [ ] Backup manager
-- [ ] Atomic file writes
-- [ ] Managed configuration fragments
-- [ ] Locking
-- [ ] Dry-run mode
-- [ ] Change plan rendering
-- [ ] Preflight checks
-- [ ] Apply transaction
-- [ ] Post-change validation
-- [ ] Rollback on failed validation
+- [x] Root/privilege checks
+- [x] Backup manager
+- [x] Atomic file writes
+- [x] Managed configuration fragments
+- [ ] Locking (primitive ready in `internal/lock`; enforcement pending in apply orchestration)
+- [x] Dry-run mode
+- [x] Change plan rendering
+- [x] Preflight checks
+- [x] Apply transaction
+- [x] Post-change validation
+- [x] Rollback on failed validation
 - [ ] Recovery path for SSH/firewall/routing changes
 
 ## Phase 5 — Core System Modules
@@ -238,26 +246,26 @@ vps-gateway awg integrate
 
 Read-only diagnostic view:
 
-- [ ] services
+- [x] services
 - [ ] processes
-- [ ] interfaces
-- [ ] routes
-- [ ] policy rules
-- [ ] firewall
-- [ ] Docker
+- [x] interfaces
+- [x] routes
+- [x] policy rules
+- [x] firewall
+- [x] Docker
 - [ ] Mihomo runtime
 - [ ] Mieru runtime
 - [ ] connections
 - [ ] logs
-- [ ] detected conflicts
+- [x] detected conflicts
 
 ### `validate`
 
 - [ ] Configuration syntax
 - [ ] Effective configuration
-- [ ] systemd
-- [ ] firewall
-- [ ] routing
+- [x] systemd
+- [x] firewall
+- [x] routing
 - [ ] service runtime
 - [ ] integration state
 
@@ -265,8 +273,8 @@ Read-only diagnostic view:
 
 Final production readiness gate:
 
-- [ ] System readiness
-- [ ] Security readiness
+- [x] System readiness
+- [x] Security readiness
 - [ ] Firewall reachability
 - [ ] Docker persistence
 - [ ] Mihomo runtime

@@ -153,3 +153,36 @@ func TestAssembleNoOwnershipAnywhereBlocksSSHChange(t *testing.T) {
 	if res.OwnershipSource != "" { t.Fatalf("source=%q", res.OwnershipSource) }
 	if !res.Plan.Blocked { t.Fatal("no ownership declared anywhere must block") }
 }
+
+// Persisted state is a fallback for ownership/desired only. The actual state
+// always comes from live discovery; a stale persisted Actual must never leak
+// into the assembled model.
+func TestAssemblePersistedStateDoesNotOverrideLiveDiscovery(t *testing.T) {
+	stale := persistedState(map[string]state.Ownership{"ssh": state.Owned})
+	stale.Actual = state.Actual{
+		System:  state.SystemActual{OS: "debian", Kernel: "3.2.0", Architecture: "i386"},
+		Network: state.NetworkActual{ExternalInterface: "eth9", DefaultGateway: "198.51.100.1"},
+		Security: state.SecurityActual{SSHPorts: []int{22}},
+	}
+	opts := rootOn()
+	opts.State = stale
+	res := Assemble(healthyDiscovery(), nil, opts)
+	if res.Model.Actual.System.OS != "ubuntu" || res.Model.Actual.System.Architecture != "x86_64" {
+		t.Fatalf("live discovery overridden by persisted actual: %#v", res.Model.Actual.System)
+	}
+	if res.Model.Actual.Network.ExternalInterface != "eth0" || res.Model.Actual.Network.DefaultGateway != "203.0.113.1" {
+		t.Fatalf("network overridden by persisted actual: %#v", res.Model.Actual.Network)
+	}
+	if len(res.Model.Actual.Security.SSHPorts) != 1 || res.Model.Actual.Security.SSHPorts[0] != 2222 {
+		t.Fatalf("security overridden by persisted actual: %#v", res.Model.Actual.Security)
+	}
+}
+
+// Unset desired state is not permission to modify: even with ownership
+// explicitly declared, nothing may change unless something is desired.
+func TestAssembleUnsetDesiredWithDeclaredOwnershipProducesNoActions(t *testing.T) {
+	cfg := &Config{Ownership: map[string]state.Ownership{"ssh": state.Owned, "mihomo.integration": state.Owned}}
+	res := Assemble(healthyDiscovery(), cfg, rootOn())
+	if len(res.Plan.Actions) != 0 { t.Fatalf("declared ownership without desired state must not produce actions: %#v", res.Plan.Actions) }
+	if res.Plan.Blocked { t.Fatalf("plan blocked: %v", res.Plan.BlockReasons) }
+}

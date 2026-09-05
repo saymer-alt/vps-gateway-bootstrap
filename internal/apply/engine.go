@@ -25,7 +25,12 @@ func (e Engine) Apply(p state.Plan, gate PreflightGate) Transaction {
 	if p.Blocked {
 		return blocked(t, p.BlockReasons)
 	}
-	if gate != nil && !gate.Ready() {
+	// Preflight is mandatory. A nil gate must fail closed: a caller that
+	// skips preflight must never reach a mutation by accident.
+	if gate == nil {
+		return blocked(t, []string{"no preflight gate configured"})
+	}
+	if !gate.Ready() {
 		return blocked(t, gate.Reasons())
 	}
 	if e.Executor == nil {

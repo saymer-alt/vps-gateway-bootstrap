@@ -1,5 +1,18 @@
 # Plan and Apply
 
+## Implementation status (2026-09-05)
+
+| Layer | Status |
+|---|---|
+| Discovery | implemented, live and read-only; fully injectable through `Runner` |
+| State | in-memory model implemented; last-known-good persistence primitive exists (`state.SaveModel/LoadModel`, verified-state only) |
+| Plan | implemented; proposed mutations only, "absence is not permission to change" |
+| Preflight | implemented (`state.BuildPreflightFor`), mandatory — the apply engine fails closed without a gate |
+| Apply | engine and executors implemented and tested, but **internal and unreachable from the CLI** (guarded by a CLI tripwire test); not production-ready |
+| Rollback | implemented and tested at transaction level (reverse order, backup restore) |
+| Management probe | interface/model only (`internal/probe`, `docs/management-probe.md`); hard prerequisite for SSH finalization; not wired into apply |
+| Locking | primitive ready (`internal/lock`); enforcement belongs to the future apply orchestration |
+
 ## Purpose
 
 Plan and Apply are the controlled execution layer between the State Model and the final validated machine.

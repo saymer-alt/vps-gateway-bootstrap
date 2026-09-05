@@ -38,19 +38,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+	var code int
 	switch os.Args[1] {
 	case "discover":
-		runDiscover(os.Args[2:])
+		code = runDiscover(os.Args[2:])
 	case "doctor":
-		runDoctor(os.Args[2:])
+		code = runDoctor(os.Args[2:])
 	case "validate":
-		runValidate(os.Args[2:])
+		code = runValidate(os.Args[2:])
 	case "install":
-		runInstall(os.Args[2:])
+		code = runInstall(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+		code = 2
 	}
+	os.Exit(code)
 }
 
 // parseTimeout extracts --timeout from args and returns the remaining flags.
@@ -86,27 +88,29 @@ func runDiscovery(timeout time.Duration) discovery.Result {
 	defer cancel()
 	return discovery.New().Discover(ctx)
 }
-func runDiscover(args []string) {
+
+func runDiscover(args []string) int {
 	timeout, rest := parseTimeout(args)
 	if len(rest) != 0 {
 		fmt.Fprintf(os.Stderr, "unknown discover flag %q\n%s\n", rest[0], usage)
-		os.Exit(2)
+		return 2
 	}
 	result := runDiscovery(timeout)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(result); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	if result.Status == "CONFLICT" {
-		os.Exit(3)
+		return 3
 	}
+	return 0
 }
 
-// doctor is read-only diagnosis. It runs discovery and triages the result;
+// runDoctor is read-only diagnosis. It runs discovery and triages the result;
 // it never mutates the machine and never performs hidden Apply operations.
-func runDoctor(args []string) {
+func runDoctor(args []string) int {
 	timeout, rest := parseTimeout(args)
 	jsonOut := false
 	for _, a := range rest {
@@ -115,7 +119,7 @@ func runDoctor(args []string) {
 			jsonOut = true
 		default:
 			fmt.Fprintf(os.Stderr, "unknown doctor flag %q\nusage: vps-gateway doctor [--json] [--timeout DURATION]\n", a)
-			os.Exit(2)
+			return 2
 		}
 	}
 	result := runDiscovery(timeout)
@@ -125,19 +129,20 @@ func runDoctor(args []string) {
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(rep); err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 	} else {
 		fmt.Print(doctor.Render(rep))
 	}
 	if rep.Status == doctor.StatusFail {
-		os.Exit(3)
+		return 3
 	}
+	return 0
 }
 
-// validate is a strict pass/fail gate over effective machine state. It is
+// runValidate is a strict pass/fail gate over effective machine state. It is
 // read-only and fails closed on unknown state.
-func runValidate(args []string) {
+func runValidate(args []string) int {
 	timeout, rest := parseTimeout(args)
 	opts := validate.Options{}
 	jsonOut := false
@@ -149,7 +154,7 @@ func runValidate(args []string) {
 			opts.Production = true
 		default:
 			fmt.Fprintf(os.Stderr, "unknown validate flag %q\nusage: vps-gateway validate [--json] [--production] [--timeout DURATION]\n", a)
-			os.Exit(2)
+			return 2
 		}
 	}
 	result := runDiscovery(timeout)
@@ -159,21 +164,22 @@ func runValidate(args []string) {
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(rep); err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 	} else {
 		fmt.Print(validate.Render(rep))
 	}
 	if rep.Status == validate.StatusFail {
-		os.Exit(3)
+		return 3
 	}
+	return 0
 }
 
-// install currently supports only the dry-run form: it executes discovery,
+// runInstall currently supports only the dry-run form: it executes discovery,
 // state modelling, planning and preflight without changing the machine, per
 // docs/plan-apply.md. Real apply requires the executor wiring and explicit
 // operator approval and is intentionally not reachable from this CLI yet.
-func runInstall(args []string) {
+func runInstall(args []string) int {
 	timeout, rest := parseTimeout(args)
 	dryRun, jsonOut := false, false
 	configPath, statePath := "", ""
@@ -187,40 +193,44 @@ func runInstall(args []string) {
 		case "--config":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(os.Stderr, "--config requires a file path")
-				os.Exit(2)
+				return 2
 			}
 			i++
 			configPath = rest[i]
 		case "--state":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(os.Stderr, "--state requires a file path")
-				os.Exit(2)
+				return 2
 			}
 			i++
 			statePath = rest[i]
 			explicitState = true
 		default:
 			fmt.Fprintf(os.Stderr, "unknown install flag %q\n%s\n", rest[i], usage)
-			os.Exit(2)
+			return 2
 		}
 	}
 	if !dryRun {
+		// Safety tripwire: the apply engine exists and is tested, but it must
+		// stay unreachable from the CLI until real apply is declared
+		// production-ready. This message is the only legal outcome of a bare
+		// "install".
 		fmt.Fprintln(os.Stderr, "install requires --dry-run in this build: real apply is not implemented yet")
-		os.Exit(2)
+		return 2
 	}
 	var cfgData []byte
 	if configPath != "" {
 		b, err := os.ReadFile(configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "read config: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		cfgData = b
 	}
 	cfg, err := pipeline.ParseConfig(cfgData)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	opts := pipeline.Options{}
 	if statePath == "" {
@@ -230,7 +240,7 @@ func runInstall(args []string) {
 	if err != nil {
 		if explicitState {
 			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		fmt.Fprintf(os.Stderr, "note: ignoring unreadable %s: %v\n", statePath, err)
 	}
@@ -241,12 +251,13 @@ func runInstall(args []string) {
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(res); err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 	} else {
 		fmt.Print(pipeline.Summary(res))
 	}
 	if !res.Ready() {
-		os.Exit(3)
+		return 3
 	}
+	return 0
 }

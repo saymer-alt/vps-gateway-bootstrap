@@ -93,3 +93,32 @@ func TestLoadModelIfPresent(t *testing.T) {
 	if err != nil || m == nil { t.Fatalf("expected loaded state, got %v, %v", m, err) }
 	if m.Ownership["ssh"] != Owned { t.Fatalf("ownership mismatch: %#v", m.Ownership) }
 }
+
+func TestSaveModelRefusesNonVerifiedState(t *testing.T) {
+	dir := t.TempDir()
+	m := richModel()
+	m.Status = StatusConflict
+	if err := SaveModel(filepath.Join(dir, "s1.json"), m); err == nil {
+		t.Fatal("expected refusal to persist CONFLICT state as last-known-good")
+	}
+	m2 := richModel()
+	m2.Constraints = []Constraint{{Code: "SSH_UNKNOWN", Component: "ssh", Message: "ownership unknown", Blocking: true}}
+	if err := SaveModel(filepath.Join(dir, "s2.json"), m2); err == nil {
+		t.Fatal("expected refusal to persist state with blocking constraints")
+	}
+}
+
+func TestPersistenceKeepsUnknownOwnershipExplicit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	m := richModel()
+	m.Ownership["fail2ban"] = Unknown
+	if err := SaveModel(path, m); err != nil { t.Fatal(err) }
+	got, err := LoadModel(path)
+	if err != nil { t.Fatal(err) }
+	if got.Ownership["fail2ban"] != Unknown {
+		t.Fatalf("UNKNOWN ownership must persist as UNKNOWN, got %q", got.Ownership["fail2ban"])
+	}
+	if _, declared := got.Ownership["never.declared"]; declared {
+		t.Fatal("absent ownership must stay absent, not become UNKNOWN/OWNED")
+	}
+}

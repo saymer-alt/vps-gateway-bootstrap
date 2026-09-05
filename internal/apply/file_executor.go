@@ -106,6 +106,10 @@ func (e *FileExecutor) action(id, resource string) (state.Action, error) {
 	if e.Actions == nil { return state.Action{}, errors.New("no action registry configured") }
 	a, ok := e.Actions[id]
 	if !ok || a.Resource != resource { return state.Action{}, fmt.Errorf("unknown action %q", id) }
+	// Enforced on every operation, not only Apply: UNKNOWN ownership is not
+	// a permission to modify, and not a permission to touch the backup path
+	// either.
+	if a.Ownership != state.Owned { return state.Action{}, errors.New("file mutation requires OWNED resource") }
 	return a, nil
 }
 

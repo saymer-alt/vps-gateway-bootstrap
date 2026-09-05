@@ -195,6 +195,16 @@ func TestApplyBlockedPlanBeforeExecutor(t *testing.T) {
 	}
 }
 
+// Preflight is mandatory: a nil gate must fail closed so a caller can never
+// reach a mutation by forgetting the gate.
+func TestApplyWithoutGateIsBlocked(t *testing.T) {
+	f := &fakeExecutor{}
+	tr := (Engine{Executor: f}).Apply(testPlan(), nil)
+	if tr.Status != StatusBlocked { t.Fatalf("status=%s", tr.Status) }
+	if tr.Error != "no preflight gate configured" { t.Fatalf("error=%q", tr.Error) }
+	if len(f.calls) != 0 { t.Fatalf("executor called: %v", f.calls) }
+}
+
 func TestApplyWithoutExecutorFailsBeforeMutation(t *testing.T) {
 	tr := (Engine{}).Apply(testPlan(), fakeGate{ready: true})
 	if tr.Status != StatusFailed {

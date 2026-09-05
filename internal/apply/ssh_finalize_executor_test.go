@@ -111,10 +111,99 @@ func TestSSHFinalizeEngineRollbackRestoresDualListenerAfterReloadFailure(t *test
 	}
 }
 
+// Adversarial case 1: the staged phase never completed (new listener is not
+// up). Finalization must block before touching anything and must not even
+// run the management probe.
+func TestSSHFinalizeBlockedWhenNewListenerMissing(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "etc", "ssh", "sshd_config.d", "99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	staged := "Port 2222\nPort 2200\n"
+	if err := os.WriteFile(config, []byte(staged), 0600); err != nil { t.Fatal(err) }
+	a := sshFinalizeAction(2222, 2200, config, staged)
+	probed := false
+	e := newFinalizeTestExecutor(root, a, func(string, int) error { probed = true; return nil })
+	e.listeners[2200] = false
+
+	if err := e.Apply(a.ID, a.Resource, string(state.ActionSSHFinalize)); err == nil {
+		t.Fatal("expected missing new listener to block finalization")
+	}
+	if probed { t.Fatal("probe must not run when the new listener is missing") }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != staged { t.Fatalf("config changed despite missing new listener: %q", got) }
+}
+
+// Adversarial case 5: reload succeeded but the new listener disappeared.
+// The transaction must fail and roll back to the staged dual-listener state.
+func TestSSHFinalizeFailsWhenNewListenerDisappearsAfterReload(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "etc", "ssh", "sshd_config.d", "99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	staged := "Port 2222\nPort 2200\n"
+	if err := os.WriteFile(config, []byte(staged), 0600); err != nil { t.Fatal(err) }
+	a := sshFinalizeAction(2222, 2200, config, staged)
+	e := newFinalizeTestExecutor(root, a, func(string, int) error { return nil })
+	e.dropNewOnReload = true
+
+	p := state.Plan{SchemaVersion: state.SchemaVersion, Actions: []state.Action{a}}
+	tr := (Engine{Executor: e}).Apply(p, fakeGate{ready: true})
+	if tr.Status != StatusRolledBack { t.Fatalf("status=%s error=%q", tr.Status, tr.Error) }
+	if !strings.Contains(tr.Error, "disappeared after finalization") { t.Fatalf("error=%q", tr.Error) }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != staged { t.Fatalf("rollback config=%q", got) }
+	if len(tr.Actions) != 1 || !tr.Actions[0].RolledBack { t.Fatalf("actions=%#v", tr.Actions) }
+}
+
+// Adversarial case 6: after the finalization reload the old listener is
+// unexpectedly still active. The operation must fail and roll back.
+func TestSSHFinalizeFailsWhenOldListenerPersists(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "etc", "ssh", "sshd_config.d", "99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	staged := "Port 2222\nPort 2200\n"
+	if err := os.WriteFile(config, []byte(staged), 0600); err != nil { t.Fatal(err) }
+	a := sshFinalizeAction(2222, 2200, config, staged)
+	e := newFinalizeTestExecutor(root, a, func(string, int) error { return nil })
+	e.keepOldOnReload = true
+
+	p := state.Plan{SchemaVersion: state.SchemaVersion, Actions: []state.Action{a}}
+	tr := (Engine{Executor: e}).Apply(p, fakeGate{ready: true})
+	if tr.Status != StatusRolledBack { t.Fatalf("status=%s error=%q", tr.Status, tr.Error) }
+	if !strings.Contains(tr.Error, "still active after finalization") { t.Fatalf("error=%q", tr.Error) }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != staged { t.Fatalf("rollback config=%q", got) }
+	if len(tr.Actions) != 1 || !tr.Actions[0].RolledBack { t.Fatalf("actions=%#v", tr.Actions) }
+}
+
+// Adversarial case 2 at transaction level: management probe fails, the
+// engine rolls the staged config back and reports the rollback explicitly.
+func TestSSHFinalizeEngineRollbackOnProbeFailure(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "etc", "ssh", "sshd_config.d", "99-vps-gateway.conf")
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
+	staged := "Port 2222\nPort 2200\n"
+	if err := os.WriteFile(config, []byte(staged), 0600); err != nil { t.Fatal(err) }
+	a := sshFinalizeAction(2222, 2200, config, staged)
+	e := newFinalizeTestExecutor(root, a, func(string, int) error { return errors.New("controller cannot reach new port") })
+
+	p := state.Plan{SchemaVersion: state.SchemaVersion, Actions: []state.Action{a}}
+	tr := (Engine{Executor: e}).Apply(p, fakeGate{ready: true})
+	if tr.Status != StatusRolledBack { t.Fatalf("status=%s error=%q", tr.Status, tr.Error) }
+	got, err := os.ReadFile(config)
+	if err != nil { t.Fatal(err) }
+	if string(got) != staged { t.Fatalf("rollback config=%q", got) }
+	if len(tr.Actions) != 1 || !tr.Actions[0].RolledBack { t.Fatalf("actions=%#v", tr.Actions) }
+}
+
 type finalizeTestExecutor struct {
 	*SSHFinalizeExecutor
-	listeners  map[int]bool
-	failReload bool
+	listeners       map[int]bool
+	failReload      bool
+	dropNewOnReload bool
+	keepOldOnReload bool
 }
 
 func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int) error) *finalizeTestExecutor {
@@ -139,6 +228,8 @@ func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int
 					f.listeners[2222] = strings.Contains(content, "Port 2222")
 					f.listeners[2200] = strings.Contains(content, "Port 2200")
 				}
+				if f.dropNewOnReload { f.listeners[2200] = false }
+				if f.keepOldOnReload { f.listeners[2222] = true }
 			}
 			return "", nil
 		case "sshd", "systemd-analyze":
