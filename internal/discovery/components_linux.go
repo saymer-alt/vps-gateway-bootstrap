@@ -85,6 +85,15 @@ func (c *Collector) collectGatewayComponents(ctx context.Context, r *Result) {
 		r.Gateway.WireGuard.Version = firstLine(text(c, ctx, p, "--version"))
 		if out, e := output(c, ctx, p, "show", "interfaces"); e == nil { r.Gateway.WireGuard.Interfaces = fields(string(out)) }
 	}
+	// An existing wg* interface proves WireGuard/AWG presence even when the
+	// wg tool is absent (Amnezia ships its own tooling and often leaves no
+	// plain wg binary in PATH).
+	for _, i := range r.Network.Interfaces {
+		if i.Name == "wg0" || strings.HasPrefix(i.Name, "wg") && len(i.Name) > 2 && isDigits(i.Name[2:]) {
+			r.Gateway.WireGuard.Installed = true
+			r.Gateway.WireGuard.Interfaces = appendUniqueString(r.Gateway.WireGuard.Interfaces, i.Name)
+		}
+	}
 	for _, i := range r.Network.Interfaces {
 		if i.Name == "amn0" || strings.HasPrefix(i.Name, "amn") { r.Gateway.Amnezia.Installed = true; r.Gateway.Amnezia.Interfaces = append(r.Gateway.Amnezia.Interfaces, i.Name) }
 	}
@@ -96,3 +105,18 @@ func (c *Collector) collectGatewayComponents(ctx context.Context, r *Result) {
 func fileExists(path string) bool { _, err := os.Stat(path); return err == nil }
 func firstLine(s string) string { if i := strings.IndexByte(s, '\n'); i >= 0 { return strings.TrimSpace(s[:i]) }; return strings.TrimSpace(s) }
 func fields(s string) []string { var out []string; for _, x := range strings.Fields(s) { out = append(out, x) }; return out }
+
+func isDigits(s string) bool {
+	if s == "" { return false }
+	for _, r := range s {
+		if r < '0' || r > '9' { return false }
+	}
+	return true
+}
+
+func appendUniqueString(a []string, v string) []string {
+	for _, x := range a {
+		if x == v { return a }
+	}
+	return append(a, v)
+}
