@@ -229,3 +229,27 @@ func TestApplyRejectsStalePlan(t *testing.T) {
 	if !strings.Contains(out.String(), "stale") { t.Fatalf("staleness blocker missing: %s", out.String()) }
 	if len(rec.calls) != 0 { t.Fatalf("mutation with stale plan: %v", rec.calls) }
 }
+
+// Reporting gap regression: a FAILED_TRANSACTION must surface the concrete
+// action error (e.g. systemctl restart output), not only the stage name.
+// Observed live on Saymer3: the operator saw "FAILED_TRANSACTION" without
+// the underlying systemctl error.
+func TestApplyShowsActionErrorOnFailure(t *testing.T) {
+	rec := &cliRecordingExecutor{failApply: true}
+	// Discovery calls: #1 test-side Prepare, #2 CLI Prepare, #3 staleness.
+	o, _, _ := applyTestOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t), loadSaymer3Discovery(t), repairedSaymer3Discovery(t),
+	}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: rec}})
+	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
+	prefix := fingerprintPrefix(t, prepared)
+
+	var out bytes.Buffer
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
+	if !strings.Contains(out.String(), "service.fail2ban.service [ROLLED_BACK]: apply failed") {
+		t.Fatalf("action error not reported: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Stage: FAILED_TRANSACTION") {
+		t.Fatalf("stage missing: %s", out.String())
+	}
+}

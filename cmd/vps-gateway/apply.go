@@ -198,6 +198,13 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		return 1
 	}
 	fmt.Fprintf(stdout, "Stage: %s\n", out.Stage)
+	// Surface the concrete action error(s): "Stage: FAILED_TRANSACTION" alone
+	// hides why the transaction failed (e.g. systemctl restart output).
+	for _, ar := range out.Transaction.Actions {
+		if ar.Error != "" {
+			fmt.Fprintf(stderr, "  %s [%s]: %s\n", ar.Resource, ar.Status, ar.Error)
+		}
+	}
 	if len(out.Blockers) > 0 {
 		for _, b := range out.Blockers { fmt.Fprintln(stderr, "  - "+b) }
 	}
