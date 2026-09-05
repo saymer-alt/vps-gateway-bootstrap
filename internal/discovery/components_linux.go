@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -20,39 +21,80 @@ func (c *Collector) collectDocker(ctx context.Context, r *Result) {
 		r.Docker.Active = true
 	}
 
-	var containers []struct {
-		ID string `json:"ID"`
-		Names string `json:"Names"`
-		Image string `json:"Image"`
-		State string `json:"State"`
-		Status string `json:"Status"`
-		Ports string `json:"Ports"`
-	}
-	if err := jsonOut(c, ctx, &containers, p, "ps", "-a", "--format", "{{json .}}"); err == nil {
-		for _, x := range containers {
-			r.Docker.Containers = append(r.Docker.Containers, Container{ID: x.ID, Name: x.Names, Image: x.Image, State: x.State, Status: x.Status, Ports: splitCSV(x.Ports)})
-		}
-	} else {
-		// Some Docker versions emit one JSON object per line for --format.
-		if out, e := output(c, ctx, p, "ps", "-a", "--format", "{{json .}}"); e == nil {
-			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-				var x struct { ID string `json:"ID"`; Names string `json:"Names"`; Image string `json:"Image"`; State string `json:"State"`; Status string `json:"Status"`; Ports string `json:"Ports"` }
-				if json.Unmarshal([]byte(line), &x) == nil {
-					r.Docker.Containers = append(r.Docker.Containers, Container{ID: x.ID, Name: x.Names, Image: x.Image, State: x.State, Status: x.Status, Ports: splitCSV(x.Ports)})
-				}
-			}
-		} else {
+	containers, containerMalformed := parseNDJSON[dockerContainerEntry](func() []byte {
+		out, e := output(c, ctx, p, "ps", "-a", "--format", "{{json .}}")
+		if e != nil {
 			addObservation(&r.Unknowns, "DOCKER_CONTAINERS_UNKNOWN", "docker", e.Error())
+			return nil
 		}
+		return out
+	}())
+	for _, x := range containers {
+		r.Docker.Containers = append(r.Docker.Containers, Container{ID: x.ID, Name: x.Names, Image: x.Image, State: x.State, Status: x.Status, Ports: splitCSV(x.Ports)})
+	}
+	for _, m := range containerMalformed {
+		addObservation(&r.Unknowns, "DOCKER_CONTAINERS_UNKNOWN", "docker", "container listing: "+m)
 	}
 
-	var networks []struct { ID string `json:"Id"`; Name string `json:"Name"`; Driver string `json:"Driver"`; IPAM struct { Config []struct { Subnet string `json:"Subnet"`; Gateway string `json:"Gateway"` } `json:"Config"` } `json:"IPAM"` }
-	if err := jsonOut(c, ctx, &networks, p, "network", "ls", "--format", "{{json .}}"); err == nil {
-		for _, x := range networks {
-			n := DockerNetwork{ID: x.ID, Name: x.Name, Driver: x.Driver}
-			r.Docker.Networks = append(r.Docker.Networks, n)
+	networks, networkMalformed := parseNDJSON[dockerNetworkEntry](func() []byte {
+		out, e := output(c, ctx, p, "network", "ls", "--format", "{{json .}}")
+		if e != nil {
+			addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", e.Error())
+			return nil
 		}
+		return out
+	}())
+	for _, x := range networks {
+		id := x.ID
+		if id == "" {
+			id = x.Id
+		}
+		r.Docker.Networks = append(r.Docker.Networks, DockerNetwork{ID: id, Name: x.Name, Driver: x.Driver})
 	}
+	for _, m := range networkMalformed {
+		addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", "network listing: "+m)
+	}
+}
+
+// dockerContainerEntry and dockerNetworkEntry mirror the JSON objects
+// emitted by `docker ps/network ls --format '{{json .}}'` (one object per
+// line). Both ID spellings are accepted: docker has used "ID" and "Id"
+// across commands and versions.
+type dockerContainerEntry struct {
+	ID     string `json:"ID"`
+	Names  string `json:"Names"`
+	Image  string `json:"Image"`
+	State  string `json:"State"`
+	Status string `json:"Status"`
+	Ports  string `json:"Ports"`
+}
+
+type dockerNetworkEntry struct {
+	ID     string `json:"ID"`
+	Id     string `json:"Id"`
+	Name   string `json:"Name"`
+	Driver string `json:"Driver"`
+}
+
+// parseNDJSON decodes newline-delimited JSON (one object per line), the
+// output shape of `docker ... --format '{{json .}}'`. Blank lines are
+// skipped. Malformed lines are reported instead of silently dropped, so a
+// partially unreadable listing is surfaced as uncertainty and never
+// masquerades as an empty result.
+func parseNDJSON[T any](data []byte) (items []T, malformed []string) {
+	for i, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var item T
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			malformed = append(malformed, fmt.Sprintf("line %d: %v", i+1, err))
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, malformed
 }
 
 func splitCSV(s string) []string {
