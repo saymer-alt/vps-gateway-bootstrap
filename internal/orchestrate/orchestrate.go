@@ -291,15 +291,23 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		return out, nil
 	}
 
-	// The plan is the source of truth for which actions exist: derive the
-	// registry's action map from it so the executor set never depends on a
-	// caller remembering to duplicate the plan into Registry.Actions.
-	reg := o.Registry
-	if reg.Actions == nil {
-		reg.Actions = map[string]state.Action{}
-	}
+	// The plan is the source of truth for which actions exist. Bind it into
+	// the registry AND into every kind executor that keeps its own action
+	// map (ServiceExecutor, FileExecutor, ...): without the binding the
+	// executor rejects every action with "no action registry configured".
+	actions := map[string]state.Action{}
 	for _, a := range p.Plan.Actions {
-		reg.Actions[a.ID] = a
+		actions[a.ID] = a
+	}
+	reg := o.Registry
+	reg.Actions = actions
+	bound := map[apply.ActionExecutor]bool{}
+	for _, ex := range o.Registry.ByKind {
+		if ex == nil || bound[ex] { continue }
+		bound[ex] = true
+		if binder, ok := ex.(apply.ActionBinder); ok {
+			binder.BindActions(actions)
+		}
 	}
 
 	// The engine re-checks the gate itself; belt and braces.

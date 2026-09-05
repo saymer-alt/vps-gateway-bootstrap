@@ -88,3 +88,11 @@ func removeSSHListener(content string, oldPort int, socket bool) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// BindActions implements ActionBinder by binding the plan's actions into the
+// base SSH executor the finalizer delegates to.
+func (e *SSHFinalizeExecutor) BindActions(actions map[string]state.Action) {
+	if e.Base != nil {
+		e.Base.BindActions(actions)
+	}
+}

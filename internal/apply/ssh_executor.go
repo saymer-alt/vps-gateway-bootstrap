@@ -160,3 +160,9 @@ func (e *SSHExecutor) listener(port int) bool {
 	}
 	return false
 }
+
+// BindActions implements ActionBinder: the orchestrator hands the plan's
+// actions to the executor before every transaction.
+func (e *SSHExecutor) BindActions(actions map[string]state.Action) {
+	e.Actions = actions
+}

@@ -77,3 +77,9 @@ func (e *ServiceExecutor) Rollback(actionID, resource string) error {
 	default: return fmt.Errorf("unsupported rollback operation %q", s.RollbackOperation)
 	}
 }
+
+// BindActions implements ActionBinder: the orchestrator hands the plan's
+// actions to the executor before every transaction.
+func (e *ServiceExecutor) BindActions(actions map[string]state.Action) {
+	e.Actions = actions
+}

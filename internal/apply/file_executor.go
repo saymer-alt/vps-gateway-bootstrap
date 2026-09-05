@@ -129,3 +129,9 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 func checksum(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
+
+// BindActions implements ActionBinder: the orchestrator hands the plan's
+// actions to the executor before every transaction.
+func (e *FileExecutor) BindActions(actions map[string]state.Action) {
+	e.Actions = actions
+}

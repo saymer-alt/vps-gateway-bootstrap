@@ -1,6 +1,10 @@
 package apply
 
-import "time"
+import (
+	"time"
+
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
+)
 
 type Status string
 
@@ -34,6 +38,13 @@ type ActionExecutor interface {
 	Apply(actionID, resource, kind string) error
 	Validate(actionID, resource string) error
 	Rollback(actionID, resource string) error
+}
+
+// ActionBinder is an optional executor extension: executors that keep their
+// own per-action registry accept the plan's actions through BindActions, so
+// the orchestrator never has to know the concrete executor type.
+type ActionBinder interface {
+	BindActions(actions map[string]state.Action)
 }
 
 type PreflightGate interface {
