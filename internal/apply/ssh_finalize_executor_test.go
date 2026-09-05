@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
@@ -146,7 +147,9 @@ func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int
 		}
 	}}
 	f.SSHFinalizeExecutor = &SSHFinalizeExecutor{
-		Base: base, Probe: ManagementProbe(probe), ManagementHost: "controller.example", ManagementPort: 2200,
+		Base: base, Probe: ManagementProbe(func(host string, port int, timeout time.Duration) error {
+			return probe(host, port)
+		}), ManagementHost: "controller.example", ManagementPort: 2200,
 	}
 	return f
 }
