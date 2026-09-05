@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,6 +58,26 @@ func ParseConfig(data []byte) (*Config, error) {
 type Options struct {
 	Root  *bool
 	State *state.Model
+	// InspectFile collects the observed state of one desired file path.
+	// When nil, the real filesystem is inspected.
+	InspectFile func(path string) (state.FileActual, error)
+}
+
+// defaultInspectFile inspects a file on the real filesystem.
+func defaultInspectFile(path string) (state.FileActual, error) {
+	fa := state.FileActual{Path: path}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) { return fa, nil }
+		return fa, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil { return fa, err }
+	sum := sha256.Sum256(data)
+	fa.Exists = true
+	fa.SHA256 = hex.EncodeToString(sum[:])
+	fa.Mode = uint32(info.Mode().Perm())
+	return fa, nil
 }
 
 func Assemble(r discovery.Result, cfg *Config, o Options) Result {
@@ -64,6 +86,24 @@ func Assemble(r discovery.Result, cfg *Config, o Options) Result {
 	if o.Root != nil { isRoot = *o.Root }
 	m := state.FromDiscovery(r)
 	if cfg.Desired != nil { m.Desired = *cfg.Desired }
+	// Inspect desired file paths (read-only) so the diff reflects the real
+	// content/mode of managed files. Only declared paths are inspected; an
+	// inspection failure becomes a blocking constraint (fail-closed).
+	if len(m.Desired.Files) > 0 {
+		inspect := o.InspectFile
+		if inspect == nil { inspect = defaultInspectFile }
+		for _, fd := range m.Desired.Files {
+			fa, err := inspect(fd.Path)
+			if err != nil {
+				m.Constraints = append(m.Constraints, state.Constraint{
+					Code: "FILE_INSPECT_FAILED", Component: "file." + fd.Path,
+					Message: err.Error(), Blocking: true,
+				})
+				continue
+			}
+			m.Actual.Files = append(m.Actual.Files, fa)
+		}
+	}
 	source := ""
 	switch {
 	case cfg.Ownership != nil:

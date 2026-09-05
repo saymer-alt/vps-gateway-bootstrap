@@ -56,6 +56,7 @@ type Actual struct {
 	Security   SecurityActual   `json:"security"`
 	Containers ContainersActual `json:"containers"`
 	Services   []ServiceActual  `json:"services"`
+	Files      []FileActual     `json:"files,omitempty"`
 	Gateway    GatewayActual    `json:"gateway"`
 }
 
@@ -76,6 +77,7 @@ type Desired struct {
 	Mihomo *MihomoDesired `json:"mihomo,omitempty"`
 	Mieru *MieruDesired `json:"mieru,omitempty"`
 	Services []ServiceDesired `json:"services,omitempty"`
+	Files []FileDesired `json:"files,omitempty"`
 }
 
 // ServiceDesired expresses the desired runtime state of one systemd unit.
@@ -83,6 +85,24 @@ type Desired struct {
 type ServiceDesired struct {
 	Name   string `json:"name"`
 	Active *bool  `json:"active,omitempty"`
+}
+
+// FileDesired expresses the desired content of one bootstrap-owned managed
+// file. Only explicitly listed paths are ever written.
+type FileDesired struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    uint32 `json:"mode,omitempty"`
+}
+
+// FileActual is the observed state of one managed file path: existence,
+// content hash and permission bits. Paths that were not inspected are absent
+// from this list — absence of an entry means UNKNOWN, not nonexistent.
+type FileActual struct {
+	Path   string `json:"path"`
+	Exists bool   `json:"exists"`
+	SHA256 string `json:"sha256,omitempty"`
+	Mode   uint32 `json:"mode,omitempty"`
 }
 type SSHDesired struct { Port *int `json:"port,omitempty"`; KeyAuthentication *bool `json:"key_authentication,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
 type FirewallDesired struct { Incoming string `json:"incoming,omitempty"`; Outgoing string `json:"outgoing,omitempty"` }

@@ -1,5 +1,10 @@
 package state
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
 // BuildDiff compares only explicitly specified desired values. Unspecified
 // desired state is intentionally ignored: absence is not permission to change.
 func BuildDiff(m Model) []DiffItem {
@@ -81,8 +86,48 @@ func BuildDiff(m Model) []DiffItem {
 		}
 	}
 
+	// Desired managed files. Only explicitly listed paths are ever
+	// considered; a path absent from the actual-state inspection is a CREATE
+	// (backup records ABSENT so rollback removes it), never a guess about
+	// what the file should contain.
+	for _, fd := range m.Desired.Files {
+		if fd.Path == "" || fd.Content == "" { continue }
+		resource := "file." + fd.Path
+		owner := ownershipOf(m, "file."+fd.Path)
+		sum := sha256.Sum256([]byte(fd.Content))
+		desiredHash := hex.EncodeToString(sum[:])
+		var actual *FileActual
+		for i := range m.Actual.Files {
+			if m.Actual.Files[i].Path == fd.Path { actual = &m.Actual.Files[i]; break }
+		}
+		switch {
+		case owner == Unknown:
+			add(resource, actualHash(actual), desiredHash, Conflict, owner, "file ownership is unknown")
+		case owner == External:
+			add(resource, actualHash(actual), desiredHash, ExternalDiff, owner, "file is externally owned")
+		case actual == nil:
+			add(resource, nil, desiredHash, Conflict, owner, "file was not inspected before planning")
+		case !actual.Exists:
+			add(resource, nil, desiredHash, Create, owner, "file does not exist and is desired")
+		case actual.SHA256 != desiredHash || actual.Mode != effectiveMode(fd.Mode):
+			add(resource, actual.SHA256, desiredHash, Update, owner, "file content or mode differs")
+		default:
+			add(resource, desiredHash, desiredHash, NoChange, owner, "file already matches desired content")
+		}
+	}
+
 	m.Diff = d
 	return d
+}
+
+func actualHash(actual *FileActual) any {
+	if actual == nil { return nil }
+	return actual.SHA256
+}
+
+func effectiveMode(desired uint32) uint32 {
+	if desired == 0 { return 0600 }
+	return desired
 }
 
 func ownershipOf(m Model, resource string) Ownership {

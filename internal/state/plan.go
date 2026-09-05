@@ -119,6 +119,14 @@ func BuildPlan(m Model) Plan {
 					continue
 				}
 			}
+			if strings.HasPrefix(d.Resource, "file.") {
+				a.Spec = fileSpec(m, d.Resource)
+				if a.Spec == nil || a.Spec.File == nil {
+					p.Blocked = true
+					p.BlockReasons = append(p.BlockReasons, d.Resource+": unable to build typed file action")
+					continue
+				}
+			}
 			p.Actions = append(p.Actions, a)
 		case Conflict, UnknownDiff, Unsupported:
 			p.Blocked = true
@@ -180,6 +188,8 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 		return ActionSSH
 	case resource == "ssh.password_authentication":
 		return ActionUpdateFile
+	case strings.HasPrefix(resource, "file."):
+		return ActionUpdateFile
 	case strings.HasPrefix(resource, "service."):
 		return ActionService
 	case resource == "mihomo.integration":
@@ -192,6 +202,19 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 	default:
 		return ActionValidate
 	}
+}
+
+// fileSpec builds the typed file action for a "file.<path>" resource from
+// the desired file declaration carried in the model.
+func fileSpec(m Model, resource string) *ActionSpec {
+	path := strings.TrimPrefix(resource, "file.")
+	for _, fd := range m.Desired.Files {
+		if fd.Path == path {
+			mode := effectiveMode(fd.Mode)
+			return &ActionSpec{File: &FileActionSpec{Path: fd.Path, Content: fd.Content, Mode: mode}}
+		}
+	}
+	return nil
 }
 
 // serviceSpec builds the typed service action for a "service.<unit>"
