@@ -34,7 +34,16 @@ func Summary(res Result) string {
 	for _, o := range res.Model.Ownership {
 		if o == state.Owned { owned++ }
 	}
-	line("OWNERSHIP", "✓", strconv.Itoa(owned)+" owned resource(s) declared")
+	ownershipDetail := strconv.Itoa(owned) + " owned resource(s) declared"
+	switch res.OwnershipSource {
+	case "config":
+		ownershipDetail += " (from config)"
+	case "state":
+		ownershipDetail += " (from persisted state)"
+	default:
+		ownershipDetail += " (none declared)"
+	}
+	line("OWNERSHIP", "✓", ownershipDetail)
 
 	conflictMark, conflictDetail := "✓", "none"
 	for _, d := range res.Model.Diff {

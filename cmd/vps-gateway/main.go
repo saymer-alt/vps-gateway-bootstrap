@@ -11,6 +11,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/doctor"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/validate"
 )
 
@@ -175,7 +176,8 @@ func runValidate(args []string) {
 func runInstall(args []string) {
 	timeout, rest := parseTimeout(args)
 	dryRun, jsonOut := false, false
-	configPath := ""
+	configPath, statePath := "", ""
+	explicitState := false
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
 		case "--dry-run":
@@ -189,6 +191,14 @@ func runInstall(args []string) {
 			}
 			i++
 			configPath = rest[i]
+		case "--state":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "--state requires a file path")
+				os.Exit(2)
+			}
+			i++
+			statePath = rest[i]
+			explicitState = true
 		default:
 			fmt.Fprintf(os.Stderr, "unknown install flag %q\n%s\n", rest[i], usage)
 			os.Exit(2)
@@ -212,7 +222,20 @@ func runInstall(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	res := pipeline.Assemble(runDiscovery(timeout), cfg, pipeline.Options{})
+	opts := pipeline.Options{}
+	if statePath == "" {
+		statePath = state.PersistedStatePath
+	}
+	persisted, err := state.LoadModelIfPresent(statePath)
+	if err != nil {
+		if explicitState {
+			fmt.Fprintf(os.Stderr, "load state: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "note: ignoring unreadable %s: %v\n", statePath, err)
+	}
+	opts.State = persisted
+	res := pipeline.Assemble(runDiscovery(timeout), cfg, opts)
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

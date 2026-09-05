@@ -22,6 +22,9 @@ type Result struct {
 	Model     state.Model      `json:"model"`
 	Plan      state.Plan       `json:"plan"`
 	Preflight state.Preflight  `json:"preflight"`
+	// OwnershipSource records where the ownership map came from: "config",
+	// "state" (persisted previous state) or "" (nothing declared).
+	OwnershipSource string `json:"ownership_source,omitempty"`
 }
 
 // Config is the seed of the future persisted bootstrap configuration
@@ -29,8 +32,8 @@ type Result struct {
 // declarations. Anything not listed here is treated as unspecified, and
 // unspecified desired state never grants permission to change the machine.
 type Config struct {
-	Desired   *state.Desired              `json:"desired,omitempty"`
-	Ownership map[string]state.Ownership  `json:"ownership,omitempty"`
+	Desired   *state.Desired             `json:"desired,omitempty"`
+	Ownership map[string]state.Ownership `json:"ownership,omitempty"`
 }
 
 // ParseConfig decodes a bootstrap configuration document.
@@ -47,9 +50,12 @@ func ParseConfig(data []byte) (*Config, error) {
 
 // Options controls environment-dependent inputs. Root overrides the
 // privilege fact used by the preflight root check: nil detects from the
-// current process, tests and previews pass an explicit value.
+// current process, tests and previews pass an explicit value. State carries
+// the persisted previous state; per docs/state-model.md it must never
+// override live discovery or explicit configuration — it only fills gaps.
 type Options struct {
-	Root *bool
+	Root  *bool
+	State *state.Model
 }
 
 func Assemble(r discovery.Result, cfg *Config, o Options) Result {
@@ -58,11 +64,19 @@ func Assemble(r discovery.Result, cfg *Config, o Options) Result {
 	if o.Root != nil { isRoot = *o.Root }
 	m := state.FromDiscovery(r)
 	if cfg.Desired != nil { m.Desired = *cfg.Desired }
-	if cfg.Ownership != nil { m.Ownership = cfg.Ownership }
+	source := ""
+	switch {
+	case cfg.Ownership != nil:
+		m.Ownership = cfg.Ownership
+		source = "config"
+	case o.State != nil && o.State.Ownership != nil:
+		m.Ownership = o.State.Ownership
+		source = "state"
+	}
 	m.Diff = state.BuildDiff(m)
 	p := state.BuildPlan(m)
 	pf := state.BuildPreflightFor(m, p, isRoot)
-	return Result{Discovery: r, Model: m, Plan: p, Preflight: pf}
+	return Result{Discovery: r, Model: m, Plan: p, Preflight: pf, OwnershipSource: source}
 }
 
 // Ready reports whether the pipeline would proceed to apply. It is the

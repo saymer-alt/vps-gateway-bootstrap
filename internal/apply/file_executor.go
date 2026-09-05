@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/fsatomic"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
@@ -120,15 +121,7 @@ func (e *FileExecutor) safePath(p string) (string, error) {
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".vps-gateway-*")
-	if err != nil { return err }
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil { tmp.Close(); return err }
-	if _, err := tmp.Write(data); err != nil { tmp.Close(); return err }
-	if err := tmp.Sync(); err != nil { tmp.Close(); return err }
-	if err := tmp.Close(); err != nil { return err }
-	return os.Rename(tmpName, path)
+	return fsatomic.WriteFile(path, data, mode)
 }
 
 func checksum(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }

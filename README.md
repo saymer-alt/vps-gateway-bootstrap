@@ -26,8 +26,21 @@ dry-run pipeline come from a JSON config:
 }
 ```
 
+flags:
+  --timeout DURATION      limit every discovery command (default 60s)
+
 Anything not listed as desired is never changed; mutations of resources with
 unknown ownership are blocked by design.
+
+## State persistence
+
+`state.json` (default `/etc/vps-gateway/state.json`) records the last known
+managed state: schema version, profile, actual/desired state, ownership,
+constraints and diff. It is written atomically with mode 0600 and must only
+be persisted from verified post-change state. Ownership precedence in the
+pipeline: explicit config > persisted state > nothing (unknown ownership
+blocks mutations). install --dry-run reads it via `--state FILE` (or the
+default path when present) and reports the source in the summary.
 
 ## Layout
 

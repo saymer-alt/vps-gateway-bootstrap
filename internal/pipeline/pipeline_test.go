@@ -116,3 +116,40 @@ func intPtr(n int) *int { return &n }
 // rootOn makes preflight deterministic: tests must not depend on the euid
 // of the process running them.
 func rootOn() Options { t := true; return Options{Root: &t} }
+
+func persistedState(ownership map[string]state.Ownership) *state.Model {
+	return &state.Model{SchemaVersion: state.SchemaVersion, Ownership: ownership, Status: state.StatusOK}
+}
+
+func TestAssembleUsesPersistedOwnershipAsFallback(t *testing.T) {
+	cfg := &Config{Desired: &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}}}
+	opts := rootOn()
+	opts.State = persistedState(map[string]state.Ownership{"ssh": state.Owned})
+	res := Assemble(healthyDiscovery(), cfg, opts)
+	if res.OwnershipSource != "state" { t.Fatalf("source=%q", res.OwnershipSource) }
+	if res.Plan.Blocked { t.Fatalf("persisted ownership must unblock the plan: %v", res.Plan.BlockReasons) }
+	if len(res.Plan.Actions) != 1 { t.Fatalf("actions=%#v", res.Plan.Actions) }
+}
+
+func TestAssembleConfigOverridesPersistedState(t *testing.T) {
+	cfg := &Config{
+		Desired:   &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}},
+		Ownership: map[string]state.Ownership{"ssh": state.External},
+	}
+	opts := rootOn()
+	opts.State = persistedState(map[string]state.Ownership{"ssh": state.Owned})
+	res := Assemble(healthyDiscovery(), cfg, opts)
+	if res.OwnershipSource != "config" { t.Fatalf("source=%q", res.OwnershipSource) }
+	if !res.Plan.Blocked {
+		t.Fatal("explicit config ownership must win over persisted state and block non-owned mutation")
+	}
+}
+
+func TestAssembleNoOwnershipAnywhereBlocksSSHChange(t *testing.T) {
+	cfg := &Config{Desired: &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}}}
+	opts := rootOn()
+	opts.State = persistedState(nil)
+	res := Assemble(healthyDiscovery(), cfg, opts)
+	if res.OwnershipSource != "" { t.Fatalf("source=%q", res.OwnershipSource) }
+	if !res.Plan.Blocked { t.Fatal("no ownership declared anywhere must block") }
+}
