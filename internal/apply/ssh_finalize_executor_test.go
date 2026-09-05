@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,17 +28,10 @@ func TestSSHFinalizeRequiresExternalManagementProbe(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil { t.Fatal(err) }
 	if err := os.WriteFile(config, []byte("Port 2222\nPort 2200\n"), 0600); err != nil { t.Fatal(err) }
 	a := sshFinalizeAction(2222, 2200, config, "Port 2222\nPort 2200\n")
-	probeCalled := false
-	e := newFinalizeTestExecutor(root, a, func(string, int) error {
-		probeCalled = true
-		return nil
-	})
+	e := newFinalizeTestExecutor(root, a, nil)
 
 	if err := e.Apply(a.ID, a.Resource, string(state.ActionSSHFinalize)); err == nil {
 		t.Fatal("expected missing management probe to block finalization")
-	}
-	if probeCalled {
-		t.Fatal("probe must not be called when it is not configured")
 	}
 	got, err := os.ReadFile(config)
 	if err != nil { t.Fatal(err) }
@@ -134,9 +128,16 @@ func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int
 			return out, nil
 		case "systemctl":
 			if len(args) >= 2 && args[0] == "reload" {
-				if f.failReload { return "", errors.New("reload failed") }
-				if f.listeners[2222] && f.listeners[2200] {
-					f.listeners[2222] = false
+				if f.failReload {
+					f.failReload = false
+					return "", errors.New("reload failed")
+				}
+				// A successful reload makes sshd apply whatever is currently
+				// written in the managed config fragment.
+				if data, err := os.ReadFile(a.Spec.SSH.ConfigPath); err == nil {
+					content := string(data)
+					f.listeners[2222] = strings.Contains(content, "Port 2222")
+					f.listeners[2200] = strings.Contains(content, "Port 2200")
 				}
 			}
 			return "", nil
@@ -147,9 +148,12 @@ func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int
 		}
 	}}
 	f.SSHFinalizeExecutor = &SSHFinalizeExecutor{
-		Base: base, Probe: ManagementProbe(func(host string, port int, timeout time.Duration) error {
+		Base: base, ManagementHost: "controller.example", ManagementPort: 2200,
+	}
+	if probe != nil {
+		f.SSHFinalizeExecutor.Probe = ManagementProbe(func(host string, port int, timeout time.Duration) error {
 			return probe(host, port)
-		}), ManagementHost: "controller.example", ManagementPort: 2200,
+		})
 	}
 	return f
 }
