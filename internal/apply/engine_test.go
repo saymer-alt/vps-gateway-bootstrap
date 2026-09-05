@@ -226,7 +226,7 @@ func TestSSHFinalizeRequiresRemoteProbe(t *testing.T) {
 	e := &SSHFinalizeExecutor{Base: &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
 		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
 		return "", nil
-	},}
+	},},}
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err == nil {
 		t.Fatal("expected missing management probe to block finalization")
 	}
