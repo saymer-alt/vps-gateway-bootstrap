@@ -6,12 +6,39 @@
 |---|---|
 | Discovery | implemented, live and read-only; fully injectable through `Runner` |
 | State | in-memory model implemented; last-known-good persistence primitive exists (`state.SaveModel/LoadModel`, verified-state only) |
-| Plan | implemented; proposed mutations only, "absence is not permission to change" |
+| Plan | implemented; proposed mutations only, "absence is not permission to change"; service runtime desired state supported (`Desired.Services`) |
 | Preflight | implemented (`state.BuildPreflightFor`), mandatory — the apply engine fails closed without a gate |
-| Apply | engine and executors implemented and tested, but **internal and unreachable from the CLI** (guarded by a CLI tripwire test); not production-ready |
+| Executor coverage | implemented (`state.MissingExecutors`); preflight blocks before the first mutation when a planned action kind has no registered executor |
+| Orchestration | implemented in `internal/orchestrate` (Prepare → Confirm → Execute); **not imported by the CLI**, guarded by a CLI tripwire test |
+| Apply | engine and executors implemented and tested; reachable only through the orchestrator, which is unreachable from the CLI; not production-ready |
 | Rollback | implemented and tested at transaction level (reverse order, backup restore) |
-| Management probe | interface/model only (`internal/probe`, `docs/management-probe.md`); hard prerequisite for SSH finalization; not wired into apply |
-| Locking | primitive ready (`internal/lock`); enforcement belongs to the future apply orchestration |
+| Management probe | model in `internal/probe`; SSH finalization is blocked by the orchestrator unless a reachable probe result for the new management port is supplied (`docs/management-probe.md`); no real transport implemented |
+| Locking | `internal/lock`; acquired before the first mutation and held for the whole transaction inside the orchestrator; CLI wiring pending |
+| Persistence | only after successful re-discovery, final validation and convergence check; verified state only |
+
+## The mutation boundary
+
+```text
+LIVE DISCOVERY          read-only
+→ LOAD VERIFIED STATE   read-only (fallback for ownership/desired only)
+→ OWNERSHIP             read-only; UNKNOWN never grants permission
+→ DIFF                  read-only; unset desired never grants permission
+→ PLAN                  read-only; proposed mutations only
+→ PREFLIGHT             read-only; includes executor coverage
+─── OPERATOR CONFIRMATION ───  the mutation boundary ───
+→ LOCK                  exclusive, held for the whole transaction
+→ BACKUP → APPLY → VALIDATE   the Engine transaction
+→ RE-DISCOVERY          live proof of what actually changed
+→ FINAL VALIDATE        effective checks + convergence (post-diff must be empty)
+→ PERSIST               last-known-good state, only if everything above passed
+```
+
+Before confirmation nothing on the machine changes; any UNKNOWN or blocking
+condition stops the run before the first mutation. If re-discovery, final
+validation or convergence fails after a transaction that claims success, the
+persisted state is NOT updated, the run is reported FAILED, and the rollback
+decision belongs to the operator (the engine has already rolled back every
+failure it detected inside the transaction).
 
 ## Purpose
 

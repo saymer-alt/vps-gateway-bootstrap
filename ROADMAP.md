@@ -24,9 +24,10 @@ READY
 
 - Discovery — live, read-only, validated against four real VPS hosts.
 - State — in-memory model; last-known-good persistence primitive exists (verified state only).
-- Plan — proposed mutations only; ownership-gated.
-- Apply — engine and executors implemented and tested, but **internal and unreachable from the CLI**; not production-ready. The CLI refuses a bare `install` (regression-tested).
-- Management probe — interface/model only (`docs/management-probe.md`); hard prerequisite for SSH finalization; not wired.
+- Plan — proposed mutations only; ownership-gated; service runtime desired state supported.
+- Orchestration — `internal/orchestrate`: Prepare (read-only) → operator Confirmation (the mutation boundary, fingerprint-bound) → Execute (lock → Engine → re-discovery → final validation → convergence → persist). Fail-closed at every stage.
+- Apply — engine and executors implemented and tested, reachable only through the orchestrator, which is **unreachable from the CLI** (regression-tested). Not production-ready.
+- Management probe — model in `internal/probe`; orchestrator blocks SSH finalization without a reachable probe result for the new management port. Controller transport: not implemented.
 
 ## Phase 0 — Documentation and design
 

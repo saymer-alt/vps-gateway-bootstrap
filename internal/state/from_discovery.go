@@ -2,6 +2,17 @@ package state
 
 import "github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 
+// servicesActual converts discovered units into the actual-state
+// representation, keeping only units that exist on the machine.
+func servicesActual(in []discovery.Service) []ServiceActual {
+	var out []ServiceActual
+	for _, s := range in {
+		if !s.Exists { continue }
+		out = append(out, ServiceActual{Name: s.Name, Enabled: s.Enabled, Active: s.Active, SubState: s.SubState})
+	}
+	return out
+}
+
 // FromDiscovery converts the normalized read-only Discovery result into the
 // actual-state portion of the State Model. It performs no reconciliation.
 func FromDiscovery(r discovery.Result) Model {
@@ -38,6 +49,7 @@ func FromDiscovery(r discovery.Result) Model {
 				WireGuardInstalled: r.Gateway.WireGuard.Installed,
 				AmneziaInstalled: r.Gateway.Amnezia.Installed,
 			},
+			Services: servicesActual(r.Services),
 		},
 		Capabilities: Capabilities{
 			Systemd: r.Capabilities.Systemd,

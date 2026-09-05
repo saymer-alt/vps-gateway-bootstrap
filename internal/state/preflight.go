@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
 type PreflightStatus string
@@ -58,10 +59,12 @@ func BuildPreflightFor(m Model, p Plan, isRoot bool) Preflight {
 func capabilitiesForPlan(m Model) bool {
 	for _, d := range m.Diff {
 		if d.Kind == NoChange || d.Kind == Skip || d.Kind == ExternalDiff { continue }
-		switch d.Resource {
-		case "ssh.port", "ssh.password_authentication":
+		switch {
+		case d.Resource == "ssh.port" || d.Resource == "ssh.password_authentication":
 			if !m.Capabilities.Systemd { return false }
-		case "mihomo.integration", "mieru.enabled":
+		case strings.HasPrefix(d.Resource, "service."):
+			if !m.Capabilities.Systemd { return false }
+		case d.Resource == "mihomo.integration" || d.Resource == "mieru.enabled":
 			if !m.Capabilities.Systemd { return false }
 		}
 	}

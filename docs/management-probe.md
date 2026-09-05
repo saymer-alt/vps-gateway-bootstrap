@@ -60,9 +60,12 @@ reachable".
 The probe is a hard prerequisite for any operation that can make the current
 SSH listener disappear, in particular:
 
-- `SSH_FINALIZE` (removal of the old listener) — the finalize executor
-  already blocks when no `ManagementProbe` is injected
-  (`internal/apply/ssh_finalize_executor.go`);
+- `SSH_FINALIZE` (removal of the old listener) — enforced at TWO levels:
+  the finalize executor blocks when no `ManagementProbe` is injected
+  (`internal/apply/ssh_finalize_executor.go`), and the orchestrator blocks
+  the whole run before the first mutation unless a reachable probe result
+  for every new management port is supplied
+  (`internal/orchestrate`, `managementBlockers`);
 - any future operation that touches firewall or routing state protecting the
   management path.
 

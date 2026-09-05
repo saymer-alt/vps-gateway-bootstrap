@@ -1,0 +1,83 @@
+{
+  "name": "first-apply: Saymer3 repair fail2ban",
+  "notes": [
+    "Modeled after the live Saymer3 host (5.175.134.49): fail2ban.service is enabled but inactive (failed).",
+    "This scenario is PLANNING ONLY: desired -> diff -> plan -> preflight. It must never be executed by tests."
+  ],
+  "discovery": {
+    "schema_version": 1,
+    "discovery_version": "0.2.0",
+    "status": "OK",
+    "host": { "hostname": "Saymer3" },
+    "system": {
+      "os": { "id": "ubuntu", "name": "Ubuntu", "version_id": "24.04" },
+      "kernel": { "release": "6.8.0-111-generic", "architecture": "x86_64" },
+      "cpu": { "count": 1 },
+      "memory": { "total_mb": 913, "available_mb": 331 },
+      "root_filesystem": { "mountpoint": "/", "available_bytes": 2147483648 }
+    },
+    "network": {
+      "interfaces": [
+        { "name": "lo", "kind": "loopback", "state": "UNKNOWN", "mtu": 65536 },
+        { "name": "ens3", "kind": "ether", "state": "UP", "mtu": 1500 },
+        { "name": "tun-mihomo", "kind": "none", "state": "UNKNOWN", "mtu": 1420 },
+        { "name": "wg0", "kind": "none", "state": "UNKNOWN", "mtu": 1420 },
+        { "name": "docker0", "kind": "ether", "state": "UP", "mtu": 1500 }
+      ],
+      "external_interface": "ens3",
+      "default_gateway": "5.175.134.1",
+      "ipv4": true,
+      "ipv6": true,
+      "dns": { "resolvers": ["1.1.1.1", "8.8.8.8"], "source": "/etc/resolv.conf", "active": true }
+    },
+    "routing": {
+      "default_routes": [
+        { "destination": "0.0.0.0/0", "device": "tun-mihomo", "table": "mihomo" },
+        { "destination": "0.0.0.0/0", "gateway": "5.175.134.1", "device": "ens3", "table": "main" }
+      ],
+      "rules": [
+        { "priority": 100, "selector": "from 172.29.172.0/24", "table": "mihomo" }
+      ]
+    },
+    "firewall": {
+      "ufw": { "installed": true, "active": true },
+      "nftables": { "installed": true, "active": true },
+      "iptables": { "installed": true, "active": true },
+      "layers": ["ufw", "nftables", "iptables"]
+    },
+    "ssh": {
+      "installed": true,
+      "architecture": "socket-activated",
+      "effective_ports": [2222],
+      "password_authentication": false,
+      "pubkey_authentication": true,
+      "permit_root_login": "without-password"
+    },
+    "docker": { "installed": true, "active": true, "version": "29.1.3" },
+    "gateway": {
+      "mihomo": { "installed": true, "active": true, "version": "Mihomo Meta v1.19.30" },
+      "mieru": { "installed": true, "active": true, "version": "3.36.0" },
+      "wireguard": { "installed": true, "interfaces": ["wg0"] },
+      "amnezia": { "installed": true, "active": true, "interfaces": ["amn0"] }
+    },
+    "services": [
+      { "name": "ssh.service", "exists": true, "enabled": false, "active": true, "substate": "running" },
+      { "name": "ssh.socket", "exists": true, "enabled": true, "active": true, "substate": "running" },
+      { "name": "docker.service", "exists": true, "enabled": true, "active": true, "substate": "running" },
+      { "name": "mihomo.service", "exists": true, "enabled": true, "active": true, "substate": "running" },
+      { "name": "mita.service", "exists": true, "enabled": true, "active": true, "substate": "running" },
+      { "name": "fail2ban.service", "exists": true, "enabled": true, "active": false, "substate": "failed" }
+    ],
+    "capabilities": { "systemd": true, "docker": true, "nftables": true, "iptables": true, "ufw": true, "wireguard": true }
+  },
+  "config": {
+    "desired": {
+      "services": [
+        { "name": "fail2ban.service", "active": true }
+      ]
+    },
+    "ownership": {
+      "service.fail2ban.service": "OWNED"
+    }
+  }
+}

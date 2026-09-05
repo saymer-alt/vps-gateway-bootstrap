@@ -75,6 +75,14 @@ type Desired struct {
 	Firewall *FirewallDesired `json:"firewall,omitempty"`
 	Mihomo *MihomoDesired `json:"mihomo,omitempty"`
 	Mieru *MieruDesired `json:"mieru,omitempty"`
+	Services []ServiceDesired `json:"services,omitempty"`
+}
+
+// ServiceDesired expresses the desired runtime state of one systemd unit.
+// A unit that is not listed here is never touched.
+type ServiceDesired struct {
+	Name   string `json:"name"`
+	Active *bool  `json:"active,omitempty"`
 }
 type SSHDesired struct { Port *int `json:"port,omitempty"`; KeyAuthentication *bool `json:"key_authentication,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
 type FirewallDesired struct { Incoming string `json:"incoming,omitempty"`; Outgoing string `json:"outgoing,omitempty"` }

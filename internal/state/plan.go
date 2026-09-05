@@ -111,6 +111,14 @@ func BuildPlan(m Model) Plan {
 					continue
 				}
 			}
+			if strings.HasPrefix(d.Resource, "service.") {
+				a.Spec = serviceSpec(d.Resource)
+				if a.Spec == nil || a.Spec.Service == nil {
+					p.Blocked = true
+					p.BlockReasons = append(p.BlockReasons, d.Resource+": unable to build typed service action")
+					continue
+				}
+			}
 			p.Actions = append(p.Actions, a)
 		case Conflict, UnknownDiff, Unsupported:
 			p.Blocked = true
@@ -172,6 +180,8 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 		return ActionSSH
 	case resource == "ssh.password_authentication":
 		return ActionUpdateFile
+	case strings.HasPrefix(resource, "service."):
+		return ActionService
 	case resource == "mihomo.integration":
 		if diff == Create {
 			return ActionInstaller
@@ -184,6 +194,21 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 	}
 }
 
+// serviceSpec builds the typed service action for a "service.<unit>"
+// resource: bring the unit to the desired runtime state with a restart and
+// verify with is-active.
+func serviceSpec(resource string) *ActionSpec {
+	unit := strings.TrimPrefix(resource, "service.")
+	if unit == "" {
+		return nil
+	}
+	return &ActionSpec{Service: &ServiceActionSpec{
+		Name:          unit,
+		Operation:     "restart",
+		ExpectedState: "active",
+	}}
+}
+
 func riskForResource(resource string) Risk {
 	if resource == "ssh.port" {
 		return RiskCritical
@@ -192,4 +217,19 @@ func riskForResource(resource string) Risk {
 		return RiskHigh
 	}
 	return RiskMedium
+}
+
+// MissingExecutors returns the set of planned action kinds that have no
+// registered executor. A plan containing such kinds would fail in the middle
+// of a transaction, after earlier actions already mutated the machine, so
+// preflight must reject it before the first mutation.
+func MissingExecutors(p Plan, registered map[ActionKind]bool) []ActionKind {
+	seen := map[ActionKind]bool{}
+	var missing []ActionKind
+	for _, a := range p.Actions {
+		if registered[a.Kind] || seen[a.Kind] { continue }
+		seen[a.Kind] = true
+		missing = append(missing, a.Kind)
+	}
+	return missing
 }

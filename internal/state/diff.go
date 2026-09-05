@@ -54,6 +54,33 @@ func BuildDiff(m Model) []DiffItem {
 		}
 	}
 
+	// Desired service runtime state. Only explicitly listed units are ever
+	// considered; a unit missing from discovery is a conflict, not a gap to
+	// fill by installing or starting something unverified.
+	for _, sd := range m.Desired.Services {
+		if sd.Name == "" || sd.Active == nil { continue }
+		resource := "service." + sd.Name
+		owner := ownershipOf(m, "service."+sd.Name)
+		var actual *ServiceActual
+		for i := range m.Actual.Services {
+			if m.Actual.Services[i].Name == sd.Name { actual = &m.Actual.Services[i]; break }
+		}
+		if actual == nil {
+			add(resource, nil, *sd.Active, Conflict, owner, "unit was not discovered on the machine")
+			continue
+		}
+		switch {
+		case *sd.Active == actual.Active:
+			add(resource, actual.Active, *sd.Active, NoChange, owner, "service state already matches")
+		case owner == Unknown:
+			add(resource, actual.Active, *sd.Active, Conflict, owner, "service ownership is unknown")
+		case owner == External:
+			add(resource, actual.Active, *sd.Active, ExternalDiff, owner, "service is externally owned")
+		default:
+			add(resource, actual.Active, *sd.Active, Update, owner, "service state differs")
+		}
+	}
+
 	m.Diff = d
 	return d
 }

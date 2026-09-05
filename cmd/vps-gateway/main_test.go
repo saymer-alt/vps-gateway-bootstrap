@@ -18,15 +18,18 @@ func TestInstallWithoutDryRunRefuses(t *testing.T) {
 	}
 }
 
-// Source-level tripwire: the CLI must not link the apply engine. Real apply
-// may only be wired in behind an explicit, reviewed product decision that
-// also updates this test and docs/plan-apply.md.
+// Source-level tripwire: the CLI must not link the apply engine or the
+// orchestration layer. Real apply may only be wired in behind an explicit,
+// reviewed product decision that also updates this test and
+// docs/plan-apply.md.
 func TestCLIDoesNotLinkApplyEngine(t *testing.T) {
 	b, err := os.ReadFile("main.go")
 	if err != nil { t.Fatal(err) }
 	src := string(b)
-	if strings.Contains(src, "internal/apply") {
-		t.Fatal("cmd/vps-gateway must not import internal/apply: real apply is not production-ready and must stay unreachable from the CLI")
+	for _, forbidden := range []string{"internal/apply", "internal/orchestrate"} {
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("cmd/vps-gateway must not import %s: real apply is not production-ready and must stay unreachable from the CLI", forbidden)
+		}
 	}
 	if !strings.Contains(src, "real apply is not implemented yet") {
 		t.Fatal("the install guard message is part of the CLI safety contract and must stay present")
