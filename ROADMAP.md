@@ -25,8 +25,8 @@ READY
 - Discovery — live, read-only, validated against four real VPS hosts.
 - State — in-memory model; last-known-good persistence primitive exists (verified state only).
 - Plan — proposed mutations only; ownership-gated; service runtime desired state supported.
-- Orchestration — `internal/orchestrate`: Prepare (read-only) → operator Confirmation (the mutation boundary, fingerprint-bound) → Execute (lock → Engine → re-discovery → final validation → convergence → persist). Fail-closed at every stage.
-- Apply — engine and executors implemented and tested, reachable only through the orchestrator, which is **unreachable from the CLI** (regression-tested). Not production-ready.
+- Orchestration — `internal/orchestrate`: Prepare (read-only) → operator Confirmation (the mutation boundary, fingerprint-bound) → Execute (lock → action binding → Engine → re-discovery → final validation → convergence → persist). Fail-closed at every stage; executor preflight checks (e.g. `fail2ban-client -t`) run in both Prepare and Execute.
+- Apply — implemented and tested end to end; the first production experiment (fail2ban repair, Saymer3) completed the full lifecycle including persistence. Reachable from the CLI only through the experiment-pinned `apply` command (fingerprint confirmation + experiment guard).
 - Management probe — model in `internal/probe`; orchestrator blocks SSH finalization without a reachable probe result for the new management port. Controller transport: not implemented.
 
 ## Phase 0 — Documentation and design

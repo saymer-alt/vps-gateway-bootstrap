@@ -231,9 +231,12 @@ Everything before OPERATOR CONFIRMATION is read-only. Any failure anywhere
 after it fails the run fail-closed, leaves the machine in the state the
 engine's rollback produced, and never persists unverified state.
 
-The first production experiment proved this contract on a live machine
-(Saymer3, fail2ban repair): the restart failed, the transaction ended
-`FAILED_TRANSACTION`, nothing was persisted, and the machine was unchanged —
-the configuration-level cause (`duplicate [sshd]` in `jail.local`) became an
-executor preflight check (`fail2ban-client -t`, commit `bc5c0af`) so the same
-class of failure is now caught before mutation.
+Two production experiments on Saymer3 (fail2ban repair) proved this contract
+on a live machine. Experiment #1 failed closed before any mutation — a
+plan-to-executor binding bug (`no action registry configured`) meant nothing
+ran and nothing was persisted; the fix (`eb93f8e`) added real-executor
+integration tests, because fakes had hidden the gap. After the operator
+repaired the machine's duplicate `[sshd]` section in `jail.local` and an
+executor preflight (`fail2ban-client -t`) was added (`bc5c0af`), experiment
+#2 completed the full lifecycle — restart, re-discovery, final validation,
+convergence, persistence — and fail2ban is active.

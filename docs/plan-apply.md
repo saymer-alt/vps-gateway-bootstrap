@@ -9,8 +9,8 @@
 | Plan | implemented; proposed mutations only, "absence is not permission to change"; service runtime desired state supported (`Desired.Services`) |
 | Preflight | implemented (`state.BuildPreflightFor`), mandatory — the apply engine fails closed without a gate; executors may additionally expose read-only preflight checks (`apply.PreflightChecker`, e.g. `fail2ban-client -t`), enforced in Prepare and re-checked in Execute |
 | Executor coverage | implemented (`state.MissingExecutors`); preflight blocks before the first mutation when a planned action kind has no registered executor |
-| Orchestration | implemented in `internal/orchestrate` (Prepare → Confirm → Execute); **not imported by the CLI**, guarded by a CLI tripwire test |
-| Apply | engine and executors implemented and tested; reachable only through the orchestrator, which is unreachable from the CLI; not production-ready |
+| Orchestration | implemented in `internal/orchestrate` (Prepare → Confirm → Execute); imported by the CLI **only** through the experiment-pinned `apply` command — the confinement is guarded by a CLI tripwire test |
+| Apply | engine and executors implemented and tested end to end; reachable from the CLI only through the experiment-pinned `apply` command (fingerprint confirmation + experiment guard); the first production experiment (fail2ban repair, Saymer3) completed the full lifecycle |
 | Rollback | implemented and tested at transaction level (reverse order, backup restore) |
 | Management probe | model in `internal/probe`; SSH finalization is blocked by the orchestrator unless a reachable probe result for the new management port is supplied (`docs/management-probe.md`); no real transport implemented |
 | Locking | `internal/lock`; acquired before the first mutation and held for the whole transaction inside the orchestrator; CLI wiring pending |

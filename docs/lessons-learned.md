@@ -136,17 +136,40 @@ end-to-end validated
 READY FOR PRODUCTION
 ```
 
-## 21. Configuration failures must be diagnosable before mutation
+## 21. Test the real executor path, and treat configuration failures as pre-mutation checks
 
-The first real Execute attempted `systemctl restart fail2ban.service` and
-failed: the unit could not start because `/etc/fail2ban/jail.local` contained
-a duplicate `[sshd]` section. A restart can never repair a broken
-configuration, so the failure was predictable — yet nothing in the pipeline
-looked at it, and the error only surfaced as a failed systemctl call.
+Two production experiments on Saymer3 (fail2ban repair) produced a two-step
+lesson.
 
-**Rule:** services that ship a read-only configuration test (e.g.
-`fail2ban-client -t`) must run it as an executor preflight check, so a
-configuration-level failure blocks the plan before the first mutation —
-in Prepare, where the operator sees it, and in Execute, where it is
-re-checked for freshness. The check set is explicit per-service knowledge
-held in code, never plan-supplied commands.
+**Experiment #1 never reached the mutation.** It failed at BACKUP with
+`no action registry configured`: the orchestrator bound the plan into the
+registry but not into the kind executor's own action map. Unit tests passed
+because they used fake executors that keep no action map. The fail-closed
+semantics held — nothing ran, nothing was persisted — but the bare stage
+name hid the real cause until action errors were surfaced in the CLI output.
+
+**Between the experiments** the actual machine defect was found and repaired
+with a verified one-off change (backup first, boundary checks, config test
+after): `/etc/fail2ban/jail.local` contained a duplicate `[sshd]` section
+(the stock template block), so `fail2ban-client -t` failed. A restart can
+never repair a broken configuration, so the configuration test became an
+executor preflight check (`fail2ban-client -t`), enforced in Prepare and
+re-checked in Execute.
+
+**Experiment #2 hit the same binding gap on the real production path** — the
+real `ServiceExecutor` still rejected every action, proving the first fix was
+incomplete because integration with real executors was only covered by fakes.
+After the fix (`ActionBinder`, commit `eb93f8e`) the full lifecycle completed:
+apply succeeded, re-discovery confirmed the unit active, convergence passed,
+and the state was persisted.
+
+**Rules:**
+- Every new production wiring (orchestrator → real executor) needs at least
+  one integration test that uses the real executor, not a fake. Fake-only
+  coverage hid a production bug.
+- A service that ships a read-only configuration test (e.g. `fail2ban-client
+  -t`) must run it as an executor preflight check in Prepare and Execute.
+  The check set is explicit per-service knowledge in code, never plan-supplied
+  commands.
+- Report failures with the concrete action error; a bare stage name hid the
+  real cause during experiment #1.

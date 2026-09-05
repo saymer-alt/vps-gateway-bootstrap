@@ -8,17 +8,23 @@ vps-gateway discover            read-only discovery snapshot as JSON
 vps-gateway doctor [--json]     read-only diagnosis over discovery
 vps-gateway validate [--json] [--production]
                                 strict PASS/FAIL gate over effective machine state
-vps-gateway install --dry-run [--config FILE] [--json]
+vps-gateway install --dry-run [--config FILE] [--state FILE] [--json]
                                 discovery → state → plan → preflight, no changes
+vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--timeout DURATION]
+                                run the pinned first production experiment
+                                (fail2ban.service repair) through the full
+                                orchestrated lifecycle after an explicit
+                                fingerprint confirmation
 ```
 
 `doctor` and `validate` are read-only: they never mutate the machine and never
 perform hidden Apply operations. `doctor` triages findings (OK/WARN/FAIL);
 `validate` is a strict gate that fails closed on unknown state and exits 3 on
-failure. `install` currently refuses to run without `--dry-run`: the apply
-engine is implemented and tested internally, but real apply is not
-production-ready and stays unreachable from the CLI. Desired state and
-ownership declarations for the dry-run pipeline come from a JSON config:
+failure. `install` still refuses to run without `--dry-run` (general real
+apply remains unavailable); `apply` executes the pinned first production
+experiment (fail2ban.service repair) only, through the full orchestrated
+lifecycle and after typing the plan fingerprint prefix. Desired state and
+ownership declarations for the pipeline come from a JSON config:
 
 ```json
 {

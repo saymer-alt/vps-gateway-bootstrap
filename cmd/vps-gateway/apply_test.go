@@ -27,28 +27,37 @@ type cliRecordingExecutor struct {
 }
 
 func (e *cliRecordingExecutor) Backup(id, resource string) error {
-	e.calls = append(e.calls, "backup:"+resource); return nil
+	e.calls = append(e.calls, "backup:"+resource)
+	return nil
 }
 func (e *cliRecordingExecutor) Apply(id, resource, kind string) error {
 	e.calls = append(e.calls, "apply:"+resource)
-	if e.failApply { return errors.New("apply failed") }
+	if e.failApply {
+		return errors.New("apply failed")
+	}
 	return nil
 }
 func (e *cliRecordingExecutor) Validate(id, resource string) error {
-	e.calls = append(e.calls, "validate:"+resource); return nil
+	e.calls = append(e.calls, "validate:"+resource)
+	return nil
 }
 func (e *cliRecordingExecutor) Rollback(id, resource string) error {
-	e.calls = append(e.calls, "rollback:"+resource); return nil
+	e.calls = append(e.calls, "rollback:"+resource)
+	return nil
 }
 
 func loadSaymer3Discovery(t *testing.T) discovery.Result {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "first-apply-saymer3.json"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var scenario struct {
 		Discovery discovery.Result `json:"discovery"`
 	}
-	if err := json.Unmarshal(raw, &scenario); err != nil { t.Fatal(err) }
+	if err := json.Unmarshal(raw, &scenario); err != nil {
+		t.Fatal(err)
+	}
 	return scenario.Discovery
 }
 
@@ -71,8 +80,12 @@ func writeApplyConfig(t *testing.T, cfg map[string]any) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
 	b, err := json.Marshal(cfg)
-	if err != nil { t.Fatal(err) }
-	if err := os.WriteFile(path, b, 0600); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 
@@ -93,8 +106,13 @@ func applyTestOrchestrator(t *testing.T, states []discovery.Result, reg apply.Re
 	calls := 0
 	o := &orchestrate.Orchestrator{
 		Discover: func() discovery.Result {
-			if calls >= len(states) { calls++; return states[len(states)-1] }
-			r := states[calls]; calls++; return r
+			if calls >= len(states) {
+				calls++
+				return states[len(states)-1]
+			}
+			r := states[calls]
+			calls++
+			return r
 		},
 		Registry:  reg,
 		LockPath:  filepath.Join(t.TempDir(), "apply.lock"),
@@ -115,12 +133,18 @@ func TestApplyDryRunStopsBeforeConfirmation(t *testing.T) {
 	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t)}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 0 { t.Fatalf("exit=%d output=%s", code, out.String()) }
-	if len(rec.calls) != 0 { t.Fatalf("dry-run performed executor calls: %v", rec.calls) }
+	if code != 0 {
+		t.Fatalf("exit=%d output=%s", code, out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("dry-run performed executor calls: %v", rec.calls)
+	}
 	if !strings.Contains(out.String(), "Plan fingerprint:") || !strings.Contains(out.String(), "SERVICE service.fail2ban.service") {
 		t.Fatalf("plan not shown: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "DRY-RUN") { t.Fatalf("dry-run marker missing: %s", out.String()) }
+	if !strings.Contains(out.String(), "DRY-RUN") {
+		t.Fatalf("dry-run marker missing: %s", out.String())
+	}
 }
 
 // Requirement: refusal without confirmation. Empty stdin → the operator
@@ -129,37 +153,86 @@ func TestApplyRefusesWithoutConfirmation(t *testing.T) {
 	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", experimentConfig(t)}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 2 { t.Fatalf("exit=%d, want 2", code) }
-	if len(rec.calls) != 0 { t.Fatalf("mutation without confirmation: %v", rec.calls) }
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("mutation without confirmation: %v", rec.calls)
+	}
 }
 
 // Requirement: successful Confirm for the exact plan — the full lifecycle on
 // the injected orchestrator ends in COMPLETED with persisted state.
-func TestApplyConfirmsExactPlan(t *testing.T) {
-	rec := &cliRecordingExecutor{}
+// This test deliberately uses the REAL ServiceExecutor (not a fake): a
+// fake-only CLI test hid the plan-to-executor binding bug found during the
+// second production experiment.
+func TestApplyConfirmsExactPlanWithRealServiceExecutor(t *testing.T) {
+	var calls [][]string
+	svc := &apply.ServiceExecutor{Runner: func(name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		return nil
+	}}
 	// Discovery calls: #1 test-side Prepare (to learn the fingerprint),
 	// #2 CLI Prepare, #3 staleness re-check, #4 post-apply re-discovery.
 	o, _, _ := applyTestOrchestrator(t, []discovery.Result{
 		loadSaymer3Discovery(t), loadSaymer3Discovery(t), loadSaymer3Discovery(t), repairedSaymer3Discovery(t),
-	}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: rec}})
+	}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc}})
 	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
 	prefix := fingerprintPrefix(t, prepared)
 
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 0 { t.Fatalf("exit=%d output=%s", code, out.String()) }
-	if !strings.Contains(out.String(), "Stage: COMPLETED") { t.Fatalf("outcome missing: %s", out.String()) }
+	if code != 0 {
+		t.Fatalf("exit=%d output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Stage: COMPLETED") {
+		t.Fatalf("outcome missing: %s", out.String())
+	}
+
+	// Executor preflight runs three times (test-side Prepare, CLI Prepare,
+	// Execute under the lock), then the transaction restart and the two
+	// is-active validations.
 	want := []string{
-		"backup:service.fail2ban.service",
-		"apply:service.fail2ban.service",
-		"validate:service.fail2ban.service",
-		"validate:service.fail2ban.service",
+		"fail2ban-client -t",
+		"fail2ban-client -t",
+		"fail2ban-client -t",
+		"systemctl restart fail2ban.service",
+		"systemctl is-active --quiet fail2ban.service",
+		"systemctl is-active --quiet fail2ban.service",
 	}
-	if len(rec.calls) != len(want) { t.Fatalf("calls=%v", rec.calls) }
+	if len(calls) != len(want) {
+		t.Fatalf("calls=%v", calls)
+	}
 	for i := range want {
-		if rec.calls[i] != want[i] { t.Fatalf("call[%d]=%q want %q", i, rec.calls[i], want[i]) }
+		if calls[i][0] != strings.Split(want[i], " ")[0] {
+			t.Fatalf("call[%d]=%v want %q", i, calls[i], want[i])
+		}
 	}
-	if _, err := os.Stat(o.StatePath); err != nil { t.Fatalf("persisted state missing: %v", err) }
+	if _, err := os.Stat(o.StatePath); err != nil {
+		t.Fatalf("persisted state missing: %v", err)
+	}
+}
+
+// The production wiring of the apply command registers only the SERVICE
+// executor for the pinned experiment: any other action kind is a coverage
+// failure by construction.
+func TestDefaultApplyOrchestratorWiring(t *testing.T) {
+	o := defaultApplyOrchestrator(time.Second)
+	if o == nil {
+		t.Fatal("wiring must produce an orchestrator")
+	}
+	if len(o.Registry.ByKind) != 1 {
+		t.Fatalf("experiment registry must contain exactly one executor, got %d", len(o.Registry.ByKind))
+	}
+	if _, ok := o.Registry.ByKind[state.ActionService]; !ok {
+		t.Fatal("SERVICE executor must be registered for the experiment")
+	}
+	if o.LockPath != orchestrate.DefaultLockPath || o.StatePath != orchestrate.DefaultStatePath {
+		t.Fatalf("default paths drifted: lock=%s state=%s", o.LockPath, o.StatePath)
+	}
+	if o.Discover == nil {
+		t.Fatal("Discover must be wired (never called in this test)")
+	}
 }
 
 // A confirmation typed for a different plan is refused: the CLI binds the
@@ -171,8 +244,12 @@ func TestApplyRejectsForeignFingerprint(t *testing.T) {
 	var out bytes.Buffer
 	foreign := orchestrate.Fingerprint(state.Plan{SchemaVersion: state.SchemaVersion})[:12]
 	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", foreign}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 2 { t.Fatalf("exit=%d, want 2", code) }
-	if len(rec.calls) != 0 { t.Fatalf("mutation with foreign fingerprint: %v", rec.calls) }
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("mutation with foreign fingerprint: %v", rec.calls)
+	}
 }
 
 // Requirement: an attempt to smuggle a second action into the experiment —
@@ -195,9 +272,15 @@ func TestApplyRejectsSecondAction(t *testing.T) {
 	o, _, _ := applyTestOrchestrator(t, []discovery.Result{disc}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: rec}})
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", twoConfig}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
-	if !strings.Contains(out.String(), "first production experiment") { t.Fatalf("guard message missing: %s", out.String()) }
-	if len(rec.calls) != 0 { t.Fatalf("mutation with smuggled action: %v", rec.calls) }
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3; output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "first production experiment") {
+		t.Fatalf("guard message missing: %s", out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("mutation with smuggled action: %v", rec.calls)
+	}
 }
 
 // Requirement: UNKNOWN ownership → rejection before any mutation.
@@ -208,8 +291,12 @@ func TestApplyRejectsUnknownOwnership(t *testing.T) {
 	})
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", noOwnership}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
-	if len(rec.calls) != 0 { t.Fatalf("mutation with UNKNOWN ownership: %v", rec.calls) }
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3; output=%s", code, out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("mutation with UNKNOWN ownership: %v", rec.calls)
+	}
 }
 
 // Requirement: stale plan → rejection. The machine changed between Prepare
@@ -225,9 +312,15 @@ func TestApplyRejectsStalePlan(t *testing.T) {
 
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
-	if !strings.Contains(out.String(), "stale") { t.Fatalf("staleness blocker missing: %s", out.String()) }
-	if len(rec.calls) != 0 { t.Fatalf("mutation with stale plan: %v", rec.calls) }
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3; output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "stale") {
+		t.Fatalf("staleness blocker missing: %s", out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("mutation with stale plan: %v", rec.calls)
+	}
 }
 
 // Reporting gap regression: a FAILED_TRANSACTION must surface the concrete
@@ -245,7 +338,9 @@ func TestApplyShowsActionErrorOnFailure(t *testing.T) {
 
 	var out bytes.Buffer
 	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix}, o, rootOpts(), strings.NewReader(""), &out, &out)
-	if code != 3 { t.Fatalf("exit=%d, want 3; output=%s", code, out.String()) }
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3; output=%s", code, out.String())
+	}
 	if !strings.Contains(out.String(), "service.fail2ban.service [ROLLED_BACK]: apply failed") {
 		t.Fatalf("action error not reported: %s", out.String())
 	}
