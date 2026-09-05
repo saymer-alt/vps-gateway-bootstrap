@@ -25,6 +25,10 @@ commands:
   install --dry-run [--config FILE] [--state FILE] [--json]
                           run discovery → state → plan → preflight without
                           changing anything; real apply is not implemented yet
+  apply [--dry-run] [--config FILE] [--confirm PREFIX] [--timeout DURATION]
+                          restricted to the first production experiment
+                          (fail2ban.service repair); --dry-run shows the plan
+                          and stops before confirmation
 
 flags:
   --timeout DURATION      limit every discovery command (default 60s, e.g. 30s, 2m)`
@@ -48,6 +52,8 @@ func main() {
 		code = runValidate(os.Args[2:])
 	case "install":
 		code = runInstall(os.Args[2:])
+	case "apply":
+		code = runApply(os.Args[2:], nil, os.Stdin, os.Stdout, os.Stderr)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		code = 2
