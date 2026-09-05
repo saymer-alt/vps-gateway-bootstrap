@@ -18,6 +18,13 @@ func (f fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte,
 	return nil, os.ErrNotExist
 }
 
+func (f fakeRunner) LookPath(name string) (string, error) {
+	for k := range f.outputs {
+		if strings.SplitN(k, " ", 2)[0] == name { return "/usr/bin/" + name, nil }
+	}
+	return "", os.ErrNotExist
+}
+
 func loadRawFixture(t *testing.T, name string) fakeRunner {
 	t.Helper()
 	path := filepath.Join("..", "..", "tests", "fixtures", name, "raw.json")

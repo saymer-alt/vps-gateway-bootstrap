@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"strings"
 )
 
 func (c *Collector) collectDocker(ctx context.Context, r *Result) {
-	p, err := exec.LookPath("docker")
+	p, err := c.lookPath("docker")
 	if err != nil {
 		return
 	}
@@ -63,10 +62,10 @@ func splitCSV(s string) []string {
 }
 
 func (c *Collector) collectGatewayComponents(ctx context.Context, r *Result) {
-	if p, err := exec.LookPath("mihomo"); err == nil {
+	if p, err := c.lookPath("mihomo"); err == nil {
 		r.Gateway.Mihomo.Installed = true
 		r.Gateway.Mihomo.Version = firstLine(text(c, ctx, p, "-v"))
-	} else if p, err := exec.LookPath("mihomo-linux-amd64"); err == nil {
+	} else if p, err := c.lookPath("mihomo-linux-amd64"); err == nil {
 		r.Gateway.Mihomo.Installed = true
 		r.Gateway.Mihomo.Version = firstLine(text(c, ctx, p, "-v"))
 	}
@@ -75,13 +74,13 @@ func (c *Collector) collectGatewayComponents(ctx context.Context, r *Result) {
 	if _, err := os.Stat("/etc/mita/server_config.json"); err == nil || fileExists("/etc/mita") {
 		r.Gateway.Mieru.Installed = true
 	}
-	if p, err := exec.LookPath("mita"); err == nil {
+	if p, err := c.lookPath("mita"); err == nil {
 		r.Gateway.Mieru.Installed = true
 		r.Gateway.Mieru.Version = firstLine(text(c, ctx, p, "version"))
 	}
 	if s := text(c, ctx, "systemctl", "is-active", "mita.service"); s == "active" { r.Gateway.Mieru.Active = true }
 
-	if p, err := exec.LookPath("wg"); err == nil {
+	if p, err := c.lookPath("wg"); err == nil {
 		r.Gateway.WireGuard.Installed = true
 		r.Gateway.WireGuard.Version = firstLine(text(c, ctx, p, "--version"))
 		if out, e := output(c, ctx, p, "show", "interfaces"); e == nil { r.Gateway.WireGuard.Interfaces = fields(string(out)) }

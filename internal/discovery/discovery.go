@@ -3,17 +3,30 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
 
-type Runner interface { Run(context.Context, string, ...string) ([]byte, error) }
+// Runner abstracts the VPS environment: command output and binary lookup.
+// Discovery must never bypass it, otherwise host state leaks into tests and
+// fixtures stop being authoritative.
+type Runner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+	LookPath(string) (string, error)
+}
 type CommandRunner struct{}
 func (CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) { return exec.CommandContext(ctx, name, args...).Output() }
+func (CommandRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }
 type Collector struct { Run Runner }
 func New() *Collector { return &Collector{Run: CommandRunner{}} }
+
+func (c *Collector) lookPath(name string) (string, error) {
+	if c.Run == nil { return "", errors.New("no runner configured") }
+	return c.Run.LookPath(name)
+}
 
 func (c *Collector) Discover(ctx context.Context) Result {
 	r := Result{SchemaVersion: SchemaVersion, DiscoveryVersion: "0.2.0", Timestamp: time.Now().UTC(), Status: "OK"}

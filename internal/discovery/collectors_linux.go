@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -271,21 +270,21 @@ func fmtAny(v any) string {
 }
 
 func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
-	if p, err := execLookPath("ufw"); err == nil {
+	if p, err := c.lookPath("ufw"); err == nil {
 		r.Firewall.UFW.Installed = true
 		if s := text(c, ctx, p, "status"); strings.Contains(s, "Status: active") {
 			r.Firewall.UFW.Active = true
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "ufw")
 	}
-	if p, err := execLookPath("nft"); err == nil {
+	if p, err := c.lookPath("nft"); err == nil {
 		r.Firewall.NFTables.Installed = true
 		if _, e := output(c, ctx, p, "list", "ruleset"); e == nil {
 			r.Firewall.NFTables.Active = true
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "nftables")
 	}
-	if p, err := execLookPath("iptables"); err == nil {
+	if p, err := c.lookPath("iptables"); err == nil {
 		r.Firewall.IPTables.Installed = true
 		if _, e := output(c, ctx, p, "-S"); e == nil {
 			r.Firewall.IPTables.Active = true
@@ -298,7 +297,7 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 }
 
 func (c *Collector) collectSSH(ctx context.Context, r *Result) {
-	if p, err := execLookPath("sshd"); err == nil {
+	if p, err := c.lookPath("sshd"); err == nil {
 		r.SSH.Installed = true
 		if out, e := output(c, ctx, p, "-T"); e == nil {
 			parseSSH(string(out), &r.SSH)
@@ -420,18 +419,16 @@ func splitEndpoint(s string) (string, int) {
 }
 
 func (c *Collector) collectCapabilities(ctx context.Context, r *Result) {
-	_, e := exec.LookPath("systemctl")
+	_, e := c.lookPath("systemctl")
 	r.Capabilities.Systemd = e == nil
-	_, e = exec.LookPath("docker")
+	_, e = c.lookPath("docker")
 	r.Capabilities.Docker = e == nil
-	_, e = exec.LookPath("nft")
+	_, e = c.lookPath("nft")
 	r.Capabilities.NFTables = e == nil
-	_, e = exec.LookPath("iptables")
+	_, e = c.lookPath("iptables")
 	r.Capabilities.IPTables = e == nil
-	_, e = exec.LookPath("ufw")
+	_, e = c.lookPath("ufw")
 	r.Capabilities.UFW = e == nil
-	_, e = exec.LookPath("wg")
+	_, e = c.lookPath("wg")
 	r.Capabilities.WireGuard = e == nil
 }
-
-func execLookPath(name string) (string, error) { return exec.LookPath(name) }
