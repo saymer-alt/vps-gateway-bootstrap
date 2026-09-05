@@ -135,3 +135,18 @@ end-to-end validated
   ↓
 READY FOR PRODUCTION
 ```
+
+## 21. Configuration failures must be diagnosable before mutation
+
+The first real Execute attempted `systemctl restart fail2ban.service` and
+failed: the unit could not start because `/etc/fail2ban/jail.local` contained
+a duplicate `[sshd]` section. A restart can never repair a broken
+configuration, so the failure was predictable — yet nothing in the pipeline
+looked at it, and the error only surfaced as a failed systemctl call.
+
+**Rule:** services that ship a read-only configuration test (e.g.
+`fail2ban-client -t`) must run it as an executor preflight check, so a
+configuration-level failure blocks the plan before the first mutation —
+in Prepare, where the operator sees it, and in Execute, where it is
+re-checked for freshness. The check set is explicit per-service knowledge
+held in code, never plan-supplied commands.

@@ -15,10 +15,18 @@ type ServiceExecutor struct {
 }
 
 func (e *ServiceExecutor) run(args ...string) error {
-	if e.Runner != nil { return e.Runner("systemctl", args...) }
-	if _, err := exec.LookPath("systemctl"); err != nil { return err }
-	out, err := exec.Command("systemctl", args...).CombinedOutput()
-	if err != nil { return fmt.Errorf("systemctl %v: %w: %s", args, err, strings.TrimSpace(string(out))) }
+	return e.exec("systemctl", args...)
+}
+
+// exec runs a machine command through the same injectable path as run, but
+// with an explicit binary name. It exists for read-only service-specific
+// preflight checks (e.g. fail2ban-client -t), never for plan-supplied
+// commands.
+func (e *ServiceExecutor) exec(name string, args ...string) error {
+	if e.Runner != nil { return e.Runner(name, args...) }
+	if _, err := exec.LookPath(name); err != nil { return err }
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil { return fmt.Errorf("%s %v: %w: %s", name, args, err, strings.TrimSpace(string(out))) }
 	return nil
 }
 

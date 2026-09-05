@@ -144,6 +144,17 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 		p.Preflight.Blocking = append(p.Preflight.Blocking, "executor-coverage: "+coverageReason(missing))
 	}
 
+	// Executor-provided read-only preflight checks (e.g. a service config
+	// test): surface configuration-level failures to the operator before any
+	// confirmation is asked.
+	if blockers := o.executorPreflightBlockers(&p); len(blockers) > 0 {
+		p.Preflight.Status = state.PreflightBlocked
+		for _, b := range blockers {
+			p.Preflight.Checks = append(p.Preflight.Checks, state.PreflightCheck{Name: "executor-preflight", OK: false, Critical: true, Reason: b})
+			p.Preflight.Blocking = append(p.Preflight.Blocking, b)
+		}
+	}
+
 	if p.Plan.Blocked { p.Blockers = append(p.Blockers, p.Plan.BlockReasons...) }
 	if p.Preflight.Status != state.PreflightReady { p.Blockers = append(p.Blockers, p.Preflight.Blocking...) }
 	p.Ready = !p.Plan.Blocked && p.Preflight.Status == state.PreflightReady
@@ -272,6 +283,14 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		}
 	}
 
+	// Executor preflight checks re-run under the lock: a configuration-level
+	// failure that appeared since planning blocks the mutation here.
+	if blockers := o.executorPreflightBlockers(&p); len(blockers) > 0 {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, blockers...)
+		return out, nil
+	}
+
 	// The plan is the source of truth for which actions exist: derive the
 	// registry's action map from it so the executor set never depends on a
 	// caller remembering to duplicate the plan into Registry.Actions.
@@ -343,6 +362,24 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 	out.PersistedPath = o.statePath()
 	out.Stage = StageCompleted
 	return out, nil
+}
+
+// executorPreflightBlockers runs the optional read-only preflight checks the
+// registered executors provide for the planned actions (e.g. a service
+// configuration test) and returns blockers for every failure. Actions of
+// kinds whose executors do not implement PreflightChecker pass untouched.
+func (o Orchestrator) executorPreflightBlockers(p *Plan) []string {
+	var blockers []string
+	for _, a := range p.Plan.Actions {
+		ex, ok := o.Registry.ByKind[a.Kind]
+		if !ok || ex == nil { continue }
+		checker, ok := ex.(apply.PreflightChecker)
+		if !ok { continue }
+		if err := checker.PreflightCheck(a); err != nil {
+			blockers = append(blockers, fmt.Sprintf("executor preflight %s: %v", a.Resource, err))
+		}
+	}
+	return blockers
 }
 
 // requiredManagementPorts collects the new management ports of all SSH

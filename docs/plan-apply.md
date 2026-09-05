@@ -7,7 +7,7 @@
 | Discovery | implemented, live and read-only; fully injectable through `Runner` |
 | State | in-memory model implemented; last-known-good persistence primitive exists (`state.SaveModel/LoadModel`, verified-state only) |
 | Plan | implemented; proposed mutations only, "absence is not permission to change"; service runtime desired state supported (`Desired.Services`) |
-| Preflight | implemented (`state.BuildPreflightFor`), mandatory — the apply engine fails closed without a gate |
+| Preflight | implemented (`state.BuildPreflightFor`), mandatory — the apply engine fails closed without a gate; executors may additionally expose read-only preflight checks (`apply.PreflightChecker`, e.g. `fail2ban-client -t`), enforced in Prepare and re-checked in Execute |
 | Executor coverage | implemented (`state.MissingExecutors`); preflight blocks before the first mutation when a planned action kind has no registered executor |
 | Orchestration | implemented in `internal/orchestrate` (Prepare → Confirm → Execute); **not imported by the CLI**, guarded by a CLI tripwire test |
 | Apply | engine and executors implemented and tested; reachable only through the orchestrator, which is unreachable from the CLI; not production-ready |
