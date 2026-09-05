@@ -11,9 +11,9 @@ import (
 )
 
 type fakeExecutor struct {
-	calls         []string
-	failBackupAt  string
-	failApplyAt   string
+	calls          []string
+	failBackupAt   string
+	failApplyAt    string
 	failValidateAt string
 }
 
@@ -226,7 +226,7 @@ func TestSSHFinalizeRequiresRemoteProbe(t *testing.T) {
 	e := &SSHFinalizeExecutor{Base: &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
 		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
 		return "", nil
-	}}
+	},}
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err == nil {
 		t.Fatal("expected missing management probe to block finalization")
 	}
@@ -245,7 +245,7 @@ func TestSSHFinalizeProbeFailureLeavesDualListener(t *testing.T) {
 	base := &SSHExecutor{Root: root, Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
 		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
 		return "", nil
-	}}
+	},}
 	e := &SSHFinalizeExecutor{Base: base, Probe: func(string, int, time.Duration) error { return errors.New("unreachable") }, ManagementHost: "controller.example", ManagementPort: 2200}
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err == nil { t.Fatal("expected probe failure") }
 	got, err := os.ReadFile(config)
@@ -268,7 +268,7 @@ func TestSSHFinalizeSuccessfulProbeRemovesOldListener(t *testing.T) {
 			return "LISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil
 		}
 		return "", nil
-	}}
+	},}
 	probed := false
 	e := &SSHFinalizeExecutor{Base: base, Probe: func(host string, port int, timeout time.Duration) error { probed = host == "controller.example" && port == 2200; return nil }, ManagementHost: "controller.example", ManagementPort: 2200}
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSHFinalize)); err != nil { t.Fatal(err) }
