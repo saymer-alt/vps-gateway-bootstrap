@@ -62,6 +62,10 @@ func (e *ServiceExecutor) Rollback(actionID, resource string) error {
 	if s.RollbackOperation == "" { return nil }
 	switch s.RollbackOperation {
 	case "start", "stop", "restart", "reload", "enable", "disable": return e.run(s.RollbackOperation, s.Name)
+	case "enable-start":
+		if err := e.run("enable", s.Name); err != nil { return err }; return e.run("start", s.Name)
+	case "disable-stop":
+		if err := e.run("stop", s.Name); err != nil { return err }; return e.run("disable", s.Name)
 	default: return fmt.Errorf("unsupported rollback operation %q", s.RollbackOperation)
 	}
 }
