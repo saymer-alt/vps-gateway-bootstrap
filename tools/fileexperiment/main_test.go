@@ -56,7 +56,7 @@ func experimentFilePath(root string) string {
 func TestFileExperimentDryRunStopsBeforeConfirmation(t *testing.T) {
 	o, root := experimentTestOrchestrator(t)
 	var out bytes.Buffer
-	code := runFileExperiment([]string{"--dry-run", "--root", root}, o, strings.NewReader(""), &out, &out)
+	code := runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
 	if code != 0 {
 		t.Fatalf("exit=%d output=%s", code, out.String())
 	}
@@ -71,7 +71,7 @@ func TestFileExperimentDryRunStopsBeforeConfirmation(t *testing.T) {
 func TestFileExperimentRefusesWithoutConfirmation(t *testing.T) {
 	o, root := experimentTestOrchestrator(t)
 	var out bytes.Buffer
-	code := runFileExperiment(nil, o, strings.NewReader(""), &out, &out)
+	code := runFileExperiment(nil, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
 	if code != 2 {
 		t.Fatalf("exit=%d, want 2", code)
 	}
@@ -87,7 +87,7 @@ func TestFileExperimentExecutesAndIsIdempotent(t *testing.T) {
 	var out bytes.Buffer
 	// The fingerprint is learned from the tool's own dry-run, the same way
 	// the operator would read it before confirming.
-	code := runFileExperiment([]string{"--dry-run", "--root", root}, o, strings.NewReader(""), &out, &out)
+	code := runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
 	if code != 0 {
 		t.Fatalf("dry-run exit=%d", code)
 	}
@@ -97,7 +97,7 @@ func TestFileExperimentExecutesAndIsIdempotent(t *testing.T) {
 	}
 
 	out.Reset()
-	code = runFileExperiment([]string{"--confirm", fp, "--root", root}, o, strings.NewReader(""), &out, &out)
+	code = runFileExperiment([]string{"--confirm", fp, "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
 	if code != 0 {
 		t.Fatalf("execute exit=%d output=%s", code, out.String())
 	}
@@ -115,7 +115,7 @@ func TestFileExperimentExecutesAndIsIdempotent(t *testing.T) {
 	// Idempotency: a fresh run of the same experiment now reports
 	// convergence — the file already matches the desired content.
 	var dry2 bytes.Buffer
-	code = runFileExperiment([]string{"--dry-run", "--root", root}, o, strings.NewReader(""), &dry2, &dry2)
+	code = runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &dry2, &dry2)
 	if code != 0 {
 		t.Fatalf("second dry-run exit=%d output=%s", code, dry2.String())
 	}

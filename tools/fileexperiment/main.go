@@ -105,8 +105,10 @@ func newExperimentOrchestrator(timeout time.Duration, root string) *orchestrate.
 }
 
 // runFileExperiment implements the pinned lifecycle. The o parameter is
-// injectable for tests; production passes nil.
-func runFileExperiment(args []string, o *orchestrate.Orchestrator, stdin io.Reader, stdout, stderr io.Writer) int {
+// injectable for tests; production passes nil. opts carries pipeline
+// options: production passes the zero value, so the privilege fact is
+// detected from the current process; tests pass an explicit Root.
+func runFileExperiment(args []string, o *orchestrate.Orchestrator, opts pipeline.Options, stdin io.Reader, stdout, stderr io.Writer) int {
 	timeout := 60 * time.Second
 	root := "/"
 	dryRun := false
@@ -153,7 +155,7 @@ func runFileExperiment(args []string, o *orchestrate.Orchestrator, stdin io.Read
 	}
 
 	// Read-only planning on the live machine, including the file inspection.
-	p := o.Prepare(experimentConfig(root), pipeline.Options{})
+	p := o.Prepare(experimentConfig(root), opts)
 	if !p.Ready {
 		fmt.Fprintln(stderr, "experiment blocked before mutation:")
 		for _, b := range p.Blockers {
@@ -232,6 +234,6 @@ func runFileExperiment(args []string, o *orchestrate.Orchestrator, stdin io.Read
 }
 
 func main() {
-	code := runFileExperiment(os.Args[1:], nil, os.Stdin, os.Stdout, os.Stderr)
+	code := runFileExperiment(os.Args[1:], nil, pipeline.Options{}, os.Stdin, os.Stdout, os.Stderr)
 	os.Exit(code)
 }
