@@ -162,7 +162,7 @@ func runInstall(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	res := pipeline.Assemble(discovery.New().Discover(context.Background()), cfg)
+	res := pipeline.Assemble(discovery.New().Discover(context.Background()), cfg, pipeline.Options{})
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

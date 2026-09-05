@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
@@ -44,14 +45,23 @@ func ParseConfig(data []byte) (*Config, error) {
 	return &cfg, nil
 }
 
-func Assemble(r discovery.Result, cfg *Config) Result {
+// Options controls environment-dependent inputs. Root overrides the
+// privilege fact used by the preflight root check: nil detects from the
+// current process, tests and previews pass an explicit value.
+type Options struct {
+	Root *bool
+}
+
+func Assemble(r discovery.Result, cfg *Config, o Options) Result {
 	if cfg == nil { cfg = &Config{} }
+	isRoot := os.Geteuid() == 0
+	if o.Root != nil { isRoot = *o.Root }
 	m := state.FromDiscovery(r)
 	if cfg.Desired != nil { m.Desired = *cfg.Desired }
 	if cfg.Ownership != nil { m.Ownership = cfg.Ownership }
 	m.Diff = state.BuildDiff(m)
 	p := state.BuildPlan(m)
-	pf := state.BuildPreflight(m, p)
+	pf := state.BuildPreflightFor(m, p, isRoot)
 	return Result{Discovery: r, Model: m, Plan: p, Preflight: pf}
 }
 

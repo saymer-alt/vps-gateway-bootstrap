@@ -27,16 +27,24 @@ type PreflightCheck struct {
 }
 
 // BuildPreflight performs deterministic safety checks on the already
-// discovered model. It has no side effects and intentionally does not claim
-// that a remote management path is reachable: that requires a live executor.
+// discovered model, taking the privilege fact from the current process. It
+// has no side effects and intentionally does not claim that a remote
+// management path is reachable: that requires a live executor.
 func BuildPreflight(m Model, p Plan) Preflight {
+	return BuildPreflightFor(m, p, os.Geteuid() == 0)
+}
+
+// BuildPreflightFor is the injectable form of BuildPreflight: callers that
+// already know the privilege context (tests, dry-run previews, remote
+// operators) must not depend on the euid of the process they run in.
+func BuildPreflightFor(m Model, p Plan, isRoot bool) Preflight {
 	pf := Preflight{Status: PreflightReady}
 	check := func(name string, ok, critical bool, reason string) {
 		pf.Checks = append(pf.Checks, PreflightCheck{Name:name, OK:ok, Critical:critical, Reason:reason})
 		if !ok && critical { pf.Status = PreflightBlocked; pf.Blocking = append(pf.Blocking, name+": "+reason) }
 	}
 
-	check("root", os.Geteuid() == 0, true, "bootstrap must run as root")
+	check("root", isRoot, true, "bootstrap must run as root")
 	check("supported-os", m.Actual.System.OS != "", true, "OS was not discovered")
 	check("default-route", m.Actual.Network.ExternalInterface != "" && m.Actual.Network.DefaultGateway != "", true, "external interface or default gateway is unknown")
 	check("ipv4", m.Actual.Network.IPv4, false, "IPv4 is not currently discovered")

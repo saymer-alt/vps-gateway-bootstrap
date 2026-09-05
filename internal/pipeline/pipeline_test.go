@@ -23,7 +23,7 @@ func healthyDiscovery() discovery.Result {
 }
 
 func TestAssembleWithoutConfigProducesEmptyPlan(t *testing.T) {
-	res := Assemble(healthyDiscovery(), nil)
+	res := Assemble(healthyDiscovery(), nil, rootOn())
 	if len(res.Plan.Actions) != 0 { t.Fatalf("unspecified desired state must not produce actions: %#v", res.Plan.Actions) }
 	if res.Plan.Blocked { t.Fatalf("plan blocked: %v", res.Plan.BlockReasons) }
 	if res.Model.Status != state.StatusOK { t.Fatalf("model status=%s", res.Model.Status) }
@@ -34,14 +34,14 @@ func TestAssembleMatchingDesiredPortIsNoChange(t *testing.T) {
 		Desired:   &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2222)}},
 		Ownership: map[string]state.Ownership{"ssh": state.Owned},
 	}
-	res := Assemble(healthyDiscovery(), cfg)
+	res := Assemble(healthyDiscovery(), cfg, rootOn())
 	if len(res.Plan.Actions) != 0 { t.Fatalf("expected no actions, got %#v", res.Plan.Actions) }
 	if !res.Ready() { t.Fatalf("ready=%v preflight=%#v plan=%#v", res.Ready(), res.Preflight, res.Plan) }
 }
 
 func TestAssembleUnknownOwnershipBlocksSSHChange(t *testing.T) {
 	cfg := &Config{Desired: &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}}}
-	res := Assemble(healthyDiscovery(), cfg)
+	res := Assemble(healthyDiscovery(), cfg, rootOn())
 	if !res.Plan.Blocked { t.Fatalf("plan must block on unknown SSH ownership: %#v", res.Plan) }
 	if res.Ready() { t.Fatal("pipeline must not be ready while plan is blocked") }
 }
@@ -51,7 +51,7 @@ func TestAssembleOwnedSSHChangeProducesStagedAction(t *testing.T) {
 		Desired:   &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}},
 		Ownership: map[string]state.Ownership{"ssh": state.Owned},
 	}
-	res := Assemble(healthyDiscovery(), cfg)
+	res := Assemble(healthyDiscovery(), cfg, rootOn())
 	if res.Plan.Blocked { t.Fatalf("plan blocked: %v", res.Plan.BlockReasons) }
 	if len(res.Plan.Actions) != 1 || res.Plan.Actions[0].Kind != state.ActionSSH { t.Fatalf("actions=%#v", res.Plan.Actions) }
 	spec := res.Plan.Actions[0].Spec.SSH
@@ -64,7 +64,7 @@ func TestAssembleConflictDiscoveryBlocksPlan(t *testing.T) {
 	r := healthyDiscovery()
 	r.Status = "CONFLICT"
 	r.Conflicts = []discovery.Observation{{Code: "PORT_CONFLICT", Component: "ssh", Message: "port occupied"}}
-	res := Assemble(r, nil)
+	res := Assemble(r, nil, rootOn())
 	if res.Model.Status != state.StatusConflict { t.Fatalf("model status=%s", res.Model.Status) }
 }
 
@@ -91,17 +91,17 @@ func TestSummaryRender(t *testing.T) {
 		Desired:   &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2222)}},
 		Ownership: map[string]state.Ownership{"ssh": state.Owned},
 	}
-	out := Summary(Assemble(healthyDiscovery(), cfg))
+	out := Summary(Assemble(healthyDiscovery(), cfg, rootOn()))
 	for _, want := range []string{"DISCOVERY", "STATE MODEL", "OWNERSHIP", "CONFLICTS", "PLAN", "PREFLIGHT", "APPLY", "skipped (dry-run)", "READY"} {
 		if !strings.Contains(out, want) { t.Fatalf("summary missing %q:\n%s", want, out) }
 	}
 
-	blocked := Summary(Assemble(healthyDiscovery(), &Config{Desired: &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}}}))
+	blocked := Summary(Assemble(healthyDiscovery(), &Config{Desired: &state.Desired{SSH: &state.SSHDesired{Port: intPtr(2200)}}}, rootOn()))
 	if !strings.Contains(blocked, "BLOCKED") { t.Fatalf("blocked summary:\n%s", blocked) }
 }
 
 func TestResultJSONRoundTrip(t *testing.T) {
-	res := Assemble(healthyDiscovery(), nil)
+	res := Assemble(healthyDiscovery(), nil, rootOn())
 	b, err := json.Marshal(res)
 	if err != nil { t.Fatal(err) }
 	var back Result
@@ -112,3 +112,7 @@ func TestResultJSONRoundTrip(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// rootOn makes preflight deterministic: tests must not depend on the euid
+// of the process running them.
+func rootOn() Options { t := true; return Options{Root: &t} }
