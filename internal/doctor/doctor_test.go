@@ -117,6 +117,54 @@ func TestDoctorInactiveKnownServiceWarns(t *testing.T) {
 	if !found { t.Fatalf("inactive service finding missing: %#v", rep.Checks) }
 }
 
+func TestDoctorServiceArchitectureDoesNotWarnOnInactiveSocket(t *testing.T) {
+	r := healthyResult()
+	r.SSH.Architecture = "service"
+	r.Services = []discovery.Service{
+		{Name: "ssh.service", Exists: true, Enabled: true, Active: true, SubState: "running"},
+		{Name: "ssh.socket", Exists: true, Enabled: false, Active: false, SubState: "dead"},
+	}
+	rep := FromDiscovery(r)
+	if rep.Status != StatusOK { t.Fatalf("inactive unused ssh.socket must not warn: status=%s", rep.Status) }
+	for _, c := range rep.Checks {
+		if c.Component == "SERVICE" && strings.Contains(c.Detail, "ssh.socket") && c.Status == StatusWarn {
+			t.Fatalf("inactive ssh.socket must not warn on service architecture: %#v", c)
+		}
+	}
+	found := false
+	for _, c := range rep.Checks {
+		if c.Component == "SERVICE" && c.Status == "INFO" && strings.Contains(c.Detail, "ssh.socket inactive, unused: SSH runs via ssh.service") {
+			found = true
+		}
+	}
+	if !found { t.Fatalf("expected INFO line for unused socket: %#v", rep.Checks) }
+}
+
+func TestDoctorSocketArchitectureWarnsOnInactiveSocket(t *testing.T) {
+	r := healthyResult()
+	r.SSH.Architecture = "socket-activated"
+	r.Services = []discovery.Service{{Name: "ssh.socket", Exists: true, Enabled: true, Active: false, SubState: "dead"}}
+	rep := FromDiscovery(r)
+	found := false
+	for _, c := range rep.Checks {
+		if c.Component == "SERVICE" && strings.Contains(c.Detail, "ssh.socket inactive (dead)") && c.Status == StatusWarn {
+			found = true
+		}
+	}
+	if !found { t.Fatalf("inactive ssh.socket on socket-activated SSH must warn: %#v", rep.Checks) }
+}
+
+func TestDoctorSupportsDebian(t *testing.T) {
+	r := healthyResult()
+	r.System.OS = discovery.OS{ID: "debian", Name: "Debian GNU/Linux", VersionID: "12"}
+	r.System.Kernel = discovery.Kernel{Release: "6.1.0-52-amd64", Architecture: "x86_64"}
+	rep := FromDiscovery(r)
+	if c := findCheck(t, rep, "SYSTEM"); c.Status != StatusOK || !strings.Contains(c.Detail, "Debian GNU/Linux 12") {
+		t.Fatalf("debian system check=%#v", c)
+	}
+	if rep.Status != StatusOK { t.Fatalf("status=%s", rep.Status) }
+}
+
 func TestRenderHumanReadable(t *testing.T) {
 	r := healthyResult()
 	r.Conflicts = []discovery.Observation{{Code: "PORT_CONFLICT", Component: "ssh", Message: "port 2200 occupied by unknown service"}}

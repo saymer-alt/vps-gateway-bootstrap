@@ -124,3 +124,15 @@ Which configuration does each managed service actually use?
 ```
 
 If the answer is unknown, configuration should stop rather than guess.
+
+## RAM provisioning note (live validation, 2026-09-05)
+
+All four real gateway hosts advertise "1 GB" plans yet provision 913–961 MB of
+usable RAM. No host ever reports the full 1024 MB. The machines have run in
+this state for close to a year without memory-related incidents.
+
+The production readiness gate still requires 1024 MB and therefore fails on
+every current host. This is intentional: the threshold stays strict until an
+explicit decision changes it. Any recalibration must be a deliberate,
+reviewed change (for example profile-aware thresholds), never a silent
+relaxation introduced just to make the current fleet pass.

@@ -210,6 +210,13 @@ func (rep *Report) checkGateway(r discovery.Result) {
 func (rep *Report) checkServices(r discovery.Result) {
 	for _, s := range r.Services {
 		if !s.Exists { continue }
+		// ssh.socket is part of the serving path only when SSH is actually
+		// socket-activated. On service-architecture machines an inactive,
+		// disabled ssh.socket is the correct state, not a warning.
+		if s.Name == "ssh.socket" && r.SSH.Architecture == "service" && !s.Active {
+			rep.add("SERVICE", "INFO", "ssh.socket inactive, unused: SSH runs via ssh.service")
+			continue
+		}
 		state := "active"
 		status := StatusOK
 		if !s.Active {
