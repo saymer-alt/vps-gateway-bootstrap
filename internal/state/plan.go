@@ -189,6 +189,8 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 	case resource == "ssh.password_authentication":
 		return ActionUpdateFile
 	case strings.HasPrefix(resource, "file."):
+		if diff == Create { return ActionCreateFile }
+		if diff == Remove { return ActionDeleteOwnedFile }
 		return ActionUpdateFile
 	case strings.HasPrefix(resource, "service."):
 		return ActionService

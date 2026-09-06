@@ -87,6 +87,36 @@ func TestFilePlanBuildsTypedSpec(t *testing.T) {
 	}
 }
 
+// Regression: an inspected-absent owned file diffs as Create and must plan
+// as CREATE_FILE — the planned action kind must follow the diff kind, not
+// default every file resource to UPDATE_FILE.
+func TestFilePlanCreateForAbsentFile(t *testing.T) {
+	m := fileDesiredModel("/etc/vps-gateway/experiment-file-test.conf", "vps-gateway file experiment\n", Owned)
+	m = withInspectedFile(m, "/etc/vps-gateway/experiment-file-test.conf", "", false, 0)
+	m.Diff = BuildDiff(m)
+	if len(m.Diff) != 1 || m.Diff[0].Kind != Create { t.Fatalf("diff=%#v", m.Diff) }
+	p := BuildPlan(m)
+	if p.Blocked { t.Fatalf("blocked: %v", p.BlockReasons) }
+	if len(p.Actions) != 1 { t.Fatalf("actions=%#v", p.Actions) }
+	if p.Actions[0].Kind != ActionCreateFile {
+		t.Fatalf("absent file must plan as CREATE_FILE, got %s", p.Actions[0].Kind)
+	}
+	if a := p.Actions[0]; a.Spec == nil || a.Spec.File == nil || a.Spec.File.Path != "/etc/vps-gateway/experiment-file-test.conf" || a.Spec.File.Content != "vps-gateway file experiment\n" || a.Spec.File.Mode != 0600 {
+		t.Fatalf("spec=%#v", a.Spec)
+	}
+}
+
+// The remaining mutation kinds map distinctly: Update keeps UPDATE_FILE and
+// Remove plans DELETE_OWNED_FILE (diff items hand-built as in plan_test.go;
+// BuildDiff itself does not produce Remove for files today).
+func TestFilePlanMapsDiffKindToActionKind(t *testing.T) {
+	m := fileDesiredModel("/etc/vps-gateway/experiment.conf", "x\n", Owned)
+	m.Diff = []DiffItem{{Resource: "file./etc/vps-gateway/experiment.conf", Kind: Update, Ownership: Owned}}
+	if k := BuildPlan(m).Actions[0].Kind; k != ActionUpdateFile { t.Fatalf("Update -> %s", k) }
+	m.Diff = []DiffItem{{Resource: "file./etc/vps-gateway/experiment.conf", Kind: Remove, Ownership: Owned}}
+	if k := BuildPlan(m).Actions[0].Kind; k != ActionDeleteOwnedFile { t.Fatalf("Remove -> %s", k) }
+}
+
 func TestFilePlanBlockedWithoutInspection(t *testing.T) {
 	// A desired file that was never inspected (no FileActual entry) must
 	// produce a Conflict -> blocked plan, never a blind write.
