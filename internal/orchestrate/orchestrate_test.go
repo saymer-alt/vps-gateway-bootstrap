@@ -197,22 +197,23 @@ func TestExecuteBlockedWhenLockHeld(t *testing.T) {
 	if len(svc.calls) != 0 { t.Fatalf("mutation attempted while lock held: %v", svc.calls) }
 }
 
-func TestExecuteRequiresManagementProbeForFinalize(t *testing.T) {
+// Under the prepared-plan invariant, programmatically built SSH_FINALIZE
+// plans are no longer executable: BuildPlan never emits SSH_FINALIZE yet,
+// so until Prepare produces finalize plans, the provenance gate rejects
+// them before the probe requirement is even consulted — no confirmation
+// and no probe result can authorize them.
+func TestUnpreparedFinalizePlanIsRejected(t *testing.T) {
 	svc := &recordingExecutor{}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
-		// Both kinds registered so executor coverage passes and the probe
-		// requirement is what is actually under test.
+		// Both kinds registered so executor coverage passes and the
+		// provenance gate is what is actually under test.
 		ByKind: map[state.ActionKind]apply.ActionExecutor{
 			state.ActionService:      svc,
 			state.ActionSSHFinalize: svc,
 		},
 	}, nil)
 	p := o.Prepare(fail2banConfig(), rootOn())
-	p.Ready = true // direct plan injection: finalize action under test
-	// Finalize plans are built programmatically (BuildPlan never emits
-	// SSH_FINALIZE), so they do not come from Prepare and skip the staleness
-	// re-check by design; the probe requirement below is what is under test.
-	p.prepared = false
+	p.prepared = false // strip provenance: exactly what a hand-built plan lacks
 	port := 2200
 	p.Plan.Actions = []state.Action{{
 		ID: "ssh-finalize-1", Resource: "ssh.port", Kind: state.ActionSSHFinalize, Ownership: state.Owned,
@@ -220,24 +221,33 @@ func TestExecuteRequiresManagementProbeForFinalize(t *testing.T) {
 	}}
 	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Now().UTC()}
 
-	out, err := o.Execute(p, conf, nil)
-	if err != nil { t.Fatal(err) }
-	if out.Stage != StageBlocked || len(svc.calls) != 0 { t.Fatalf("finalize without probe must block: stage=%s calls=%v", out.Stage, svc.calls) }
-
-	wrongPort := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: 9999}, Reachable: true}}
-	out, err = o.Execute(p, conf, wrongPort)
-	if err != nil { t.Fatal(err) }
-	if out.Stage != StageBlocked || len(svc.calls) != 0 { t.Fatalf("probe for wrong port must block: stage=%s", out.Stage) }
-
+	// Even a reachable probe for the right port must not authorize it.
 	good := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: port}, Reachable: true, Attempts: 1}}
-	out, err = o.Execute(p, conf, good)
+	out, err := o.Execute(p, conf, good)
 	if err != nil { t.Fatal(err) }
-	if out.Stage == StageBlocked {
-		t.Fatalf("with a reachable probe execution must proceed, stage=%s blockers=%v", out.Stage, out.Blockers)
-	}
-	if len(svc.calls) == 0 {
-		t.Fatal("with a reachable probe the transaction must have been attempted")
-	}
+	if out.Stage != StageBlocked { t.Fatalf("unprepared finalize plan must be rejected: %s", out.Stage) }
+	if !strings.Contains(strings.Join(out.Blockers, "; "), "unprepared plan") { t.Fatalf("blockers=%v", out.Blockers) }
+	if len(svc.calls) != 0 { t.Fatalf("mutation attempted with unprepared finalize plan: %v", svc.calls) }
+}
+
+// The management-probe requirement itself stays enforced for prepared
+// finalize plans once Prepare can emit them; its pure classification is
+// pinned here.
+func TestManagementBlockersClassification(t *testing.T) {
+	port := 2200
+	plan := state.Plan{SchemaVersion: state.SchemaVersion, Actions: []state.Action{{
+		ID: "f", Resource: "ssh.port", Kind: state.ActionSSHFinalize, Ownership: state.Owned,
+		Spec: &state.ActionSpec{SSH: &state.SSHActionSpec{Unit: "ssh.service", OldPort: 2222, NewPort: port}},
+	}}}
+	if got := managementBlockers(plan, nil); len(got) != 1 { t.Fatalf("missing probes must block: %v", got) }
+	wrong := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: 9999}, Reachable: true}}
+	if got := managementBlockers(plan, wrong); len(got) != 1 { t.Fatalf("wrong-port probe must block: %v", got) }
+	unreachable := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: port}, Reachable: false}}
+	if got := managementBlockers(plan, unreachable); len(got) != 1 { t.Fatalf("unreachable probe must block: %v", got) }
+	good := []probe.Result{{Endpoint: probe.Endpoint{Host: "controller", Port: port}, Reachable: true}}
+	if got := managementBlockers(plan, good); got != nil { t.Fatalf("reachable probe must pass: %v", got) }
+	noFinalize := state.Plan{SchemaVersion: state.SchemaVersion}
+	if got := managementBlockers(noFinalize, nil); got != nil { t.Fatalf("plans without finalize actions need no probe: %v", got) }
 }
 
 func TestExecuteTransactionFailureSkipsRediscoveryAndPersist(t *testing.T) {

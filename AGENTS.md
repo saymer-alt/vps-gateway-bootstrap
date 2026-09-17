@@ -74,9 +74,11 @@ Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
   currently approved experiment and verified by the tripwire test
   (`TestCLIMutationPathIsConfined`). Widening that pin is an operator
   decision and must update the tripwire in the same change.
-- A caller inside the repository that constructs its own `orchestrate.Plan`
-  is trusted to the same degree as the operator who confirms it. Do not use
-  this trust to bypass gates "temporarily".
+- Mutating plans must originate from `Prepare`: `Execute` physically rejects
+  an unprepared plan that contains mutation, so hand-built mutating plans
+  are not a trusted-caller path. Only read-only (VALIDATE-only) plans may
+  execute without Prepare and remain the caller's responsibility. Never
+  use remaining trust to bypass gates "temporarily".
 - Anything an agent cannot verify (machine state, credentials, intent) is
   UNKNOWN, and UNKNOWN blocks.
 

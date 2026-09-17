@@ -71,8 +71,11 @@ type Plan struct {
 	// prepared marks plans produced by Prepare. Execute re-checks staleness
 	// only for such plans: a re-discovery under the lock rebuilds the plan
 	// and any drift between planning and execution blocks the mutation.
-	// Manually built plans (e.g. programmatic finalize flows) skip the extra
-	// discovery and remain the caller's responsibility.
+	// Execute also rejects any UNPREPARED plan that contains mutation:
+	// hand-built mutating plans are not an execution path (AGENTS.md §3).
+	// Only read-only (VALIDATE-only) plans may execute without Prepare,
+	// and they skip the extra discovery — remaining the caller's
+	// responsibility.
 	opts     pipeline.Options
 	prepared bool
 }
@@ -289,6 +292,16 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		out.Blockers = append(out.Blockers, "executor-coverage: "+coverageReason(missing))
 		return out, nil
 	}
+	// Provenance gate: every mutating plan must originate from Prepare. A
+	// hand-built plan carries no planning context and skips the staleness
+	// re-check by construction, so no confirmation — legacy or signed —
+	// may authorize it. Read-only (VALIDATE-only) plans carry no mutation
+	// and may still execute.
+	if planHasMutation(p.Plan) && !p.prepared {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, "unprepared plan: mutating plans must be produced by Prepare (planning context and staleness re-check are mandatory)")
+		return out, nil
+	}
 	if err := o.Confirm(p, c); err != nil {
 		out.Stage = StageBlocked
 		out.Blockers = append(out.Blockers, "confirmation: "+err.Error())
@@ -381,16 +394,18 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		return out, nil
 	}
 
-	// Convergence check: rebuild the model against the re-discovered state.
-	// Any remaining CREATE/UPDATE/REMOVE diff means the transaction did not
-	// take effect and must not be recorded as last-known-good.
-	post := pipeline.Assemble(re, p.Config, pipeline.Options{})
-	for _, d := range post.Model.Diff {
-		if d.Kind == state.Create || d.Kind == state.Update || d.Kind == state.Remove {
-			out.Stage = StageFailedFinalValidation
-			out.Blockers = append(out.Blockers, "state did not converge: "+d.Resource+" ("+string(d.Kind)+")")
-			return out, nil
-		}
+	// Convergence check: rebuild the model against the re-discovered state
+	// using the EXACT planning context — Prepare, the under-lock staleness
+	// re-check and this convergence rebuild must agree on desired state and
+	// resolution inputs. The transaction is recordable as last-known-good
+	// only when the post-state is unambiguous: remaining CREATE/UPDATE/
+	// REMOVE means it did not take effect; CONFLICT/UNKNOWN/UNSUPPORTED
+	// means the post-state cannot be classified. Neither may be persisted.
+	post := pipeline.Assemble(re, p.Config, p.opts)
+	if blockers := convergenceFailures(post.Model.Diff); len(blockers) > 0 {
+		out.Stage = StageFailedFinalValidation
+		out.Blockers = append(out.Blockers, blockers...)
+		return out, nil
 	}
 
 	// Persist last-known-good state. SaveModel refuses anything that is not
@@ -407,6 +422,39 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 	out.PersistedPath = o.statePath()
 	out.Stage = StageCompleted
 	return out, nil
+}
+
+// convergenceFailures returns a blocker for every diff item that makes the
+// post-apply state unrecordable as last-known-good: unfinished mutations
+// (CREATE/UPDATE/REMOVE) and unclassifiable state (CONFLICT/UNKNOWN/
+// UNSUPPORTED — the run cannot prove what the machine now is, so nothing
+// may be persisted). EXTERNAL items are report-only by design and do not
+// block; NO_CHANGE/SKIP are converged. Unknown future kinds fail closed.
+func convergenceFailures(diff []state.DiffItem) []string {
+	var blockers []string
+	for _, d := range diff {
+		switch d.Kind {
+		case state.NoChange, state.Skip, state.ExternalDiff:
+			continue
+		case state.Create, state.Update, state.Remove:
+			blockers = append(blockers, "state did not converge: "+d.Resource+" ("+string(d.Kind)+")")
+		default:
+			blockers = append(blockers, "post-apply state is not unambiguous: "+d.Resource+" ("+string(d.Kind)+") "+d.Reason)
+		}
+	}
+	return blockers
+}
+
+// planHasMutation reports whether the plan contains any action that can
+// change the machine. VALIDATE actions are read-only by definition: they
+// only re-discover effective state and never mutate.
+func planHasMutation(p state.Plan) bool {
+	for _, a := range p.Actions {
+		if a.Kind != state.ActionValidate {
+			return true
+		}
+	}
+	return false
 }
 
 // executorPreflightBlockers runs the optional read-only preflight checks the
