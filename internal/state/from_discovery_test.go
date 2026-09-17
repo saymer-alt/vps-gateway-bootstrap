@@ -11,9 +11,10 @@ func TestFromDiscoveryPreservesActualState(t *testing.T) {
 	passwords := false
 	r := discovery.Result{
 		SchemaVersion: discovery.SchemaVersion,
-		DiscoveryVersion: "0.2.0",
+		DiscoveryVersion: "0.3.0",
 		Timestamp: time.Unix(123, 0).UTC(),
 		Status: "OK",
+		Host: discovery.Host{Hostname: "Saymer3", MachineID: "1111222233334444aaaabbbbccccdddd", MachineIDStatus: discovery.MachineIDPresent},
 		System: discovery.System{
 			OS: discovery.OS{ID: "ubuntu", VersionID: "24.04"},
 			Kernel: discovery.Kernel{Release: "6.8.0-111-generic", Architecture: "x86_64"},
@@ -32,6 +33,9 @@ func TestFromDiscoveryPreservesActualState(t *testing.T) {
 
 	m := FromDiscovery(r)
 	if m.SchemaVersion != 1 || m.Status != StatusOK { t.Fatalf("unexpected model metadata: %#v", m) }
+	if m.Actual.System.MachineID != "1111222233334444aaaabbbbccccdddd" || m.Actual.System.MachineIDStatus != discovery.MachineIDPresent {
+		t.Fatalf("machine identity not preserved: %#v", m.Actual.System)
+	}
 	if m.Actual.Network.ExternalInterface != "ens3" || m.Actual.Network.DefaultGateway != "10.0.0.1" { t.Fatalf("network not preserved: %#v", m.Actual.Network) }
 	if len(m.Actual.Security.SSHPorts) != 1 || m.Actual.Security.SSHPorts[0] != 2222 { t.Fatalf("SSH ports not preserved: %#v", m.Actual.Security.SSHPorts) }
 	if m.Actual.Security.SSHArchitecture != "socket-activated" { t.Fatalf("SSH architecture not preserved: %#v", m.Actual.Security) }

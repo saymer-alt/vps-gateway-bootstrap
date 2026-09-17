@@ -11,7 +11,7 @@ import (
 func healthyResult() discovery.Result {
 	yes, no := true, false
 	return discovery.Result{
-		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.2.0", Status: "OK",
+		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.3.0", Status: "OK",
 		Host: discovery.Host{Hostname: "gw1"},
 		System: discovery.System{
 			OS:     discovery.OS{ID: "ubuntu", Name: "Ubuntu", VersionID: "24.04"},

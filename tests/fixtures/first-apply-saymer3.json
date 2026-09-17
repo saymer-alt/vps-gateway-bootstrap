@@ -6,9 +6,9 @@
   ],
   "discovery": {
     "schema_version": 1,
-    "discovery_version": "0.2.0",
+    "discovery_version": "0.3.0",
     "status": "OK",
-    "host": { "hostname": "Saymer3" },
+    "host": { "hostname": "Saymer3", "machine_id": "1111222233334444aaaabbbbccccdddd", "machine_id_status": "present" },
     "system": {
       "os": { "id": "ubuntu", "name": "Ubuntu", "version_id": "24.04" },
       "kernel": { "release": "6.8.0-111-generic", "architecture": "x86_64" },

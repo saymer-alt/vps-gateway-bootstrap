@@ -25,6 +25,10 @@ func FromDiscovery(r discovery.Result) Model {
 				OS: r.System.OS.ID,
 				Kernel: r.System.Kernel.Release,
 				Architecture: r.System.Kernel.Architecture,
+				// Observed from live discovery on every run; never read
+				// from state.json or config, so no input can override it.
+				MachineID: r.Host.MachineID,
+				MachineIDStatus: r.Host.MachineIDStatus,
 			},
 			Network: NetworkActual{
 				ExternalInterface: r.Network.ExternalInterface,

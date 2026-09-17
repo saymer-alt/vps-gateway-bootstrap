@@ -20,7 +20,12 @@ type Runner interface {
 type CommandRunner struct{}
 func (CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) { return exec.CommandContext(ctx, name, args...).Output() }
 func (CommandRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }
-type Collector struct { Run Runner }
+type Collector struct {
+	Run Runner
+	// ReadFile injects file reads (e.g. /etc/machine-id); nil uses the real
+	// filesystem. Same injection rule as pipeline.InspectFile.
+	ReadFile func(path string) ([]byte, error)
+}
 func New() *Collector { return &Collector{Run: CommandRunner{}} }
 
 func (c *Collector) lookPath(name string) (string, error) {
@@ -28,9 +33,17 @@ func (c *Collector) lookPath(name string) (string, error) {
 	return c.Run.LookPath(name)
 }
 
+func (c *Collector) readFile(path string) ([]byte, error) {
+	if c.ReadFile != nil { return c.ReadFile(path) }
+	return os.ReadFile(path)
+}
+
 func (c *Collector) Discover(ctx context.Context) Result {
-	r := Result{SchemaVersion: SchemaVersion, DiscoveryVersion: "0.2.0", Timestamp: time.Now().UTC(), Status: "OK"}
+	r := Result{SchemaVersion: SchemaVersion, DiscoveryVersion: "0.3.0", Timestamp: time.Now().UTC(), Status: "OK"}
+	// Hostname is informational only: mutable and self-reported. The
+	// approval target identity is the machine-id collected below.
 	r.Host.Hostname, _ = os.Hostname()
+	c.collectMachineID(&r)
 
 	c.collectSystem(ctx, &r)
 	c.collectNetwork(ctx, &r)

@@ -51,7 +51,7 @@ func makeDiscovery(fail2banActive bool) discovery.Result {
 	no := false
 	yes := true
 	return discovery.Result{
-		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.2.0", Status: "OK",
+		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.3.0", Status: "OK",
 		Host: discovery.Host{Hostname: "Saymer3"},
 		System: discovery.System{
 			OS: discovery.OS{ID: "ubuntu", Name: "Ubuntu", VersionID: "24.04"},

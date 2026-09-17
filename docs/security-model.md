@@ -110,6 +110,15 @@ No guard may be treated as an authority boundary.
   - the target host identity;
   - the named capability set the plan exercises;
   - an expiry.
+
+  The target host identity is the Linux `/etc/machine-id`, carried in the
+  canonical namespaced form `machine-id:<value>` (internal/machineid). It
+  is an **installation/target binding, not remote attestation**: it proves
+  which OS installation an approval was issued for, nothing about who
+  controls the machine or what runs on it. A reinstall, clone, or
+  machine-id change invalidates every approval issued for the previous
+  identity. Hostname is never a substitute — approval verification
+  enforces the machine-id namespace and rejects any other form.
 - The private signing key stays **off the target VPS** and outside the
   autonomous agent's authority at all times. The VPS receives only
   verification authority (the public trust anchor, embedded in project

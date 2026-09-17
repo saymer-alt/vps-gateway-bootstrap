@@ -61,6 +61,7 @@ Implement read-only discovery before any destructive configuration.
 - [x] systemd/socket activation state
 - [ ] Docker daemon, containers, networks and published ports (NDJSON parsing of networks/containers implemented and unit-tested against the real Saymer3 output shape; published ports not discovered)
 - [x] Existing services and units
+- [x] `/etc/machine-id` (target host identity for approval binding: namespaced `machine-id:<value>`; classified present/absent/invalid/unreadable — informational in discovery, enforced fail-closed at approval verification; docs/security-model.md §6)
 - [x] Tunnel interfaces (discovered as interfaces; WireGuard/Amnezia tracked in Gateway components)
 - [x] `ip rule` and routing tables
 - [x] Listening sockets / occupied ports

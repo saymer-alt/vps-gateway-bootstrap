@@ -60,7 +60,12 @@ type Actual struct {
 	Gateway    GatewayActual    `json:"gateway"`
 }
 
-type SystemActual struct { OS string `json:"os,omitempty"`; Kernel string `json:"kernel,omitempty"`; Architecture string `json:"architecture,omitempty"` }
+// SystemActual records observed system facts. MachineID carries the
+// discovered /etc/machine-id (status present/absent/invalid/unreadable per
+// discovery.Host): the stable OS-installation identity that approval
+// verification binds to. It is observed state only — desired config and
+// persisted state have no path to override it.
+type SystemActual struct { OS string `json:"os,omitempty"`; Kernel string `json:"kernel,omitempty"`; Architecture string `json:"architecture,omitempty"`; MachineID string `json:"machine_id,omitempty"`; MachineIDStatus string `json:"machine_id_status,omitempty"` }
 type NetworkActual struct { ExternalInterface string `json:"external_interface,omitempty"`; DefaultGateway string `json:"default_gateway,omitempty"`; IPv4 bool `json:"ipv4"`; IPv6 bool `json:"ipv6"` }
 type SecurityActual struct { SSHPorts []int `json:"ssh_ports,omitempty"`; SSHArchitecture string `json:"ssh_architecture,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
 type ContainersActual struct { DockerInstalled bool `json:"docker_installed"`; DockerActive bool `json:"docker_active"` }

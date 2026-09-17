@@ -14,7 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 )
 
 // SchemaVersion is the approval payload schema this package verifies.
@@ -69,11 +72,15 @@ func SignPayload(p Payload, priv ed25519.PrivateKey) (Artifact, error) {
 // through ordinary desired config — rotation is an operator-approved
 // change at the same trust level as the compiled experiment pins.
 //
-// HostIdentity is intentionally required. The only host identity discovery
-// currently provides is the self-reported hostname, which is not a
-// trustworthy security identity; until an operator-decided identity source
-// exists, verification refuses to run rather than silently binding to a
-// mutable name.
+// HostIdentity is the operator-decided identity source: the canonical
+// namespaced form "machine-id:<32 hex>" (internal/machineid), bound to one
+// OS installation. Hostname is NEVER accepted as an approval target
+// identity — verification enforces the namespace and rejects anything
+// else, so a mutable self-reported name cannot silently substitute for
+// the machine-id. The binding is an installation binding, not remote
+// attestation: root on the machine is execution authority, not approval
+// authority, and a reinstall/clone that changes the machine-id invalidates
+// approvals issued for the previous identity.
 type Verifier struct {
 	TrustAnchor  ed25519.PublicKey
 	HostIdentity string
@@ -85,6 +92,16 @@ func (v Verifier) now() time.Time {
 	return time.Now().UTC()
 }
 
+// parseHostIdentity validates one side of the host binding: it must be the
+// namespaced canonical machine-id form. Anything else — empty, bare
+// hostname, wrong namespace, malformed value — fails closed.
+func parseHostIdentity(v string) (string, error) {
+	if !strings.HasPrefix(v, machineid.HostIdentityPrefix) {
+		return "", fmt.Errorf("host identity %q is not in the canonical %q… namespace (hostname is never an approval identity)", v, machineid.HostIdentityPrefix)
+	}
+	return machineid.Normalize(strings.TrimPrefix(v, machineid.HostIdentityPrefix))
+}
+
 // Verify checks one artifact against one exact plan fingerprint: signature
 // validity under the pinned anchor, canonical form, schema version,
 // fingerprint binding, host binding and expiry.
@@ -93,7 +110,11 @@ func (v Verifier) Verify(a Artifact, planFingerprint string) error {
 		return errors.New("trust anchor is not a valid ed25519 public key")
 	}
 	if v.HostIdentity == "" {
-		return errors.New("host identity is not configured: target-host binding requires an operator-decided identity source")
+		return errors.New("host identity is not configured: target-host binding requires the machine-id namespace (machine-id:<value>)")
+	}
+	wantHost, err := parseHostIdentity(v.HostIdentity)
+	if err != nil {
+		return fmt.Errorf("configured host identity is invalid: %w", err)
 	}
 	if len(a.Signature) != ed25519.SignatureSize {
 		return errors.New("approval signature has wrong size")
@@ -115,7 +136,14 @@ func (v Verifier) Verify(a Artifact, planFingerprint string) error {
 	if p.PlanFingerprint != planFingerprint {
 		return errors.New("approval does not bind this plan fingerprint")
 	}
-	if p.HostIdentity != v.HostIdentity {
+	if p.HostIdentity == "" {
+		return errors.New("approval does not bind a host identity")
+	}
+	gotHost, err := parseHostIdentity(p.HostIdentity)
+	if err != nil {
+		return fmt.Errorf("approval host identity is invalid: %w", err)
+	}
+	if gotHost != wantHost {
 		return errors.New("approval binds a different host identity")
 	}
 	if !v.now().Before(p.ExpiresAt) {

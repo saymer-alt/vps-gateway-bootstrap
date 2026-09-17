@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 )
 
 func (c *Collector) collectSystem(ctx context.Context, r *Result) {
@@ -431,4 +433,33 @@ func (c *Collector) collectCapabilities(ctx context.Context, r *Result) {
 	r.Capabilities.UFW = e == nil
 	_, e = c.lookPath("wg")
 	r.Capabilities.WireGuard = e == nil
+}
+
+// collectMachineID reads /etc/machine-id through the injected file reader
+// and records the target's stable OS-installation identity. The result is
+// classified, never guessed: a missing file is ABSENT (a machine may
+// legitimately lack one); an unreadable file is UNREADABLE (UNKNOWN — the
+// file exists but its content cannot be claimed); malformed content is
+// INVALID; only format-valid content becomes a PRESENT identity, normalized
+// via internal/machineid. Discovery status is deliberately not degraded —
+// the approval layer fails closed wherever a host identity is required and
+// absent, and hostname is never a substitute.
+func (c *Collector) collectMachineID(r *Result) {
+	const machineIDPath = "/etc/machine-id"
+	raw, err := c.readFile(machineIDPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			r.Host.MachineIDStatus = MachineIDAbsent
+			return
+		}
+		r.Host.MachineIDStatus = MachineIDUnreadable
+		return
+	}
+	id, normErr := machineid.Normalize(string(raw))
+	if normErr != nil {
+		r.Host.MachineIDStatus = MachineIDInvalid
+		return
+	}
+	r.Host.MachineID = id
+	r.Host.MachineIDStatus = MachineIDPresent
 }

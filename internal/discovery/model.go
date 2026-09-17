@@ -25,7 +25,25 @@ type Result struct {
 	Unknowns         []Observation `json:"unknowns"`
 }
 
-type Host struct { Hostname string `json:"hostname"` }
+// Host carries target-machine identity facts. Hostname is informational
+// only — it is mutable, self-reported and never an approval target
+// identity. The machine-id (status present/absent/invalid/unreadable) is
+// the stable OS-installation identity that approval verification binds to.
+type Host struct {
+	Hostname        string `json:"hostname"`
+	MachineID       string `json:"machine_id,omitempty"`
+	MachineIDStatus string `json:"machine_id_status,omitempty"`
+}
+
+// machine-id collection states. ABSENT is a genuine observation (no
+// identity file); UNREADABLE is UNKNOWN (the file exists but could not be
+// read — never downgraded to absent); INVALID is present but malformed.
+const (
+	MachineIDPresent    = "present"
+	MachineIDAbsent     = "absent"
+	MachineIDInvalid    = "invalid"
+	MachineIDUnreadable = "unreadable"
+)
 
 type System struct { OS OS `json:"os"`; Kernel Kernel `json:"kernel"`; CPU CPU `json:"cpu"`; Memory Memory `json:"memory"`; Swap Swap `json:"swap"`; RootFS Filesystem `json:"root_filesystem"` }
 type OS struct { ID string `json:"id"`; Name string `json:"name"`; Version string `json:"version"`; VersionID string `json:"version_id"`; Codename string `json:"codename"` }

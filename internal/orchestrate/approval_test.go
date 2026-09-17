@@ -32,7 +32,7 @@ func approvalTestKey() ed25519.PrivateKey { return ed25519.NewKeyFromSeed(approv
 func approvalTestVerifier() *approval.Verifier {
 	return &approval.Verifier{
 		TrustAnchor:  approvalTestKey().Public().(ed25519.PublicKey),
-		HostIdentity: "saymer3",
+		HostIdentity: "machine-id:1111222233334444aaaabbbbccccdddd",
 		Now:          func() time.Time { return time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC) },
 	}
 }
@@ -42,7 +42,7 @@ func signApproval(t *testing.T, fp string) *approval.Artifact {
 	p := approval.Payload{
 		SchemaVersion:   approval.SchemaVersion,
 		PlanFingerprint: fp,
-		HostIdentity:    "saymer3",
+		HostIdentity:    "machine-id:1111222233334444aaaabbbbccccdddd",
 		ExpiresAt:       time.Date(2026, 9, 17, 13, 0, 0, 0, time.UTC),
 	}
 	art, err := approval.SignPayload(p, approvalTestKey())
@@ -117,7 +117,7 @@ func TestApprovalArtifactForWrongHostIsRejected(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	v := approvalTestVerifier()
-	v.HostIdentity = "some-other-host"
+	v.HostIdentity = "machine-id:5555666677778888aaaabbbbccccdddd"
 	o.ApprovalVerifier = v
 	p := o.Prepare(fail2banConfig(), rootOn())
 
@@ -139,7 +139,7 @@ func TestExpiredApprovalArtifactIsRejected(t *testing.T) {
 	past := approval.Payload{
 		SchemaVersion:   approval.SchemaVersion,
 		PlanFingerprint: Fingerprint(p.Plan),
-		HostIdentity:    "saymer3",
+		HostIdentity:    "machine-id:1111222233334444aaaabbbbccccdddd",
 		ExpiresAt:       time.Date(2026, 9, 17, 11, 0, 0, 0, time.UTC),
 	}
 	art, err := approval.SignPayload(past, approvalTestKey())

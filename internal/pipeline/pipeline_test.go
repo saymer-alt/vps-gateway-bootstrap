@@ -12,7 +12,7 @@ import (
 func healthyDiscovery() discovery.Result {
 	no := false
 	return discovery.Result{
-		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.2.0", Status: "OK",
+		SchemaVersion: discovery.SchemaVersion, DiscoveryVersion: "0.3.0", Status: "OK",
 		Host: discovery.Host{Hostname: "gw1"},
 		System: discovery.System{OS: discovery.OS{ID: "ubuntu", Name: "Ubuntu", VersionID: "24.04"}, Kernel: discovery.Kernel{Release: "6.8.0", Architecture: "x86_64"}},
 		Network: discovery.Network{ExternalInterface: "eth0", DefaultGateway: "203.0.113.1", IPv4: true},
