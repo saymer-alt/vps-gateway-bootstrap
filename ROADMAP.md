@@ -144,6 +144,7 @@ Security gates (binding — see `docs/security-model.md`):
 - [ ] Stage 3: ownership admission — compiled namespace policy, explicit signed adoption for foreign/sensitive resources; config/state can no longer self-grant OWNED
 - [ ] Stage 4: named capabilities in Plan, included in fingerprint/approval semantics
 - [ ] Stage 5: whole-plan composition admission before mutation
+- [x] Durable transaction journal + recovery-required latch (TASK-07/TASK-08 hybrid risk-aware retry policy; docs/security-model.md §11)
 - [ ] Gate: no experiment pin, registry or resource pin may be widened until Stages 2–5 are implemented and tested
 
 ## Phase 5 — Core System Modules

@@ -24,6 +24,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/approval"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/lock"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/probe"
@@ -56,6 +57,15 @@ type Orchestrator struct {
 	// production path must configure a Verifier; forgetting one fail-closes
 	// the legacy form away.
 	ApprovalVerifier *approval.Verifier
+
+	// Journal is the durable transaction record (operational recovery, not
+	// authority — docs/security-model.md §11). A mutating transaction
+	// requires it: nil Journal + mutating plan is refused, so no mutating
+	// run can skip durable state. The recovery gate refuses any new
+	// mutation while a recovery-required or crashed record exists — a
+	// valid approval does not bypass it, and no code path clears the latch
+	// (operator action; reset authority is a separate decision).
+	Journal *journal.Journal
 }
 
 // Plan is the read-only planning product handed to the operator for review.
@@ -341,6 +351,74 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		return out, nil
 	}
 
+	// Durable transaction state (operational recovery, not authority —
+	// docs/security-model.md §11). Every mutating transaction journals
+	// BEFORE the first possibly mutating operation, and refuses to run
+	// while a recovery-required or crashed record exists. The gate sits
+	// after the confirmation boundary deliberately: a valid ordinary
+	// approval does not bypass recovery.
+	var rec *journal.Record
+	if planHasMutation(p.Plan) {
+		if o.Journal == nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "no transaction journal configured: mutating transactions require durable recovery state")
+			return out, nil
+		}
+		blockers, err := o.Journal.BlockingRecords()
+		if err != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "journal: "+err.Error())
+			return out, nil
+		}
+		for _, b := range blockers {
+			out.Stage = StageBlocked
+			if b.RecoveryRequired {
+				out.Blockers = append(out.Blockers, fmt.Sprintf("transaction %s requires operator recovery; new mutations are refused (an approval does not bypass recovery)", b.TransactionID))
+			} else {
+				out.Blockers = append(out.Blockers, fmt.Sprintf("transaction %s is incomplete (crashed run?); operator review required before any new mutation", b.TransactionID))
+			}
+		}
+		if len(blockers) > 0 {
+			return out, nil
+		}
+		for _, a := range p.Plan.Actions {
+			if _, err := journal.ClassifyRetry(a.Kind); err != nil {
+				out.Stage = StageBlocked
+				out.Blockers = append(out.Blockers, "retry classification: "+err.Error())
+				return out, nil
+			}
+		}
+		rec = &journal.Record{
+			TransactionID:    journal.NewTransactionID(o.now()),
+			PlanFingerprint:  Fingerprint(p.Plan),
+			Actions:          journalActionRecords(p.Plan),
+			Stage:            "MUTATING",
+			MutationPossible: true,
+		}
+		if o.ApprovalVerifier != nil {
+			rec.HostIdentity = o.ApprovalVerifier.HostIdentity
+		}
+		if c.Approval != nil {
+			sum := sha256.Sum256(c.Approval.Payload)
+			rec.Approval = &journal.ApprovalEvidence{Mode: "artifact", Reference: hex.EncodeToString(sum[:])}
+		} else {
+			rec.Approval = &journal.ApprovalEvidence{Mode: "legacy", Reference: c.ApprovedBy}
+		}
+		if err := o.Journal.Begin(rec); err != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "journal: "+err.Error())
+			return out, nil
+		}
+		// Finalize the record on every exit past this point — the engine has
+		// been reached, so mutation is possible and the outcome must be
+		// durable whatever happens below.
+		defer func() {
+			if berr := o.finalizeJournal(rec, &out); berr != nil {
+				out.Blockers = append(out.Blockers, berr.Error())
+			}
+		}()
+	}
+
 	// The plan is the source of truth for which actions exist. Bind it into
 	// the registry AND into every kind executor that keeps its own action
 	// map (ServiceExecutor, FileExecutor, ...): without the binding the
@@ -408,6 +486,29 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		return out, nil
 	}
 
+	// Persistence gate (anti-laundering): state.json is updated only when
+	// the journal shows no recovery-required or crashed transaction, and —
+	// for a run performing NO mutations — no failed post-mutation
+	// transaction either: an autonomous NO_CHANGE convergence run must
+	// never silently record last-known-good over a failed transaction.
+	if o.Journal != nil {
+		txID := ""
+		if rec != nil {
+			txID = rec.TransactionID
+		}
+		blockers, err := o.Journal.PersistenceBlockers(txID, planHasMutation(p.Plan))
+		if err != nil {
+			out.Stage = StageFailedFinalValidation
+			out.Blockers = append(out.Blockers, "journal: "+err.Error())
+			return out, nil
+		}
+		if len(blockers) > 0 {
+			out.Stage = StageFailedFinalValidation
+			out.Blockers = append(out.Blockers, blockers...)
+			return out, nil
+		}
+	}
+
 	// Persist last-known-good state. SaveModel refuses anything that is not
 	// verified-good, so a failure here leaves the machine applied but the
 	// state file untouched — reported, never silently swallowed.
@@ -455,6 +556,76 @@ func planHasMutation(p state.Plan) bool {
 		}
 	}
 	return false
+}
+
+// journalActionRecords snapshots the plan's actions into journal records
+// with their retry classification (all PENDING until the engine reports).
+func journalActionRecords(p state.Plan) []journal.ActionRecord {
+	var out []journal.ActionRecord
+	for _, a := range p.Actions {
+		rec := journal.ActionRecord{ID: a.ID, Resource: a.Resource, Kind: string(a.Kind), Status: "PENDING"}
+		if cls, err := journal.ClassifyRetry(a.Kind); err == nil {
+			rec.RetryClass = cls
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// finalizeJournal records the transaction outcome after the engine has run
+// (mutation possible). Recovery latches on rollback failure — ALWAYS — and
+// on any failure when the plan contains a no-autonomous-retry action. A
+// COMPLETED outcome is written only when the caller reached it after the
+// full lifecycle including persistence succeeded. Journal update failures
+// are returned (the record stays in progress and fail-safe blocks later
+// runs); they never mask the transaction outcome itself.
+func (o Orchestrator) finalizeJournal(rec *journal.Record, out *Outcome) error {
+	if rec == nil || o.Journal == nil {
+		return nil
+	}
+	rollbackFailed := false
+	byID := map[string]*journal.ActionRecord{}
+	for i := range rec.Actions {
+		byID[rec.Actions[i].ID] = &rec.Actions[i]
+	}
+	for _, ar := range out.Transaction.Actions {
+		jr := byID[ar.ActionID]
+		if jr == nil {
+			continue
+		}
+		jr.Status = ar.Status
+		jr.Error = ar.Error
+		if ar.Status == "ROLLBACK_FAILED" || strings.Contains(ar.Error, "; rollback: ") {
+			rollbackFailed = true
+		}
+	}
+	if rollbackFailed {
+		rec.RollbackAttempted = true
+		rec.RollbackResult = "ROLLBACK_FAILED"
+	} else if out.Transaction.Status == apply.StatusRolledBack {
+		rec.RollbackAttempted = true
+		rec.RollbackResult = "ROLLED_BACK"
+	}
+	recovery := rollbackFailed && out.Stage != StageCompleted
+	if !recovery && out.Stage != StageCompleted {
+		for _, a := range rec.Actions {
+			if a.RetryClass == journal.NoAutonomousRetry {
+				recovery = true
+				break
+			}
+		}
+	}
+	rec.RecoveryRequired = recovery
+	rec.Stage = out.Stage
+	switch {
+	case out.Stage == StageCompleted:
+		rec.Outcome = journal.OutcomeCompleted
+	case recovery:
+		rec.Outcome = journal.OutcomeRecoveryRequired
+	default:
+		rec.Outcome = journal.OutcomeFailed
+	}
+	return o.Journal.Update(rec)
 }
 
 // executorPreflightBlockers runs the optional read-only preflight checks the

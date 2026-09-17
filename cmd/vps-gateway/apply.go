@@ -12,6 +12,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/orchestrate"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
@@ -79,6 +80,7 @@ func defaultApplyOrchestrator(timeout time.Duration) *orchestrate.Orchestrator {
 		}},
 		LockPath:  orchestrate.DefaultLockPath,
 		StatePath: orchestrate.DefaultStatePath,
+		Journal:   journal.Default(),
 	}
 }
 

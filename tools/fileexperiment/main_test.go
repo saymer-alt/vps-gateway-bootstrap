@@ -9,6 +9,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/orchestrate"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
@@ -45,6 +46,7 @@ func experimentTestOrchestrator(t *testing.T) (*orchestrate.Orchestrator, string
 		}},
 		LockPath:  filepath.Join(root, "apply.lock"),
 		StatePath: filepath.Join(root, "state.json"),
+		Journal:   &journal.Journal{Dir: filepath.Join(root, "journal")},
 	}
 	return o, root
 }

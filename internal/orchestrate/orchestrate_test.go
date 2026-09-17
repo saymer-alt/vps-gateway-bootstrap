@@ -10,6 +10,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/lock"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/probe"
@@ -93,6 +94,7 @@ func newOrchestrator(t *testing.T, states []discovery.Result, reg apply.Registry
 		Registry:  reg,
 		LockPath:  filepath.Join(t.TempDir(), "apply.lock"),
 		StatePath: filepath.Join(t.TempDir(), "state.json"),
+		Journal:   &journal.Journal{Dir: filepath.Join(t.TempDir(), "journal")},
 		Now:       func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 	}
 	_ = now

@@ -12,6 +12,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/orchestrate"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
@@ -117,6 +118,7 @@ func applyTestOrchestrator(t *testing.T, states []discovery.Result, reg apply.Re
 		Registry:  reg,
 		LockPath:  filepath.Join(t.TempDir(), "apply.lock"),
 		StatePath: filepath.Join(t.TempDir(), "state.json"),
+		Journal:   &journal.Journal{Dir: filepath.Join(t.TempDir(), "journal")},
 		Now:       func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 	}
 	return o, rec, &calls
@@ -229,6 +231,9 @@ func TestDefaultApplyOrchestratorWiring(t *testing.T) {
 	}
 	if o.LockPath != orchestrate.DefaultLockPath || o.StatePath != orchestrate.DefaultStatePath {
 		t.Fatalf("default paths drifted: lock=%s state=%s", o.LockPath, o.StatePath)
+	}
+	if o.Journal == nil || o.Journal.Dir != journal.DefaultDir {
+		t.Fatalf("production wiring must journal mutating transactions, got %+v", o.Journal)
 	}
 	if o.Discover == nil {
 		t.Fatal("Discover must be wired (never called in this test)")

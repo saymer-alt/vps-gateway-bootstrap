@@ -250,6 +250,35 @@ pinned resources.
 - After a transaction: re-discovery is the only proof of effect; final
   validation and convergence gate persistence; failed transactions are
   never recorded as success.
+- **Durable transaction journal (implemented):** every mutating
+  transaction writes a versioned record — transaction id, plan
+  fingerprint, approval evidence, per-action retry classes and statuses,
+  rollback result, outcome, recovery flag — BEFORE the first possibly
+  mutating operation (atomic write + file fsync + directory fsync,
+  `/etc/vps-gateway/journal/`).
+- **Hybrid risk-aware retry policy (implemented):** mutating action kinds
+  carry a closed retry classification — `retry-safe` (managed files,
+  service restarts), `staged-recovery` (SSH port transition, reboot),
+  `no-autonomous-retry` (SSH finalize; future firewall, routing, package
+  installation). Unknown mutating kinds fail closed.
+- **Recovery-required latch (implemented):** `ROLLBACK_FAILED` always
+  latches `RECOVERY_REQUIRED`, as does any failure after possible
+  mutation of a no-autonomous-retry action; a crashed run (a journal
+  record without a final outcome) fail-safes the next invocation. The
+  latch refuses every later mutation and persistence attempt — a valid
+  approval does NOT bypass it, and no code path clears it: removing the
+  journal record is an operator action (a reset CLI/authority is a
+  separate, undecided piece).
+- **Anti-laundering (implemented):** an autonomous run that performs NO
+  mutations may not update `state.json` while a failed post-mutation
+  transaction exists in the journal — a NO_CHANGE convergence run can
+  never silently convert a failed transaction's unverified state into
+  last-known-good.
+- **Malicious-root limitation (binding statement):** the journal and the
+  recovery latch are operational recovery and diagnosis evidence for
+  honest actors; root on the target VPS can read, alter or delete them.
+  No on-box evidence is tamper-evident against root. Off-box anchoring is
+  future work.
 - Open policy item for the implementation stage: whether ownership
   survives rollback of the transaction that established it (adoption
   continuity). This must be fixed when adoption records are implemented.
