@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/approval"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/lock"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
@@ -45,6 +46,16 @@ type Orchestrator struct {
 	LockPath  string
 	StatePath string
 	Now       func() time.Time
+
+	// ApprovalVerifier, when non-nil, switches the confirmation boundary to
+	// operator-signed approval artifacts: legacy confirmations are refused.
+	// Production experiment wiring deliberately leaves it nil until
+	// operator key provisioning and a host-identity source are decided —
+	// the nil state is experiment containment (docs/security-model.md
+	// §10), never an authorization mechanism for widened apply. Any future
+	// production path must configure a Verifier; forgetting one fail-closes
+	// the legacy form away.
+	ApprovalVerifier *approval.Verifier
 }
 
 // Plan is the read-only planning product handed to the operator for review.
@@ -82,15 +93,41 @@ func Fingerprint(p state.Plan) string {
 // Confirmation is the explicit operator approval boundary. Before it, the
 // orchestrator is read-only; after it, mutation is allowed — and only for
 // the exact plan fingerprint that was approved.
+//
+// Two forms exist:
+//
+//   - the legacy fingerprint-prefix confirmation (ApprovedBy/At), which is
+//     experiment-only containment and self-suppliable by the invoking
+//     process (docs/security-model.md §5 G1) — accepted only while no
+//     ApprovalVerifier is configured;
+//   - the operator-signed approval artifact (Approval), required once an
+//     ApprovalVerifier is configured, binding fingerprint, host identity,
+//     capabilities and expiry under a pinned trust anchor.
 type Confirmation struct {
 	PlanFingerprint string    `json:"plan_fingerprint"`
 	ApprovedBy      string    `json:"approved_by"`
 	At              time.Time `json:"at"`
+
+	// Approval carries an operator-signed approval artifact. Required when
+	// the Orchestrator has an ApprovalVerifier; ignored otherwise.
+	Approval *approval.Artifact `json:"approval,omitempty"`
 }
 
-// Confirm verifies that c approves exactly plan p. Any mismatch — different
-// plan, empty approver, zero timestamp — is an error and blocks mutation.
+// Confirm verifies that c approves exactly plan p. When an approval
+// verifier is configured, only a valid operator-signed artifact is
+// accepted; otherwise the legacy structural checks apply (experiment
+// containment). Any mismatch — different plan, empty approver, zero
+// timestamp — is an error and blocks mutation.
 func (o Orchestrator) Confirm(p Plan, c Confirmation) error {
+	if o.ApprovalVerifier != nil {
+		if c.Approval == nil {
+			return fmt.Errorf("operator approval artifact required: legacy confirmation is refused while approval verification is configured")
+		}
+		if err := o.ApprovalVerifier.Verify(*c.Approval, Fingerprint(p.Plan)); err != nil {
+			return fmt.Errorf("approval artifact: %w", err)
+		}
+		return nil
+	}
 	if c.ApprovedBy == "" {
 		return fmt.Errorf("confirmation must name the approving operator")
 	}
