@@ -144,6 +144,7 @@ func (e *SSHExecutor) restoreConfig(actionID, configPath string) error {
 
 func (e *SSHExecutor) safePath(p string) (string, error) {
 	if p == "" || !filepath.IsAbs(p) { return "", errors.New("SSH config path must be absolute") }
+	if err := checkReservedTrustPath(p); err != nil { return "", err }
 	root := e.Root; if root == "" { root = "/" }; root = filepath.Clean(root)
 	rel, err := filepath.Rel(root, filepath.Clean(p))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) { return "", fmt.Errorf("SSH config path outside executor root: %s", p) }

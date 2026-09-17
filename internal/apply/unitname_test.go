@@ -1,6 +1,8 @@
 package apply
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -142,4 +144,37 @@ func TestSSHExecutorEmptyAndCustomUnitsStillWork(t *testing.T) {
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSH)); err != nil {
 		t.Fatalf("empty unit (ssh.service default) rejected: %v", err)
 	}
+}
+
+// The trust-anchor directory is reserved: no desired config, and therefore
+// no plan, can direct an executor to create, overwrite, or delete anything
+// under /etc/vps-gateway/trust — the refusal happens in the path safety
+// layer before any filesystem access.
+func TestFileExecutorRejectsReservedTrustPath(t *testing.T) {
+	for _, path := range []string{
+		"/etc/vps-gateway/trust/operator-ed25519.pub",
+		"/etc/vps-gateway/trust/",
+		"/etc/vps-gateway/trust",
+	} {
+		a := state.Action{ID: "f1", Resource: "file." + path, Kind: state.ActionCreateFile, Ownership: state.Owned,
+			Spec: &state.ActionSpec{File: &state.FileActionSpec{Path: path, Content: "forged anchor", Mode: 0600}}}
+		e := &FileExecutor{Root: t.TempDir(), Actions: map[string]state.Action{"f1": a}}
+		if err := e.Backup("f1", "file."+path); err == nil { t.Fatalf("backup accepted reserved path %q", path) }
+		if err := e.Apply("f1", "file."+path, string(state.ActionCreateFile)); err == nil { t.Fatalf("apply accepted reserved path %q", path) }
+		if _, err := os.Stat(filepath.Join(e.root(), "etc", "vps-gateway", "trust", "operator-ed25519.pub")); !os.IsNotExist(err) {
+			t.Fatalf("trust anchor file was created for path %q", path)
+		}
+	}
+}
+
+func TestSSHExecutorRejectsReservedTrustPath(t *testing.T) {
+	a := sshAction(0, 2200)
+	a.Spec.SSH.RequireOldListener = false
+	a.Spec.SSH.ConfigPath = "/etc/vps-gateway/trust/injected.conf"
+	a.Spec.SSH.ConfigContent = "Port 2200\n"
+	e := &SSHExecutor{Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
+		return "", nil
+	}}
+	if err := e.Backup("ssh1", "ssh.port"); err == nil { t.Fatal("backup accepted reserved trust path") }
+	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSH)); err == nil { t.Fatal("apply accepted reserved trust path") }
 }

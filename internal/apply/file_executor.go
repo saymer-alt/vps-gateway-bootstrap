@@ -118,6 +118,7 @@ func (e *FileExecutor) backupRoot() string { if e.Backups != "" { return filepat
 
 func (e *FileExecutor) safePath(p string) (string, error) {
 	if p == "" || !filepath.IsAbs(p) { return "", errors.New("file path must be absolute") }
+	if err := checkReservedTrustPath(p); err != nil { return "", err }
 	root := e.root()
 	rel, err := filepath.Rel(root, filepath.Clean(p))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) { return "", fmt.Errorf("path outside executor root: %s", p) }

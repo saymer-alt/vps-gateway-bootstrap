@@ -121,8 +121,15 @@ No guard may be treated as an authority boundary.
   enforces the machine-id namespace and rejects any other form.
 - The private signing key stays **off the target VPS** and outside the
   autonomous agent's authority at all times. The VPS receives only
-  verification authority (the public trust anchor, embedded in project
-  code; changing it is an operator-approved code change).
+  verification authority: the operator's public Ed25519 key at the fixed,
+  non-configurable location `/etc/vps-gateway/trust/operator-ed25519.pub`
+  (encoded as exactly 64 lowercase hex characters plus an optional trailing
+  newline). The loader enforces the policy fail-closed — root:root
+  ownership, no group/other write bits, regular file (symlinks rejected) —
+  and no CLI flag, config field, state field, environment variable, or Plan
+  field can select or replace the anchor; executors refuse to manage
+  anything under `/etc/vps-gateway/trust/`. Bootstrap and rotation of a
+  real anchor are operator-controlled actions outside the codebase.
 - An exact, approved Plan may be re-submitted within its validity period
   for now. Strict server-side single-use semantics are deferred to a
   future external approval controller. A future controller may replace or
