@@ -18,7 +18,7 @@ fail-closed gates) and as rules. Your job is to work within that architecture,
 never around it.
 
 Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
-`docs/plan-apply.md`, `docs/lessons-learned.md`. Deep detail:
+`docs/security-model.md`, `docs/plan-apply.md`, `docs/lessons-learned.md`. Deep detail:
 `docs/state-model.md`, `docs/ownership.md`, `docs/discovery.md`,
 `docs/discovery-schema.md`, `docs/management-probe.md`,
 `docs/requirements-from-real-vps.md`, `docs/environment-matrix.md`,
@@ -30,6 +30,12 @@ Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
 - Unset desired state never grants permission to change anything.
 - UNKNOWN or EXTERNAL ownership blocks mutation. Ownership is never inferred
   from names or paths; adoption is explicit.
+- `docs/security-model.md` is binding: root on a target VPS is execution
+  capability, never approval authority. Approval (operator-signed
+  artifacts), ownership admission, capabilities and plan-composition
+  analysis follow the target architecture defined there. Current
+  experiment pins are temporary containment and must not be widened until
+  those boundaries are implemented and tested.
 - Live discovery is the only source of truth about the current machine.
 - Persisted state (`state.json`) is the last verified managed state, not live
   truth. It is a fallback, never an override.

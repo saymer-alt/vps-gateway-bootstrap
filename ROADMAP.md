@@ -135,6 +135,16 @@ Build reusable primitives before implementing the major modules.
 - [x] Rollback on failed validation (implemented and unit-tested; not yet exercised live)
 - [ ] Recovery path for SSH/firewall/routing changes
 
+Security gates (binding — see `docs/security-model.md`):
+
+- [x] Stage 0: executor-local input validation — strict systemd unit-name validation at the executor boundary
+- [ ] Stage 1: executor-local resource allowlists (no executor stays generic within its kind)
+- [ ] Stage 2: operator-signed approval artifacts (plan fingerprint + host + capabilities + expiry); retire the `--confirm` prefix path
+- [ ] Stage 3: ownership admission — compiled namespace policy, explicit signed adoption for foreign/sensitive resources; config/state can no longer self-grant OWNED
+- [ ] Stage 4: named capabilities in Plan, included in fingerprint/approval semantics
+- [ ] Stage 5: whole-plan composition admission before mutation
+- [ ] Gate: no experiment pin, registry or resource pin may be widened until Stages 2–5 are implemented and tested
+
 ## Phase 5 — Core System Modules
 
 Implement modules in dependency order.
