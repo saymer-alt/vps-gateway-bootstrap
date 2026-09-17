@@ -51,3 +51,19 @@ type PreflightGate interface {
 	Ready() bool
 	Reasons() []string
 }
+
+// TransactionContext is the trusted orchestration context for backup
+// scoping: both values come from the durable journal record, never from
+// plan/config data supplied by the invoker.
+type TransactionContext struct {
+	TransactionID   string
+	PlanFingerprint string
+}
+
+// TransactionBinder is an optional executor extension: executors that scope
+// backups per transaction accept the trusted orchestration context through
+// it, immediately after the journal record is durable and before the first
+// backup or mutation.
+type TransactionBinder interface {
+	BindTransaction(ctx TransactionContext)
+}

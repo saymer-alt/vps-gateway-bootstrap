@@ -1,7 +1,10 @@
 package orchestrate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
@@ -267,3 +271,101 @@ func TestFinalizeLatchesRecoveryForNoAutonomousRetryActions(t *testing.T) {
 		t.Fatalf("retry-safe failure must not latch: %+v", rec2)
 	}
 }
+
+// Backup-integrity failure propagates to RECOVERY_REQUIRED: a real
+// FileExecutor whose stored backup content is tampered with mid-transaction
+// refuses the restore, the engine reports ROLLBACK_FAILED, and the journal
+// latches recovery.
+type tamperBackupExecutor struct {
+	inner    *apply.FileExecutor
+	txID     string
+	tampered bool
+}
+
+func (e *tamperBackupExecutor) BindTransaction(ctx apply.TransactionContext) {
+	e.inner.BindTransaction(ctx)
+	e.txID = ctx.TransactionID
+}
+func (e *tamperBackupExecutor) BindActions(actions map[string]state.Action) {
+	e.inner.BindActions(actions)
+}
+func (e *tamperBackupExecutor) Backup(id, resource string) error { return e.inner.Backup(id, resource) }
+func (e *tamperBackupExecutor) Validate(id, resource string) error {
+	return e.inner.Validate(id, resource)
+}
+func (e *tamperBackupExecutor) Rollback(id, resource string) error {
+	return e.inner.Rollback(id, resource)
+}
+func (e *tamperBackupExecutor) Apply(id, resource, kind string) error {
+	if err := e.inner.Apply(id, resource, kind); err != nil {
+		return err
+	}
+	// Corrupt the stored backup content AFTER the apply succeeded.
+	content := filepath.Join(e.inner.Backups, e.txID, id, "content")
+	data, err := os.ReadFile(content)
+	if err != nil { return err }
+	return os.WriteFile(content, append([]byte("XX"), data...), 0600)
+}
+
+func TestBackupIntegrityFailureLatchesRecoveryRequired(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "etc", "vps-gateway", "integrity.conf")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte("original\n"), 0640); err != nil { t.Fatal(err) }
+	lockedPath := filepath.Join(root, "etc", "vps-gateway", "locked", "locked.conf")
+	if err := os.MkdirAll(filepath.Dir(lockedPath), 0555); err != nil { t.Fatal(err) } // Apply of the second file fails here
+	yes := true
+	inspect := func(p string) (state.FileActual, error) {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			if os.IsNotExist(err) { return state.FileActual{Path: p}, nil }
+			return state.FileActual{Path: p}, err
+		}
+		digest := sha256.Sum256(data)
+		return state.FileActual{Path: p, Exists: true, SHA256: hex.EncodeToString(digest[:]), Mode: 0640}, nil
+	}
+	cfg := &pipeline.Config{
+		Desired: &state.Desired{
+			Files: []state.FileDesired{
+				{Path: path, Content: "mutated\n", Mode: 0640},
+				{Path: lockedPath, Content: "x\n", Mode: 0640},
+			},
+		},
+		Ownership: map[string]state.Ownership{
+			"file." + path:       state.Owned,
+			"file." + lockedPath: state.Owned,
+		},
+	}
+	inner := &apply.FileExecutor{Root: root, Backups: filepath.Join(root, "backups")}
+	wrapper := &tamperBackupExecutor{inner: inner}
+	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(true), makeDiscovery(true)}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{
+			state.ActionUpdateFile:      wrapper,
+			state.ActionCreateFile:      wrapper,
+			state.ActionDeleteOwnedFile: wrapper,
+		},
+	}, nil)
+	p := o.Prepare(cfg, pipeline.Options{Root: &yes, InspectFile: inspect})
+	if !p.Ready { t.Fatalf("plan not ready: %v", p.Blockers) }
+
+	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Now().UTC()}
+	out, err := o.Execute(p, conf, nil)
+	if err != nil { t.Fatal(err) }
+	if out.Stage != StageFailedTransaction { t.Fatalf("stage=%s", out.Stage) }
+	recs, err := o.Journal.Records()
+	if err != nil { t.Fatal(err) }
+	if len(recs) != 1 { t.Fatalf("records=%+v", recs) }
+	if recs[0].Outcome != journal.OutcomeRecoveryRequired || !recs[0].RecoveryRequired {
+		t.Fatalf("backup integrity failure must latch recovery: %+v", recs[0])
+	}
+	if recs[0].RollbackResult != "ROLLBACK_FAILED" { t.Fatalf("rollback result=%q", recs[0].RollbackResult) }
+	if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) { t.Fatalf("state must not persist: %v", err) }
+	// The managed file must have been left as the rollback found it: since
+	// the restore was refused, the mutated content stays and the operator
+	// decides (fail-safe, never silent).
+	if data, err := os.ReadFile(path); err != nil || string(data) != "mutated\n" {
+		t.Fatalf("managed file unexpectedly restored: %q %v", data, err)
+	}
+}
+
+func ptr(b bool) *bool { return &b }

@@ -20,3 +20,24 @@ func WriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil { return err }
 	return os.Rename(tmpName, path)
 }
+
+// WriteFileSyncDir writes atomically (see WriteFile) and then fsyncs the
+// containing directory, so the rename itself survives power loss. Use for
+// commit markers whose presence other code depends on: journals, backup
+// manifests, and similar recovery material.
+func WriteFileSyncDir(path string, data []byte, mode os.FileMode) error {
+	if err := WriteFile(path, data, mode); err != nil {
+		return err
+	}
+	return SyncDir(filepath.Dir(path))
+}
+
+// SyncDir fsyncs a directory entry.
+func SyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}

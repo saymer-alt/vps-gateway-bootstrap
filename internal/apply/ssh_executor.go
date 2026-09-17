@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/fsatomic"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
@@ -21,6 +22,15 @@ type SSHExecutor struct {
 	Runner  func(name string, args ...string) (string, error)
 	Root    string
 	Backups string
+
+	TransactionID   string
+	PlanFingerprint string
+}
+
+// BindTransaction implements TransactionBinder.
+func (e *SSHExecutor) BindTransaction(ctx TransactionContext) {
+	e.TransactionID = ctx.TransactionID
+	e.PlanFingerprint = ctx.PlanFingerprint
 }
 
 func (e *SSHExecutor) run(name string, args ...string) (string, error) {
@@ -45,23 +55,45 @@ func (e *SSHExecutor) action(id, resource string) (state.Action, error) {
 	return a, nil
 }
 
+// Backup captures the managed SSH fragment into the transaction-scoped
+// backup directory with the same commit and integrity semantics as the
+// file executor: content first, manifest last, symlinks refused.
 func (e *SSHExecutor) Backup(actionID, resource string) error {
 	a, err := e.action(actionID, resource); if err != nil { return err }
 	s := a.Spec.SSH
 	if s.ConfigPath == "" { return nil }
 	path, err := e.safePath(s.ConfigPath); if err != nil { return err }
-	backupDir := filepath.Join(e.backupRoot(), actionID)
-	if err := os.MkdirAll(backupDir, 0700); err != nil { return err }
-	metaPath := filepath.Join(backupDir, "ssh-meta")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) { return os.WriteFile(metaPath, []byte("ABSENT\n"), 0600) }
-		return err
+	if e.TransactionID == "" {
+		return errors.New("no transaction bound: backups are transaction-scoped and refuse to run without orchestration context")
 	}
-	info, err := os.Stat(path); if err != nil { return err }
-	if err := os.WriteFile(filepath.Join(backupDir, "ssh-content"), data, 0600); err != nil { return err }
-	meta := fmt.Sprintf("PRESENT\nmode=%o\nsha256=%s\n", info.Mode().Perm(), checksum(data))
-	return os.WriteFile(metaPath, []byte(meta), 0600)
+	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	if err := os.MkdirAll(dir, 0700); err != nil { return err }
+
+	manifest := &BackupManifest{
+		TransactionID:   e.TransactionID,
+		PlanFingerprint: e.PlanFingerprint,
+		ActionID:        actionID,
+		Resource:        resource,
+	}
+	lstat, err := os.Lstat(path)
+	if err != nil {
+		if !os.IsNotExist(err) { return err }
+		manifest.State = BackupStateAbsent
+		return writeBackupManifest(filepath.Join(dir, "manifest.json"), manifest)
+	}
+	if lstat.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("managed path %s is a symlink: refusing to back up through it (fail-closed)", path)
+	}
+	if !lstat.Mode().IsRegular() {
+		return fmt.Errorf("managed path %s is not a regular file", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil { return err }
+	manifest.State = BackupStatePresent
+	manifest.Mode = uint32(lstat.Mode().Perm())
+	manifest.SHA256 = checksum(data)
+	if err := fsatomic.WriteFileSyncDir(filepath.Join(dir, "content"), data, 0600); err != nil { return err }
+	return writeBackupManifest(filepath.Join(dir, "manifest.json"), manifest)
 }
 
 func (e *SSHExecutor) Apply(actionID, resource, kind string) error {
@@ -97,7 +129,7 @@ func (e *SSHExecutor) Rollback(actionID, resource string) error {
 	a, err := e.action(actionID, resource); if err != nil { return err }
 	s := a.Spec.SSH
 	if s.ConfigPath != "" {
-		if err := e.restoreConfig(actionID, s.ConfigPath); err != nil { return err }
+		if err := e.restoreConfigVerified(actionID, resource, s); err != nil { return err }
 		if s.SocketActivation {
 			if _, err := e.run("systemctl", "daemon-reload"); err != nil { return err }
 		}
@@ -105,6 +137,44 @@ func (e *SSHExecutor) Rollback(actionID, resource string) error {
 	unit := s.Unit; if unit == "" { unit = "ssh.service" }
 	_, err = e.run("systemctl", "reload", unit)
 	return err
+}
+
+// restoreConfigVerified restores the managed fragment from the
+// transaction-scoped backup with verify-before-restore and restore
+// verification, mirroring the file executor.
+func (e *SSHExecutor) restoreConfigVerified(actionID, resource string, s *state.SSHActionSpec) error {
+	if e.TransactionID == "" {
+		return errors.New("rollback requires a bound transaction: backups are transaction-scoped")
+	}
+	path, err := e.safePath(s.ConfigPath); if err != nil { return err }
+	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	manifest, err := loadBackupManifest(filepath.Join(dir, "manifest.json"))
+	if err != nil { return err }
+	if err := manifest.validateAgainst(e.TransactionID, e.PlanFingerprint, actionID, resource); err != nil { return err }
+
+	switch manifest.State {
+	case BackupStateAbsent:
+		if _, err := os.Lstat(path); err == nil {
+			if err := os.Remove(path); err != nil { return err }
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return verifyRestoredAbsence(path)
+	case BackupStatePresent:
+		data, err := os.ReadFile(filepath.Join(dir, "content"))
+		if err != nil {
+			return fmt.Errorf("backup content is missing or unreadable: %w", err)
+		}
+		if checksum(data) != manifest.SHA256 {
+			return errors.New("backup integrity check failed: content checksum mismatch")
+		}
+		mode := os.FileMode(manifest.Mode)
+		if mode == 0 { mode = 0600 }
+		if err := atomicWrite(path, data, mode); err != nil { return err }
+		return verifyRestoredFile(path, manifest.SHA256, manifest.Mode)
+	default:
+		return fmt.Errorf("backup manifest state %q is invalid", manifest.State)
+	}
 }
 
 func (e *SSHExecutor) writeConfig(s *state.SSHActionSpec) error {
@@ -123,24 +193,6 @@ func (e *SSHExecutor) validateConfig(s *state.SSHActionSpec) error {
 	return nil
 }
 
-func (e *SSHExecutor) restoreConfig(actionID, configPath string) error {
-	path, err := e.safePath(configPath); if err != nil { return err }
-	backupDir := filepath.Join(e.backupRoot(), actionID)
-	meta, err := os.ReadFile(filepath.Join(backupDir, "ssh-meta")); if err != nil { return err }
-	if strings.HasPrefix(string(meta), "ABSENT") {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) { return err }
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(backupDir, "ssh-content")); if err != nil { return err }
-	mode := os.FileMode(0600)
-	for _, line := range strings.Split(string(meta), "\n") {
-		if strings.HasPrefix(line, "mode=") {
-			var n uint64
-			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "mode="), "%o", &n); err == nil { mode = os.FileMode(n) }
-		}
-	}
-	return atomicWrite(path, data, mode)
-}
 
 func (e *SSHExecutor) safePath(p string) (string, error) {
 	if p == "" || !filepath.IsAbs(p) { return "", errors.New("SSH config path must be absolute") }

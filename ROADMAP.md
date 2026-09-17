@@ -124,7 +124,7 @@ UNKNOWN
 Build reusable primitives before implementing the major modules.
 
 - [x] Root/privilege checks
-- [x] Backup manager
+- [x] Backup manager (transaction-scoped with verified per-action manifests and restore verification)
 - [x] Atomic file writes (temp + fsync + rename; directory fsync not yet implemented)
 - [x] Managed configuration fragments (implemented for the SSH managed drop-in; generic fragment primitive not yet built)
 - [x] Locking (primitive in `internal/lock`, enforced in `orchestrate.Execute` before every mutation)

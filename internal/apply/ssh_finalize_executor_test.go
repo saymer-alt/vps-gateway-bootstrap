@@ -208,7 +208,9 @@ type finalizeTestExecutor struct {
 
 func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int) error) *finalizeTestExecutor {
 	f := &finalizeTestExecutor{listeners: map[int]bool{2222: true, 2200: true}}
-	base := &SSHExecutor{Root: root, Backups: filepath.Join(root, "backups"), Actions: map[string]state.Action{a.ID: a}, Runner: func(name string, args ...string) (string, error) {
+	base := &SSHExecutor{Root: root, Backups: filepath.Join(root, "backups"), Actions: map[string]state.Action{a.ID: a}}
+	base.TransactionID, base.PlanFingerprint = "tx-test", "fp-test"
+	base.Runner = func(name string, args ...string) (string, error) {
 		switch name {
 		case "ss":
 			out := ""
@@ -237,7 +239,7 @@ func newFinalizeTestExecutor(root string, a state.Action, probe func(string, int
 		default:
 			return "", nil
 		}
-	}}
+	}
 	f.SSHFinalizeExecutor = &SSHFinalizeExecutor{
 		Base: base, ManagementHost: "controller.example", ManagementPort: 2200,
 	}

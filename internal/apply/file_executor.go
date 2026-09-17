@@ -15,12 +15,37 @@ import (
 
 // FileExecutor implements only owned file mutations. It never accepts
 // arbitrary shell commands and refuses paths outside its configured root.
+// Backups are transaction-scoped and manifest-verified: the orchestrator
+// binds the trusted transaction context after the journal record is
+// durable, and no backup or restore runs without it.
 type FileExecutor struct {
 	Root    string
 	Backups string
 	Actions map[string]state.Action
+
+	TransactionID   string
+	PlanFingerprint string
 }
 
+// BindTransaction implements TransactionBinder.
+func (e *FileExecutor) BindTransaction(ctx TransactionContext) {
+	e.TransactionID = ctx.TransactionID
+	e.PlanFingerprint = ctx.PlanFingerprint
+}
+
+// backupDir returns the transaction-scoped backup directory for one action.
+func (e *FileExecutor) backupDir(actionID, resource string) (string, error) {
+	if e.TransactionID == "" || e.PlanFingerprint == "" {
+		return "", errors.New("no transaction bound: backups are transaction-scoped and refuse to run without orchestration context")
+	}
+	return filepath.Join(e.backupRoot(), e.TransactionID, actionID), nil
+}
+
+// Backup captures the managed path's pre-transaction state into the
+// transaction-scoped backup directory. Content is written first, the
+// manifest last (both atomic + directory fsynced): a torn backup is a
+// missing manifest, which restore refuses. Managed symlinks are never
+// followed — they fail closed before mutation instead.
 func (e *FileExecutor) Backup(actionID, resource string) error {
 	a, err := e.action(actionID, resource)
 	if err != nil { return err }
@@ -28,19 +53,35 @@ func (e *FileExecutor) Backup(actionID, resource string) error {
 	f := a.Spec.File
 	path, err := e.safePath(f.Path)
 	if err != nil { return err }
-	backupDir := filepath.Join(e.backupRoot(), actionID)
-	if err := os.MkdirAll(backupDir, 0700); err != nil { return err }
-	meta := filepath.Join(backupDir, "meta")
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) { return os.WriteFile(meta, []byte("ABSENT\n"), 0600) }
-		return err
+	dir, err := e.backupDir(actionID, resource)
+	if err != nil { return err }
+	if err := os.MkdirAll(dir, 0700); err != nil { return err }
+
+	manifest := &BackupManifest{
+		TransactionID:   e.TransactionID,
+		PlanFingerprint: e.PlanFingerprint,
+		ActionID:        actionID,
+		Resource:        resource,
+	}
+	lstat, err := os.Lstat(path)
+	if err != nil {
+		if !os.IsNotExist(err) { return err }
+		manifest.State = BackupStateAbsent
+		return writeBackupManifest(filepath.Join(dir, "manifest.json"), manifest)
+	}
+	if lstat.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("managed path %s is a symlink: refusing to back up through it (fail-closed)", path)
+	}
+	if !lstat.Mode().IsRegular() {
+		return fmt.Errorf("managed path %s is not a regular file", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil { return err }
-	if err := os.WriteFile(filepath.Join(backupDir, "content"), data, 0600); err != nil { return err }
-	info, err := os.Stat(path)
-	if err != nil { return err }
-	return os.WriteFile(meta, []byte(fmt.Sprintf("PRESENT\nmode=%o\nsha256=%s\n", info.Mode().Perm(), checksum(data))), 0600)
+	manifest.State = BackupStatePresent
+	manifest.Mode = uint32(lstat.Mode().Perm())
+	manifest.SHA256 = checksum(data)
+	if err := fsatomic.WriteFileSyncDir(filepath.Join(dir, "content"), data, 0600); err != nil { return err }
+	return writeBackupManifest(filepath.Join(dir, "manifest.json"), manifest)
 }
 
 func (e *FileExecutor) Apply(actionID, resource, kind string) error {
@@ -77,29 +118,50 @@ func (e *FileExecutor) Validate(actionID, resource string) error {
 	return nil
 }
 
+// Rollback restores the pre-transaction state from the transaction-scoped
+// backup. Verification runs BEFORE the restore (manifest linkage, content
+// presence, checksum) and AFTER it (restored mode + content checksum, or
+// proven absence) — a nil return is proof, not a side effect. Any integrity
+// problem is a rollback failure, which the orchestrator latches as
+// recovery-required.
 func (e *FileExecutor) Rollback(actionID, resource string) error {
 	a, err := e.action(actionID, resource)
 	if err != nil { return err }
 	if a.Spec == nil || a.Spec.File == nil { return nil }
-	path, err := e.safePath(a.Spec.File.Path)
-	if err != nil { return err }
-	backupDir := filepath.Join(e.backupRoot(), actionID)
-	meta, err := os.ReadFile(filepath.Join(backupDir, "meta"))
-	if err != nil { return err }
-	if strings.HasPrefix(string(meta), "ABSENT") {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) { return err }
-		return nil
+	if e.TransactionID == "" {
+		return errors.New("rollback requires a bound transaction: backups are transaction-scoped")
 	}
-	data, err := os.ReadFile(filepath.Join(backupDir, "content"))
+	f := a.Spec.File
+	path, err := e.safePath(f.Path)
 	if err != nil { return err }
-	mode := os.FileMode(0600)
-	for _, line := range strings.Split(string(meta), "\n") {
-		if strings.HasPrefix(line, "mode=") {
-			var n uint64
-			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "mode="), "%o", &n); err == nil { mode = os.FileMode(n) }
+	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	manifest, err := loadBackupManifest(filepath.Join(dir, "manifest.json"))
+	if err != nil { return err }
+	if err := manifest.validateAgainst(e.TransactionID, e.PlanFingerprint, actionID, resource); err != nil { return err }
+
+	switch manifest.State {
+	case BackupStateAbsent:
+		if _, err := os.Lstat(path); err == nil {
+			if err := os.Remove(path); err != nil { return err }
+		} else if !os.IsNotExist(err) {
+			return err
 		}
+		return verifyRestoredAbsence(path)
+	case BackupStatePresent:
+		data, err := os.ReadFile(filepath.Join(dir, "content"))
+		if err != nil {
+			return fmt.Errorf("backup content is missing or unreadable: %w", err)
+		}
+		if checksum(data) != manifest.SHA256 {
+			return errors.New("backup integrity check failed: content checksum mismatch")
+		}
+		mode := os.FileMode(manifest.Mode)
+		if mode == 0 { mode = 0600 }
+		if err := atomicWrite(path, data, mode); err != nil { return err }
+		return verifyRestoredFile(path, manifest.SHA256, manifest.Mode)
+	default:
+		return fmt.Errorf("backup manifest state %q is invalid", manifest.State)
 	}
-	return atomicWrite(path, data, mode)
 }
 
 func (e *FileExecutor) action(id, resource string) (state.Action, error) {

@@ -417,6 +417,17 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 				out.Blockers = append(out.Blockers, berr.Error())
 			}
 		}()
+		// Bind the trusted transaction context into every executor that
+		// scopes backups per transaction: the values come from the durable
+		// journal record, never from plan or config data.
+		for _, ex := range o.Registry.ByKind {
+			if tb, ok := ex.(apply.TransactionBinder); ok {
+				tb.BindTransaction(apply.TransactionContext{
+					TransactionID:   rec.TransactionID,
+					PlanFingerprint: rec.PlanFingerprint,
+				})
+			}
+		}
 	}
 
 	// The plan is the source of truth for which actions exist. Bind it into

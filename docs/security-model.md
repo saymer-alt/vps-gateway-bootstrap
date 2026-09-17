@@ -244,9 +244,22 @@ pinned resources.
   the run, never persists, and is reported with its stage — the operator
   decides recovery, and no run retries itself.
 - Rollback is transactional and positional: Backup → Apply → Validate per
-  action, reverse-order rollback of completed work on any failure, backup
-  of the pre-state (including ABSENT markers) so rollback restores what
-  the transaction found — it cannot invent content.
+  action, reverse-order rollback of completed work on any failure.
+- **Backup integrity (implemented):** backups are transaction-scoped
+  (`<backup-root>/<transaction-id>/<action-id>/`), never overwritten by an
+  identical rerun. Each backup is committed content-first, manifest-last
+  (atomic + directory fsync); the manifest binds transaction id, plan
+  fingerprint, action/resource identity, original PRESENT/ABSENT state,
+  mode and content SHA256. Restore verifies manifest linkage and content
+  checksums BEFORE writing, and verifies restored mode/content (or proven
+  absence) AFTER writing — any mismatch is a rollback failure and hence
+  RECOVERY_REQUIRED. Managed symlinks fail closed at backup time instead
+  of being followed. Checksums detect corruption and accidents; they are
+  NOT tamper-proof against malicious root. Retention: unresolved
+  FAILED/RECOVERY_REQUIRED backup material is never automatically
+  deleted; the completed-transaction retention target (last 10) is
+  deferred to a later cleanup mechanism built on the transaction-scoped
+  layout.
 - After a transaction: re-discovery is the only proof of effect; final
   validation and convergence gate persistence; failed transactions are
   never recorded as success.

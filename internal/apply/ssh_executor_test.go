@@ -49,11 +49,13 @@ func TestSSHExecutorManagedConfigBackupAndRollback(t *testing.T) {
 	a.Spec.SSH.ConfigContent = "Port 2222\nPort 2200\n"
 	a.Spec.SSH.ConfigMode = 0600
 	calls := 0
-	e := &SSHExecutor{Root: root, Backups: filepath.Join(root, "backups"), Actions: map[string]state.Action{"ssh1": a}, Runner: func(name string, args ...string) (string, error) {
+	e := &SSHExecutor{Root: root, Backups: filepath.Join(root, "backups"), Actions: map[string]state.Action{"ssh1": a}}
+	e.TransactionID, e.PlanFingerprint = "tx-test", "fp-test"
+	e.Runner = func(name string, args ...string) (string, error) {
 		calls++
 		if name == "ss" { return "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2200 0.0.0.0:*\n", nil }
 		return "", nil
-	}}
+	}
 	if err := e.Backup("ssh1", "ssh.port"); err != nil { t.Fatal(err) }
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSH)); err != nil { t.Fatal(err) }
 	got, err := os.ReadFile(config); if err != nil { t.Fatal(err) }
@@ -67,5 +69,6 @@ func TestSSHExecutorManagedConfigBackupAndRollback(t *testing.T) {
 func TestSSHExecutorRejectsExternal(t *testing.T) {
 	a := sshAction(2222, 2200); a.Ownership = state.External
 	e := &SSHExecutor{Actions: map[string]state.Action{"ssh1": a}, Runner: func(string, ...string) (string, error) { return "", nil }}
+	e.TransactionID, e.PlanFingerprint = "tx-test", "fp-test"
 	if err := e.Apply("ssh1", "ssh.port", string(state.ActionSSH)); err == nil { t.Fatal("expected ownership rejection") }
 }
