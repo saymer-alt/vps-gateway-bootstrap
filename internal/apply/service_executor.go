@@ -36,6 +36,9 @@ func (e *ServiceExecutor) spec(id, resource string) (*state.ServiceActionSpec, e
 	if !ok || a.Resource != resource { return nil, fmt.Errorf("unknown action %q", id) }
 	if a.Ownership != state.Owned { return nil, errors.New("service mutation requires OWNED resource") }
 	if a.Spec == nil || a.Spec.Service == nil || a.Spec.Service.Name == "" { return nil, errors.New("missing service action specification") }
+	// The unit name is about to become an argv element of systemctl on every
+	// operation path; it must be a plain unit name before that can happen.
+	if err := validateUnitName(a.Spec.Service.Name); err != nil { return nil, err }
 	return a.Spec.Service, nil
 }
 

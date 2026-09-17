@@ -36,6 +36,12 @@ func (e *SSHExecutor) action(id, resource string) (state.Action, error) {
 	if !ok || a.Resource != resource { return state.Action{}, fmt.Errorf("unknown action %q", id) }
 	if a.Ownership != state.Owned { return state.Action{}, errors.New("SSH mutation requires OWNED resource") }
 	if a.Spec == nil || a.Spec.SSH == nil { return state.Action{}, errors.New("missing SSH action specification") }
+	// A spec-supplied unit name becomes an argv element of systemctl in
+	// Apply and Rollback (an empty value falls back to the hardcoded
+	// "ssh.service" default). It must be a plain unit name before that.
+	if a.Spec.SSH.Unit != "" {
+		if err := validateUnitName(a.Spec.SSH.Unit); err != nil { return state.Action{}, err }
+	}
 	return a, nil
 }
 
