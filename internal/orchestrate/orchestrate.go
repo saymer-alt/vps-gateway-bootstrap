@@ -295,6 +295,15 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 		out.Blockers = append(out.Blockers, "preflight is not ready")
 		return out, nil
 	}
+	// Typed-spec invariant: a hand-built or planner-produced plan containing
+	// a specless or wrongly typed mutating action must never reach an
+	// executor. This structural re-check runs regardless of the caller's
+	// Ready claim (TASK-31/43).
+	if err := state.ValidatePlanTypedSpecs(p.Plan); err != nil {
+		out.Stage = StageBlocked
+		out.Blockers = append(out.Blockers, err.Error())
+		return out, nil
+	}
 	registered := map[state.ActionKind]bool{}
 	for kind, ex := range o.Registry.ByKind {
 		if ex != nil { registered[kind] = true }

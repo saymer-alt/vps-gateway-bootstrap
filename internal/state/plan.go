@@ -127,6 +127,16 @@ func BuildPlan(m Model) Plan {
 					continue
 				}
 			}
+			// Typed-spec invariant: a mutating action without exactly one
+			// compatible typed spec is invalid and blocks the plan instead of
+			// reaching an executor (TASK-31/43). Known unsupported planner
+			// paths (ssh.password_authentication, mieru.enabled,
+			// mihomo.integration) fail deterministically here.
+			if err := ValidateActionTypedSpec(a); err != nil {
+				p.Blocked = true
+				p.BlockReasons = append(p.BlockReasons, d.Resource+": "+err.Error())
+				continue
+			}
 			p.Actions = append(p.Actions, a)
 		case Conflict, UnknownDiff, Unsupported:
 			p.Blocked = true

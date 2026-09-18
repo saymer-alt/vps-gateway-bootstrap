@@ -56,7 +56,11 @@ func TestExecuteBlocksHandBuiltPlanWithoutCoverage(t *testing.T) {
 		Ready:     true,
 		Preflight: readyPreflight(),
 		Plan: state.Plan{SchemaVersion: state.SchemaVersion, Actions: []state.Action{
-			{ID: "a1", Resource: "service.fail2ban.service", Kind: state.ActionService, Ownership: state.Owned},
+			// The action carries a valid typed spec so the executor-coverage
+			// gate is what blocks this hand-built plan (the typed-spec
+			// invariant is exercised separately).
+			{ID: "a1", Resource: "service.fail2ban.service", Kind: state.ActionService, Ownership: state.Owned,
+				Spec: &state.ActionSpec{Service: &state.ServiceActionSpec{Name: "fail2ban.service", Operation: "restart", ExpectedState: "active"}}},
 		}},
 	}
 	out, err := o.Execute(p, Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "op", At: time.Now().UTC()}, nil)
