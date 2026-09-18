@@ -134,10 +134,14 @@ func Default() *Journal { return &Journal{Dir: DefaultDir} }
 func (j *Journal) path(txID string) string { return filepath.Join(j.Dir, txID+".json") }
 
 // Begin durably writes the initial record: it MUST complete before the
-// first potentially mutating operation. Atomic write + fsync + directory
-// fsync so the record survives power loss at the moment it matters.
+// first potentially mutating operation. The journal directory (and any
+// missing parents) is created with durable directory entries
+// (fsatomic.EnsureDir) BEFORE the record is written, then the record is
+// written atomically (file fsync + rename + directory fsync), so it
+// survives power loss at the moment it matters — including the first run,
+// when the directory itself is new.
 func (j *Journal) Begin(rec *Record) error {
-	if err := os.MkdirAll(j.Dir, 0o700); err != nil {
+	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
 	rec.SchemaVersion = SchemaVersion
@@ -149,15 +153,16 @@ func (j *Journal) Begin(rec *Record) error {
 	if err != nil {
 		return err
 	}
-	if err := fsatomic.WriteFile(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
+	if err := fsatomic.WriteFileSyncDir(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
-	return syncDir(j.Dir)
+	return nil
 }
 
-// Update durably rewrites an existing record.
+// Update durably rewrites an existing record (same durability contract as
+// Begin; the directory normally exists and is then left untouched).
 func (j *Journal) Update(rec *Record) error {
-	if err := os.MkdirAll(j.Dir, 0o700); err != nil {
+	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
 	rec.UpdatedAt = time.Now().UTC()
@@ -165,19 +170,10 @@ func (j *Journal) Update(rec *Record) error {
 	if err != nil {
 		return err
 	}
-	if err := fsatomic.WriteFile(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
+	if err := fsatomic.WriteFileSyncDir(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
-	return syncDir(j.Dir)
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return nil
 }
 
 // loadAll reads every record. A corrupt record is an error, never skipped:

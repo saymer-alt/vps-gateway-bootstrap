@@ -64,10 +64,11 @@ func TestPreparedMutatingPlanStillExecutes(t *testing.T) {
 	if !out.Persisted { t.Fatal("state must be persisted on success") }
 }
 
-// Read-only behavior is preserved: a VALIDATE-only plan carries no mutation
-// and may still execute without Prepare (AGENTS.md §3).
+// Read-only behavior is preserved: a VALIDATE-only plan whose registered
+// executor explicitly declares read-only (apply.ReadOnlyExecutor) carries
+// no mutation and may still execute without Prepare (AGENTS.md §3).
 func TestUnpreparedValidateOnlyPlanStillExecutes(t *testing.T) {
-	rec := &recordingExecutor{}
+	rec := &readOnlyValidateExecutor{}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(true)}, apply.Registry{
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionValidate: rec},
 	}, nil)
@@ -83,6 +84,14 @@ func TestUnpreparedValidateOnlyPlanStillExecutes(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if out.Stage != StageCompleted { t.Fatalf("validate-only plan must still execute: %s blockers=%v", out.Stage, out.Blockers) }
 }
+
+// readOnlyValidateExecutor is a recording executor that explicitly declares
+// read-only behavior — the legitimate stand-in for a pure-validation
+// executor. recordingExecutor itself stays unmarked on purpose: registering
+// it under any kind must classify that kind mutation-capable.
+type readOnlyValidateExecutor struct{ recordingExecutor }
+
+func (e *readOnlyValidateExecutor) ReadOnly() bool { return true }
 
 // Convergence must consult the SAME injected planning options as Prepare and
 // the staleness re-check. The injected file inspector is called once per

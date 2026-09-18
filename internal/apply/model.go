@@ -67,3 +67,20 @@ type TransactionContext struct {
 type TransactionBinder interface {
 	BindTransaction(ctx TransactionContext)
 }
+
+// ReadOnlyExecutor is the explicit, narrow marker for executors whose Apply
+// provably never mutates the machine (pure validation, e.g. re-discovery of
+// effective external state). Plan mutation classification consults the
+// registered executor through this interface: an executor that does not
+// implement it — whatever kind it is registered under, including
+// ActionValidate — is treated as mutation-capable, so a future mutating
+// executor can never inherit the read-only exemptions (unprepared execution,
+// no journal, no anti-laundering) merely by its registration kind. The
+// declaration is compiled code, reviewable like the executor itself; it is
+// never derived from plan or config data.
+type ReadOnlyExecutor interface {
+	ActionExecutor
+	// ReadOnly returns true only when executing any action of this
+	// executor cannot change the machine under any input.
+	ReadOnly() bool
+}

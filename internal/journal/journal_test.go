@@ -134,3 +134,20 @@ func TestPersistenceBlockersFamilies(t *testing.T) {
 	if _, err := j.PersistenceBlockers("tx-new", true); err == nil { t.Fatal("corrupt journal record must fail closed") }
 	if _, err := j.BlockingRecords(); err == nil { t.Fatal("corrupt journal record must fail closed") }
 }
+
+// F3 (TASK-15): the first run's journal directory must itself be durably
+// established — Begin creates the whole missing tree, not just the record.
+func TestBeginCreatesMissingDirectoryTree(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "etc", "vps-gateway", "journal")
+	j := &Journal{Dir: dir}
+	if err := j.Begin(testRecord("tx-nested")); err != nil { t.Fatal(err) }
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() { t.Fatalf("journal dir missing: %v", err) }
+	if info.Mode().Perm() != 0o700 { t.Fatalf("dir mode=%o, want 0700", info.Mode().Perm()) }
+	recs, err := j.Records()
+	if err != nil { t.Fatal(err) }
+	if len(recs) != 1 || recs[0].TransactionID != "tx-nested" { t.Fatalf("records=%+v", recs) }
+
+	// Update on the same journal must not degrade the existing directory.
+	if err := j.Update(testRecord("tx-nested")); err != nil { t.Fatal(err) }
+}

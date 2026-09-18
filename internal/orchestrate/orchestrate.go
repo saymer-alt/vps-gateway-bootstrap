@@ -83,9 +83,11 @@ type Plan struct {
 	// and any drift between planning and execution blocks the mutation.
 	// Execute also rejects any UNPREPARED plan that contains mutation:
 	// hand-built mutating plans are not an execution path (AGENTS.md §3).
-	// Only read-only (VALIDATE-only) plans may execute without Prepare,
-	// and they skip the extra discovery — remaining the caller's
-	// responsibility.
+	// Only plans classified read-only — every action kind's registered
+	// executor explicitly declares read-only (apply.ReadOnlyExecutor);
+	// anything unclassified counts as mutation-capable — may execute
+	// without Prepare, and they skip the extra discovery — remaining the
+	// caller's responsibility.
 	opts     pipeline.Options
 	prepared bool
 }
@@ -305,9 +307,9 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 	// Provenance gate: every mutating plan must originate from Prepare. A
 	// hand-built plan carries no planning context and skips the staleness
 	// re-check by construction, so no confirmation — legacy or signed —
-	// may authorize it. Read-only (VALIDATE-only) plans carry no mutation
-	// and may still execute.
-	if planHasMutation(p.Plan) && !p.prepared {
+	// may authorize it. Plans classified read-only (see planHasMutation)
+	// carry no mutation and may still execute.
+	if o.planHasMutation(p.Plan) && !p.prepared {
 		out.Stage = StageBlocked
 		out.Blockers = append(out.Blockers, "unprepared plan: mutating plans must be produced by Prepare (planning context and staleness re-check are mandatory)")
 		return out, nil
@@ -358,7 +360,7 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 	// after the confirmation boundary deliberately: a valid ordinary
 	// approval does not bypass recovery.
 	var rec *journal.Record
-	if planHasMutation(p.Plan) {
+	if o.planHasMutation(p.Plan) {
 		if o.Journal == nil {
 			out.Stage = StageBlocked
 			out.Blockers = append(out.Blockers, "no transaction journal configured: mutating transactions require durable recovery state")
@@ -502,22 +504,30 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outc
 	// for a run performing NO mutations — no failed post-mutation
 	// transaction either: an autonomous NO_CHANGE convergence run must
 	// never silently record last-known-good over a failed transaction.
-	if o.Journal != nil {
-		txID := ""
-		if rec != nil {
-			txID = rec.TransactionID
-		}
-		blockers, err := o.Journal.PersistenceBlockers(txID, planHasMutation(p.Plan))
-		if err != nil {
-			out.Stage = StageFailedFinalValidation
-			out.Blockers = append(out.Blockers, "journal: "+err.Error())
-			return out, nil
-		}
-		if len(blockers) > 0 {
-			out.Stage = StageFailedFinalValidation
-			out.Blockers = append(out.Blockers, blockers...)
-			return out, nil
-		}
+	// The journal is mandatory for persistence: without transaction-history
+	// evidence a run cannot prove it is not laundering a failed
+	// transaction, so a nil-Journal embedder fails closed here instead of
+	// persisting. Pure read-only validation remains usable up to this gate
+	// — it runs to completion, it simply never persists.
+	if o.Journal == nil {
+		out.Stage = StageFailedFinalValidation
+		out.Blockers = append(out.Blockers, "no transaction journal configured: persistence requires transaction-history evidence")
+		return out, nil
+	}
+	txID := ""
+	if rec != nil {
+		txID = rec.TransactionID
+	}
+	blockers, err := o.Journal.PersistenceBlockers(txID, o.planHasMutation(p.Plan))
+	if err != nil {
+		out.Stage = StageFailedFinalValidation
+		out.Blockers = append(out.Blockers, "journal: "+err.Error())
+		return out, nil
+	}
+	if len(blockers) > 0 {
+		out.Stage = StageFailedFinalValidation
+		out.Blockers = append(out.Blockers, blockers...)
+		return out, nil
 	}
 
 	// Persist last-known-good state. SaveModel refuses anything that is not
@@ -558,13 +568,20 @@ func convergenceFailures(diff []state.DiffItem) []string {
 }
 
 // planHasMutation reports whether the plan contains any action that can
-// change the machine. VALIDATE actions are read-only by definition: they
-// only re-discover effective state and never mutate.
-func planHasMutation(p state.Plan) bool {
+// change the machine. The classification is registry-backed and fails
+// closed: a kind counts as read-only only when an executor is registered
+// for it AND that executor explicitly declares read-only behavior
+// (apply.ReadOnlyExecutor). A kind with no executor, an executor without
+// the declaration, or a false declaration is mutation-capable — merely
+// registering a mutating executor under ActionValidate grants no read-only
+// exemption from the provenance, journal and anti-laundering gates.
+func (o Orchestrator) planHasMutation(p state.Plan) bool {
 	for _, a := range p.Actions {
-		if a.Kind != state.ActionValidate {
-			return true
+		ex := o.Registry.ByKind[a.Kind]
+		if ro, ok := ex.(apply.ReadOnlyExecutor); ok && ro.ReadOnly() {
+			continue
 		}
+		return true
 	}
 	return false
 }

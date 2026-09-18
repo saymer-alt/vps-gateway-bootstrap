@@ -77,3 +77,34 @@ func TestWriteFilePermissionErrorLeavesTargetIntact(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if string(data) != "known-good" { t.Fatalf("target corrupted: %q", data) }
 }
+
+// EnsureDir (TASK-15 F3): missing directory levels are created with durable
+// directory entries, existing directories are untouched, and a file in the
+// path fails closed instead of being replaced.
+func TestEnsureDirCreatesMissingTree(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "a", "b", "journal")
+	if err := EnsureDir(dir, 0700); err != nil { t.Fatal(err) }
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() { t.Fatalf("dir missing: %v", err) }
+	if info.Mode().Perm() != 0700 { t.Fatalf("mode=%o, want 0700", info.Mode().Perm()) }
+}
+
+func TestEnsureDirLeavesExistingDirectoryUntouched(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "exists")
+	if err := os.MkdirAll(dir, 0750); err != nil { t.Fatal(err) }
+	if err := EnsureDir(dir, 0700); err != nil { t.Fatal(err) }
+	info, err := os.Stat(dir)
+	if err != nil { t.Fatal(err) }
+	if info.Mode().Perm() != 0750 { t.Fatalf("existing dir mode changed: %o", info.Mode().Perm()) }
+}
+
+func TestEnsureDirRejectsFileInPath(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil { t.Fatal(err) }
+	if err := EnsureDir(filepath.Join(blocker, "sub"), 0700); err == nil {
+		t.Fatal("a file in the path must fail, not be replaced")
+	}
+}

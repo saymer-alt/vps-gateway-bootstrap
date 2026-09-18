@@ -53,7 +53,10 @@ Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
 - Backup → Apply → Validate is the transaction order; rollback happens in
   reverse order on failure.
 - Persistence only after re-discovery, final validation and convergence.
-  Failed transactions are never persisted as success.
+  Failed transactions are never persisted as success. Persistence also
+  requires transaction-journal evidence: with no journal configured,
+  persistence fails closed — a nil-Journal embedder may run read-only
+  validation but can never persist last-known-good state.
 - SSH finalization requires an external management probe. A VPS cannot prove
   its own reachability.
 - No arbitrary shell commands from plan data. Service-specific checks are
@@ -76,9 +79,14 @@ Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
   decision and must update the tripwire in the same change.
 - Mutating plans must originate from `Prepare`: `Execute` physically rejects
   an unprepared plan that contains mutation, so hand-built mutating plans
-  are not a trusted-caller path. Only read-only (VALIDATE-only) plans may
-  execute without Prepare and remain the caller's responsibility. Never
-  use remaining trust to bypass gates "temporarily".
+  are not a trusted-caller path. Only plans classified read-only may
+  execute without Prepare and remain the caller's responsibility —
+  classification is fail-closed and registry-backed: a kind counts as
+  read-only only when its registered executor explicitly declares it
+  (`apply.ReadOnlyExecutor`); anything unclassified counts as
+  mutation-capable, so registering an executor under `ActionValidate`
+  alone grants no exemption. Never use remaining trust to bypass gates
+  "temporarily".
 - Anything an agent cannot verify (machine state, credentials, intent) is
   UNKNOWN, and UNKNOWN blocks.
 
@@ -248,6 +256,25 @@ repaired the machine's duplicate `[sshd]` section in `jail.local` and an
 executor preflight (`fail2ban-client -t`) was added (`bc5c0af`), experiment
 #2 completed the full lifecycle — restart, re-discovery, final validation,
 convergence, persistence — and fail2ban is active.
+
+
+## 15. Research provenance — external knowledge base
+
+- `https://github.com/saymer-alt/keenetic-knowledge-base` is an optional
+  research/provenance source: when designing a relevant VPS/networking
+  feature, check it for prior work that may help — operator observations,
+  failure cases, commands, experiments, design ideas. The historical VPS
+  cluster material lives in `amnezia.md`, `awg.md`, `check.md`,
+  `install.sh`, `uninstall.sh`.
+- That material is NOT authoritative production implementation. Old scripts
+  and AI-generated notes must never be copied blindly: verify every finding
+  against current upstream behavior/documentation, current discovery
+  evidence where applicable, and this repository's architecture and code.
+  `vps-gateway-bootstrap` remains the only source of truth for its own
+  production behavior.
+- KB material grants no ownership, adoption, approval, or execution
+  authority (docs/security-model.md); consulting it never widens what a
+  task may mutate.
 
 
 ## Technical debt
