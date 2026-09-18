@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,5 +121,134 @@ func TestPersistenceKeepsUnknownOwnershipExplicit(t *testing.T) {
 	}
 	if _, declared := got.Ownership["never.declared"]; declared {
 		t.Fatal("absent ownership must stay absent, not become UNKNOWN/OWNED")
+	}
+}
+
+func TestSaveModelOverwritesCurrentSchemaState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveModel(path, richModel()); err != nil {
+		t.Fatal(err)
+	}
+	second := richModel()
+	second.UpdatedAt = time.Date(2026, 9, 19, 8, 0, 0, 0, time.UTC)
+	second.Profile = "gateway-v2"
+	if err := SaveModel(path, second); err != nil {
+		t.Fatalf("save over current-version state must succeed: %v", err)
+	}
+	got, err := LoadModel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Profile != "gateway-v2" || !got.UpdatedAt.Equal(second.UpdatedAt) {
+		t.Fatalf("replacement not effective: %#v", got)
+	}
+}
+
+func TestSaveModelRefusesNewerSchemaOnDiskAndLeavesBytesUntouched(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	original := []byte(`{"schema_version": 2, "note": "written by a newer binary"}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := SaveModel(path, richModel())
+	if err == nil {
+		t.Fatal("newer on-disk schema must refuse the overwrite")
+	}
+	if !strings.Contains(err.Error(), "newer") || !strings.Contains(err.Error(), "left untouched") {
+		t.Fatalf("refusal must name the downgrade and preservation: %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(original) {
+		t.Fatalf("original bytes must be unchanged, got %q err %v", got, readErr)
+	}
+}
+
+func TestSaveModelRefusesUnsupportedOlderSchemaOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	original := []byte(`{"schema_version": 0}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := SaveModel(path, richModel())
+	if err == nil || !strings.Contains(err.Error(), "unsupported on-disk schema version 0") {
+		t.Fatalf("unsupported on-disk version must refuse: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(original) {
+		t.Fatalf("original bytes must be unchanged, got %q", got)
+	}
+}
+
+func TestSaveModelRefusesMalformedExistingState(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string][]byte{
+		"broken.json":        []byte(`{"schema_version": 1, "trunc`),
+		"no-version.json":    []byte(`{"profile": "gateway"}`),
+		"not-object.json":    []byte(`"just a string"`),
+		"version-null.json":  []byte(`{"schema_version": null}`),
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := SaveModel(path, richModel())
+		if err == nil {
+			t.Fatalf("%s: malformed existing state must refuse the overwrite", name)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != string(content) {
+			t.Fatalf("%s: original bytes must be unchanged, got %q", name, got)
+		}
+	}
+}
+
+func TestSaveModelRefusesDirectoryAsStatePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveModel(dir, richModel()); err == nil {
+		t.Fatal("a directory as state path must fail closed")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("directory must remain untouched: %v %v", entries, err)
+	}
+}
+
+func TestSaveModelPropagatesWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "does-not-exist", "state.json")
+	if err := SaveModel(missing, richModel()); err == nil {
+		t.Fatal("write failure (missing parent) must propagate")
+	}
+}
+
+func TestStateSchemaVersionRemainsUnchanged(t *testing.T) {
+	if SchemaVersion != 1 {
+		t.Fatalf("state SchemaVersion drifted: %d (this task must not introduce v2)", SchemaVersion)
+	}
+}
+
+// Structural durability pin: state replacement goes through the same
+// directory-synced atomic helper as journal/backup commit markers, so the
+// rename itself survives power loss (TASK-28). Behavioral side effects of
+// the dir fsync are not observable in unit tests by design.
+func TestSaveModelUsesDurableAtomicHelper(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := SaveModel(path, richModel()); err != nil {
+		t.Fatal(err)
+	}
+	// The replacement must be a regular 0600 file with newline-terminated
+	// canonical content, loadable through the strict reader.
+	if err := SaveModel(path, richModel()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModel(path); err != nil {
+		t.Fatalf("replacement must remain loadable: %v", err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("no temp artifacts may survive: %v", entries)
 	}
 }

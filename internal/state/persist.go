@@ -32,6 +32,15 @@ const PersistedStatePath = "/etc/vps-gateway/state.json"
 // refuses models that are not in a verified-good condition: non-OK status or
 // unresolved blocking constraints. Persisting an unverified or partially
 // applied result as successful is a contract violation.
+//
+// Before replacing an existing state file, SaveModel refuses to overwrite a
+// document whose schema version this binary does not support (in particular
+// a NEWER version written by a newer binary): silent downgrade-overwrites
+// would discard evidence without a trace (TASK-27). Malformed or
+// version-less existing files also refuse — corrupt evidence is not
+// evidence of absence. Replacement is durable: atomic write with file fsync
+// plus parent-directory fsync (fsatomic.WriteFileSyncDir), matching the
+// journal and backup persistence paths (TASK-28).
 func SaveModel(path string, m Model) error {
 	if m.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("refusing to persist state with schema version %d (want %d)", m.SchemaVersion, SchemaVersion)
@@ -47,9 +56,49 @@ func SaveModel(path string, m Model) error {
 			return fmt.Errorf("refusing to persist state with blocking constraint %s: %s", c.Code, c.Message)
 		}
 	}
+	version, exists, err := existingStateVersion(path)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if version > SchemaVersion {
+			return fmt.Errorf("refusing to overwrite state %s: on-disk schema version %d is newer than the highest supported version %d; the file was left untouched (a newer binary is required to read it)", path, version, SchemaVersion)
+		}
+		if version != SchemaVersion {
+			return fmt.Errorf("refusing to overwrite state %s: unsupported on-disk schema version %d (supported: %d); the file was left untouched for manual review", path, version, SchemaVersion)
+		}
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil { return err }
-	return fsatomic.WriteFile(path, append(data, '\n'), 0600)
+	if err != nil {
+		return err
+	}
+	return fsatomic.WriteFileSyncDir(path, append(data, '\n'), 0600)
+}
+
+// existingStateVersion reports the schema_version field of an existing state
+// file, far enough to protect it from downgrade-overwrites without applying
+// full model validation (an old export that would fail SaveModel-grade
+// checks must still not be silently replaced). It returns exists=false only
+// for a genuinely absent file; unreadable, malformed, version-less, or
+// non-file destinations are errors that fail closed.
+func existingStateVersion(path string) (version int, exists bool, err error) {
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("state %s: unable to read existing state before replacement: %w", path, readErr)
+	}
+	var probe struct {
+		SchemaVersion *int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return 0, false, fmt.Errorf("state %s: existing state is malformed and was left untouched: %w", path, err)
+	}
+	if probe.SchemaVersion == nil {
+		return 0, false, fmt.Errorf("state %s: existing state has no schema_version field and was left untouched for manual review", path)
+	}
+	return *probe.SchemaVersion, true, nil
 }
 
 // LoadModel reads and validates a persisted state model.
