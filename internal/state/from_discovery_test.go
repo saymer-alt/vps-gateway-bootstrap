@@ -11,7 +11,7 @@ func TestFromDiscoveryPreservesActualState(t *testing.T) {
 	passwords := false
 	r := discovery.Result{
 		SchemaVersion: discovery.SchemaVersion,
-		DiscoveryVersion: "0.3.0",
+		DiscoveryVersion: "0.4.0",
 		Timestamp: time.Unix(123, 0).UTC(),
 		Status: "OK",
 		Host: discovery.Host{Hostname: "Saymer3", MachineID: "1111222233334444aaaabbbbccccdddd", MachineIDStatus: discovery.MachineIDPresent},

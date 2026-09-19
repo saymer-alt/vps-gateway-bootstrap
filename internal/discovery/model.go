@@ -1,6 +1,26 @@
 package discovery
 
-import "time"
+import (
+	"time"
+
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity"
+)
+
+// FieldStatus aliases the shared closed observation-status vocabulary
+// (TASK-43 internal/identity) so Discovery 0.4 records carry statuses
+// without introducing a second competing UNKNOWN enum.
+type FieldStatus = identity.FieldStatus
+
+const (
+	// Routing observation statuses. PRESENT is set only after a successful
+	// command plus fully successful parse; command failures, unsupported
+	// environments and parse failures map to the UNKNOWN family and never
+	// to an empty inventory (TASK-21/46: UNKNOWN != absent).
+	FieldStatusRoutingPresent    = identity.FieldStatusPresent
+	FieldStatusRoutingUnknownUn  = identity.FieldStatusUnknownUnsupported
+	FieldStatusRoutingUnknownPer = identity.FieldStatusUnknownPermission
+	FieldStatusRoutingUnknownPar = identity.FieldStatusUnknownParse
+)
 
 const SchemaVersion = 1
 
@@ -58,9 +78,50 @@ type Interface struct { Name string `json:"name"`; Kind string `json:"kind"`; St
 type Address struct { Address string `json:"address"`; PrefixLength int `json:"prefix_length"`; Family string `json:"family"` }
 type DNS struct { Resolvers []string `json:"resolvers"`; Source string `json:"source"`; Active bool `json:"active"` }
 
-type Routing struct { DefaultRoutes []Route `json:"default_routes"`; Rules []Rule `json:"rules"`; Tables []RouteTable `json:"tables"` }
-type Route struct { Destination string `json:"destination"`; Gateway string `json:"gateway"`; Device string `json:"device"`; Table string `json:"table"`; Metric int `json:"metric"` }
-type Rule struct { Priority int `json:"priority"`; Selector string `json:"selector"`; Table string `json:"table"` }
+type Routing struct {
+	DefaultRoutes []Route `json:"default_routes"`
+	Rules         []Rule  `json:"rules"`
+	Tables        []RouteTable `json:"tables"`
+	// RulesStatus / RoutesStatus carry the observation status of the two
+	// routing inventories (TASK-46): PRESENT only after a successful
+	// command and fully successful parse; UNKNOWN_* otherwise. An empty
+	// Rules/Routes slice with PRESENT status is a true "no objects exist"
+	// observation; without PRESENT status it means nothing was collected.
+	RulesStatus  FieldStatus `json:"rules_status,omitempty"`
+	RoutesStatus FieldStatus `json:"routes_status,omitempty"`
+}
+
+// Rule is one IPv4 policy rule as emitted by `ip -j rule show` (Discovery
+// 0.4, typed). The observed tokens are preserved verbatim: From/To keep the
+// iproute2 spelling ("all" for an absent source/destination selector, or an
+// address/prefix token), FWMark/FWMask are the numeric values (the mask
+// defaults to 0xffffffff when iproute2 omits it — that normalization is
+// upstream iproute2 behavior), and Table/TableRaw keep the resolved numeric
+// table id and the raw observed token (builtins local/main/default are
+// canonicalized; unknown symbolic names stay symbolic with Table 0). Status
+// is always PRESENT for appended rules: unparseable inventory fails closed
+// instead of producing partially valid rules.
+type Rule struct {
+	Priority  int                  `json:"priority"`
+	From      string               `json:"from,omitempty"`
+	To        string               `json:"to,omitempty"`
+	FWMark    uint32               `json:"fwmark,omitempty"`
+	FWMask    uint32               `json:"fwmark_mask,omitempty"`
+	Table     int                  `json:"table"`
+	TableRaw  string               `json:"table_raw"`
+	Status    FieldStatus          `json:"status"`
+}
+type Route struct {
+	Destination string        `json:"destination"`
+	Gateway     string        `json:"gateway"`
+	Device      string        `json:"device"`
+	Table       string        `json:"table"`
+	Metric      int           `json:"metric"`
+	Family      string        `json:"family,omitempty"` // "ipv4" (collector runs ip -4)
+	Type        string        `json:"type,omitempty"`   // unicast default; blackhole/unreachable/... as observed
+	Scope       string        `json:"scope,omitempty"`
+	Status      FieldStatus   `json:"status"`
+}
 type RouteTable struct { ID int `json:"id"`; Name string `json:"name"`; Routes []Route `json:"routes"` }
 
 type Firewall struct { UFW ToolState `json:"ufw"`; NFTables ToolState `json:"nftables"`; IPTables ToolState `json:"iptables"`; Layers []string `json:"layers"`; Effective map[string]string `json:"effective"` }

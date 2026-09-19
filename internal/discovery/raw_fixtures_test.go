@@ -67,7 +67,7 @@ func TestRealVPSRawFixtures(t *testing.T) {
 
 			if tc.wantRule {
 				found := false
-				for _, rule := range r.Routing.Rules { if rule.Priority == 100 && rule.Table == "mihomo" { found = true; break } }
+				for _, rule := range r.Routing.Rules { if rule.Priority == 100 && rule.TableRaw == "mihomo" { found = true; break } }
 				if !found { t.Fatalf("Mihomo policy rule not parsed: %#v", r.Routing.Rules) }
 			}
 			if tc.wantTunDef {

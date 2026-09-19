@@ -2,30 +2,34 @@ package discovery
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity"
 )
 
+// collectRouteTables is the single source of truth for the route inventory:
+// one command (`ip -j route show table all`) feeds the typed per-table
+// grouping and the default-route list (TASK-46). Command failures and parse
+// failures set RoutesStatus to the matching UNKNOWN state instead of leaving
+// an empty successful inventory.
 func (c *Collector) collectRouteTables(ctx context.Context, r *Result) {
 	out, err := output(c, ctx, "ip", "-j", "route", "show", "table", "all")
-	if err != nil { return }
-	var raw []map[string]any
-	if json.Unmarshal(out, &raw) != nil { return }
-	for _, x := range raw {
-		table := fmtAny(x["table"])
-		if table == "" { continue }
-		id, _ := strconv.Atoi(table)
-		idx := -1
-		for i := range r.Routing.Tables { if r.Routing.Tables[i].ID == id { idx = i; break } }
-		if idx < 0 { r.Routing.Tables = append(r.Routing.Tables, RouteTable{ID: id, Name: routeTableName(id)}); idx = len(r.Routing.Tables)-1 }
-		dst, _ := x["dst"].(string); if dst == "" { dst = "default" }
-		dev, _ := x["dev"].(string)
-		gw, _ := x["gateway"].(string)
-		metric, _ := x["metric"].(float64)
-		r.Routing.Tables[idx].Routes = append(r.Routing.Tables[idx].Routes, Route{Destination: dst, Gateway: gw, Device: dev, Table: table, Metric: int(metric)})
+	if err != nil {
+		r.Routing.RoutesStatus = routingCommandErrorStatus(err)
+		addObservation(&r.Unknowns, "ROUTING_TABLES_UNKNOWN", "routing", err.Error())
+		return
 	}
+	tables, defaults, parseErr := parseRouteInventory(out)
+	if parseErr != nil {
+		r.Routing.RoutesStatus = identity.FieldStatusUnknownParse
+		addObservation(&r.Unknowns, "ROUTING_TABLES_UNKNOWN", "routing", parseErr.Error())
+		return
+	}
+	r.Routing.Tables = tables
+	r.Routing.DefaultRoutes = defaults
+	r.Routing.RoutesStatus = identity.FieldStatusPresent
 }
 
 func routeTableName(id int) string {

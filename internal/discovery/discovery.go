@@ -38,8 +38,13 @@ func (c *Collector) readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// discoveryVersion is the Discovery 0.4 record version: typed routing
+// observations (TASK-46). It is informational metadata for consumers; the
+// collectors always emit the current version.
+const discoveryVersion = "0.4.0"
+
 func (c *Collector) Discover(ctx context.Context) Result {
-	r := Result{SchemaVersion: SchemaVersion, DiscoveryVersion: "0.3.0", Timestamp: time.Now().UTC(), Status: "OK"}
+	r := Result{SchemaVersion: SchemaVersion, DiscoveryVersion: discoveryVersion, Timestamp: time.Now().UTC(), Status: "OK"}
 	// Hostname is informational only: mutable and self-reported. The
 	// approval target identity is the machine-id collected below.
 	r.Host.Hostname, _ = os.Hostname()

@@ -2,12 +2,12 @@ package discovery
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 )
 
@@ -227,37 +227,25 @@ func (c *Collector) collectNetwork(ctx context.Context, r *Result) {
 }
 
 func (c *Collector) collectRouting(ctx context.Context, r *Result) {
-	var rules []struct {
-		Priority    int    `json:"priority"`
-		From        string `json:"from"`
-		To          string `json:"to"`
-		FirewallMark any    `json:"fwmark"`
-		Table       any    `json:"table"`
-	}
-	if err := jsonOut(c, ctx, &rules, "ip", "-j", "rule"); err == nil {
-		for _, x := range rules {
-			r.Routing.Rules = append(r.Routing.Rules, Rule{Priority: x.Priority, Selector: strings.TrimSpace(x.From + " " + x.To), Table: fmtAny(x.Table)})
-		}
-	} else {
+	// Discovery 0.4 (TASK-46): the policy-rule inventory is parsed into
+	// typed records with an explicit observation status. A command failure
+	// or a parse failure is UNKNOWN — never an empty successful inventory.
+	// The command stays `ip -j rule` (IPv4 by iproute2 default), exactly as
+	// captured in the raw fixtures.
+	out, err := output(c, ctx, "ip", "-j", "rule")
+	if err != nil {
+		r.Routing.RulesStatus = routingCommandErrorStatus(err)
 		addObservation(&r.Unknowns, "ROUTING_RULES_UNKNOWN", "routing", err.Error())
+		return
 	}
-
-	if out, err := output(c, ctx, "ip", "-j", "route", "show", "table", "all"); err == nil {
-		var raw []map[string]any
-		if json.Unmarshal(out, &raw) == nil {
-			for _, x := range raw {
-				dst, _ := x["dst"].(string)
-				dev, _ := x["dev"].(string)
-				gw, _ := x["gateway"].(string)
-				table := fmtAny(x["table"])
-				if dst == "default" && table != "" {
-					r.Routing.DefaultRoutes = append(r.Routing.DefaultRoutes, Route{Destination: "0.0.0.0/0", Gateway: gw, Device: dev, Table: table})
-				}
-			}
-		}
-	} else {
-		addObservation(&r.Unknowns, "ROUTING_TABLES_UNKNOWN", "routing", err.Error())
+	rules, parseErr := parseRuleInventory(out)
+	if parseErr != nil {
+		r.Routing.RulesStatus = identity.FieldStatusUnknownParse
+		addObservation(&r.Unknowns, "ROUTING_RULES_UNKNOWN", "routing", parseErr.Error())
+		return
 	}
+	r.Routing.Rules = rules
+	r.Routing.RulesStatus = identity.FieldStatusPresent
 }
 
 func fmtAny(v any) string {

@@ -40,6 +40,6 @@ func TestRealVPSFixtures(t *testing.T) {
 }
 
 func hasMihomoRule(rules []Rule) bool {
-	for _, r := range rules { if r.Table == "mihomo" { return true } }
+	for _, r := range rules { if r.TableRaw == "mihomo" { return true } }
 	return false
 }
