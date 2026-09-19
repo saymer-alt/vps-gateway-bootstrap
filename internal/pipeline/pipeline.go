@@ -36,9 +36,25 @@ type Result struct {
 type Config struct {
 	Desired   *state.Desired             `json:"desired,omitempty"`
 	Ownership map[string]state.Ownership `json:"ownership,omitempty"`
+	// MUVG is the strict operator-intent configuration for MUVG v1
+	// (TASK-34). It is decoded by a strict subtree decoder (unknown keys,
+	// duplicates, nulls and wrong types reject) and carries no ownership or
+	// authority semantics: legacy ownership labels can never influence it.
+	// It is marked json:"-" so the permissive legacy unmarshal can never
+	// populate it.
+	MUVG *MUVGConfig `json:"-"`
+	// Warnings lists non-fatal config observations, currently unknown
+	// top-level keys. Rendering belongs to the summary/proposal surfaces.
+	Warnings []string `json:"-"`
 }
 
-// ParseConfig decodes a bootstrap configuration document.
+// ParseConfig decodes a bootstrap configuration document. The JSON format is
+// fixed. The muvg subtree (when present) is decoded strictly by
+// parseMUVGConfig: unknown fields, duplicates, nulls and wrong types reject
+// with JSON-path errors, and the resulting MUVGConfig carries operator
+// intent only — no ownership or authority. Unknown top-level keys are
+// collected as non-fatal warnings (rejection before generalized MUVG is a
+// later, deliberate break per TASK-27/34).
 func ParseConfig(data []byte) (*Config, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return &Config{}, nil
@@ -47,7 +63,41 @@ func ParseConfig(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("bootstrap config: %w", err)
 	}
+	var raw struct {
+		MUVG json.RawMessage `json:"muvg"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("bootstrap config: %w", err)
+	}
+	if len(raw.MUVG) > 0 {
+		muvg, err := parseMUVGConfig(raw.MUVG)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap config: %w", err)
+		}
+		cfg.MUVG = muvg
+	}
+	cfg.Warnings = warnUnknownTopLevelKeys(data)
 	return &cfg, nil
+}
+
+// warnUnknownTopLevelKeys reports top-level keys outside the known set as
+// non-fatal warnings. Legacy configs only ever contained known keys, so an
+// unknown key is always a mistake worth surfacing; hard rejection is
+// deliberately deferred until generalized MUVG (TASK-27/34).
+func warnUnknownTopLevelKeys(data []byte) []string {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil // parse errors are reported by the strict paths
+	}
+	var warnings []string
+	for k := range top {
+		switch k {
+		case "desired", "ownership", "muvg":
+		default:
+			warnings = append(warnings, fmt.Sprintf("bootstrap config: unknown top-level key %q", k))
+		}
+	}
+	return warnings
 }
 
 // Options controls environment-dependent inputs. Root overrides the
