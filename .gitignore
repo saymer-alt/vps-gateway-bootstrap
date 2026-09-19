@@ -1,0 +1,30 @@
+# Local build outputs
+/vps-gateway
+/vps-gateway-*
+*.test
+*.out
+coverage.*
+
+# Local runtime/configuration material
+/config.json
+/state.json
+/*.local.json
+*.tmp
+
+# Approval and signing material must never enter the repository
+*.approval.json
+*.approval
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+*.jwk
+*.jwk.json
+*.pub.local
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
