@@ -191,3 +191,25 @@ Bootstrap owns the live resource.
 or record the exact pre-change state and ownership. Repair/uninstall may restore only
 resources proven OWNED; generator output is desired-state input, never ownership proof.
 
+## 23. A host-local service can work while its container consumer is still blocked
+
+A live Ubuntu 24.04 AWG -> Mihomo gateway showed a subtle validation failure. Mihomo DNS
+was healthy on the host and answered via the Docker bridge address, but the AWG container
+timed out because UFW's incoming policy blocked container -> host port 53. Adding narrow
+UDP and TCP allowances for the actual Docker bridge/subnet restored both DNS and HTTPS.
+
+This is distinct from the earlier SE2 uninstall-residue case: here the gateway was still
+active and the host service itself was healthy. The missing contract was firewall
+reachability between an externally owned container and a host service introduced into its
+runtime dependency chain.
+
+**Rule:** if Bootstrap makes one component depend on another across a firewall boundary,
+validation must originate from the real consumer side. The firewall allowance, if needed,
+is an owned transactional resource: discover -> plan -> backup/record ownership -> apply ->
+validate from the consumer -> rollback only the owned rule. Host-local success must never
+stand in for end-to-end reachability.
+
+The same host also carried a stale watchdog that treated `lookup mihomo` as different from
+`lookup 100` and restarted routing every minute. Replacing it with alias-aware semantic
+checks eliminated the loop. **Rule:** parse/compare effective routing state, not a single
+human-readable rendering of an iproute2 table identifier.
