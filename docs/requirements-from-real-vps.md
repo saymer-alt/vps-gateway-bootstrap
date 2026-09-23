@@ -148,6 +148,31 @@ A system that works immediately after installation but loses firewall, routing, 
 
 Requirement: production validation must include boot persistence and, where feasible, an actual reboot validation stage.
 
+### 17. Gateway integration must track ownership before mutation
+
+A live SE2 audit on 2026-09-23 found legacy residue after an older AWG -> Mihomo gateway removal:
+an installer-created Docker DNS override, `100 mihomo` registration and installer-era Mihomo
+configuration changes survived after the routing services/rules were gone. The Docker DNS residue
+caused real container DNS timeouts until it was removed.
+
+Related projects now have distinct roles:
+
+```text
+link-generators          -> desired Mihomo VPS-Gateway YAML
+amnezia-mihomo-gateway  -> current host-side AWG -> Mihomo integration
+vps-gateway-bootstrap   -> future discovery/ownership/orchestration layer
+```
+
+Requirement: Bootstrap must not reproduce the legacy "patch and later guess what to undo" model.
+For AWG/Mihomo integration it must discover or record pre-change state and ownership for at least
+Mihomo config, Docker daemon configuration, routing-table registrations, policy rules, generated
+units/files, resolver state and relevant sysctl values. Uninstall/repair may remove or restore only
+resources proven OWNED. Existing generator output is desired configuration input, not ownership proof.
+
+The current `amnezia-mihomo-gateway` stable installer has begun tracking ownership/pre-install
+metadata, while its new automatic rollback remains gated on a disposable-VPS test. Treat that live
+audit as design evidence, not as an implementation template.
+
 ## Production readiness gate
 
 A server is considered ready only when the effective runtime path has been validated.

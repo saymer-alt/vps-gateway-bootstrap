@@ -239,15 +239,25 @@ Implement modules in dependency order.
 
 This is intentionally separate from base installation.
 
+Cross-project inputs/evidence:
+- `link-generators` owns generation of the desired Mihomo VPS-Gateway YAML profile;
+- `amnezia-mihomo-gateway` is the current live host-side integration and provides real routing/rollback evidence;
+- Bootstrap must discover, model ownership and orchestrate state rather than duplicate either project's ad-hoc behavior.
+
 - [ ] Detect Amnezia installation
 - [ ] Discover container/interface/network topology
 - [ ] Detect AWG client subnet
 - [ ] Detect external interface
+- [ ] Detect existing Mihomo config/runtime and distinguish desired config from owned host state
 - [ ] Detect existing policy routing
+- [ ] Detect Docker daemon DNS/config ownership
+- [ ] Detect named routing-table ownership/conflicts
+- [ ] Snapshot resolver and relevant sysctl state before mutation
 - [ ] Detect conflicts
 - [ ] Offer explicit integration mode
 - [ ] Configure NAT/policy routing only when topology is understood
 - [ ] Validate end-to-end path
+- [ ] Validate uninstall/rollback boundaries against recorded ownership
 - [ ] Refuse to guess unknown topology
 
 Command target:
