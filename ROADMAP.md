@@ -251,13 +251,16 @@ Cross-project inputs/evidence:
 - [ ] Detect existing Mihomo config/runtime and distinguish desired config from owned host state
 - [ ] Detect existing policy routing
 - [ ] Detect Docker daemon DNS/config ownership
+- [ ] Detect container -> host DNS/service dependencies and firewall reachability
 - [ ] Detect named routing-table ownership/conflicts
-- [ ] Snapshot resolver and relevant sysctl state before mutation
+- [ ] Snapshot resolver, firewall rules and relevant sysctl state before mutation
 - [ ] Detect conflicts
 - [ ] Offer explicit integration mode
 - [ ] Configure NAT/policy routing only when topology is understood
+- [ ] Create only minimal owned firewall allowances required by discovered host-service dependencies
+- [ ] Validate DNS/service reachability from inside the actual AWG container
 - [ ] Validate end-to-end path
-- [ ] Validate uninstall/rollback boundaries against recorded ownership
+- [ ] Validate uninstall/rollback boundaries against recorded ownership, including firewall rules
 - [ ] Refuse to guess unknown topology
 
 Command target:
@@ -337,6 +340,7 @@ The test suite should include more than a clean VPS.
 
 - [ ] Docker already installed
 - [ ] UFW already configured
+- [ ] UFW default deny incoming with Docker container -> host DNS dependency
 - [ ] SSH on port 22
 - [ ] SSH via socket activation
 - [ ] Existing routing rules
@@ -355,6 +359,7 @@ The test suite should include more than a clean VPS.
 - [ ] Invalid Mihomo configuration
 - [ ] Failed service start
 - [ ] Firewall validation failure
+- [ ] Host DNS works locally but consumer container is blocked by firewall
 - [ ] SSH validation failure
 - [ ] Reboot persistence failure
 - [ ] Interrupted installation

@@ -173,6 +173,27 @@ The current `amnezia-mihomo-gateway` stable installer has begun tracking ownersh
 metadata, while its new automatic rollback remains gated on a disposable-VPS test. Treat that live
 audit as design evidence, not as an implementation template.
 
+### 18. Host DNS reachability is part of the gateway transaction
+
+A second live audit on 2026-09-23 inspected an Ubuntu 24.04 gateway while the older
+AWG -> Mihomo integration was still active. Mihomo listened on host TCP/UDP port 53,
+and host-side queries to both loopback and the Docker bridge gateway succeeded. The AWG
+container still could not resolve names because UFW used default incoming deny and no
+rule allowed the Docker bridge/subnet to reach the host DNS listener. Narrow UDP+TCP
+port-53 allowances from the Docker bridge/subnet to the host bridge address immediately
+restored container DNS and HTTPS.
+
+Requirement: when orchestration makes a container depend on a host service, reachability
+through the host firewall is part of the same planned transaction. Bootstrap must discover
+the actual bridge/subnet, service bind address/port, firewall backend and pre-existing rules;
+plan only the minimum required allowance; record ownership; validate from inside the real
+consumer container; and roll back only the rule it can prove it created. A successful
+host-local probe is not sufficient end-to-end validation.
+
+The same audit also reconfirmed that iproute2 may render table 100 by name (`lookup mihomo`)
+rather than number (`lookup 100`). Any health/repair logic must compare routing semantics,
+not one textual rendering.
+
 ## Production readiness gate
 
 A server is considered ready only when the effective runtime path has been validated.
