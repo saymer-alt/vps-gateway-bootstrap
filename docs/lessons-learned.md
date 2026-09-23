@@ -213,3 +213,25 @@ The same host also carried a stale watchdog that treated `lookup mihomo` as diff
 `lookup 100` and restarted routing every minute. Replacing it with alias-aware semantic
 checks eliminated the loop. **Rule:** parse/compare effective routing state, not a single
 human-readable rendering of an iproute2 table identifier.
+
+## 24. Logging is a bounded resource on small VPS
+
+A live Saymer3 audit on 2026-09-23 showed two independent ways a small gateway can
+lose disk space to logs. First, a stale WARP watchdog was firing about once per minute,
+mis-detecting a healthy named routing table and producing a systemd failure/restart loop.
+Second, a custom logrotate stanza duplicated the distro rsyslog/UFW log ownership, so
+`logrotate.service` itself failed with `duplicate log entry`. The operator had recently
+seen more than 3 GB of low-value logs consume space on a small VPS disk.
+
+The repair had two layers: fix the noisy producer first, then put an explicit storage
+budget around logging. On Saymer3, successful watchdog checks were reduced to a 5-minute
+cadence, rsyslog/UFW rotation was restored as daily with four retained rotations, and
+journald was bounded to 128 MiB / 7 days while preserving at least 1 GiB of free space.
+After applying the journal limits, reported journal usage was 104.9 MiB.
+
+**Rule:** logging capacity is part of production resource management. Discovery/validation
+must include logrotate health, journal disk usage and failed high-frequency timers/services.
+A bootstrap should never rely on rotation alone to mask a restart/error loop: repair the
+producer, verify `logrotate -d` has no duplicate ownership, and enforce an explicit
+journald size/retention/free-space budget appropriate to the host.
+
