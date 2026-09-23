@@ -173,3 +173,21 @@ and the state was persisted.
   commands.
 - Report failures with the concrete action error; a bare stage name hid the
   real cause during experiment #1.
+
+## 22. Rollback needs ownership evidence before mutation
+
+A live SE2 audit on 2026-09-23 exposed a failure pattern in the older
+`amnezia-mihomo-gateway` workflow: after gateway removal, an installer-created
+Docker DNS override, the `100 mihomo` routing-table registration and installer-era
+Mihomo config changes could remain behind. The Docker DNS residue caused real
+container resolution failures until it was removed.
+
+The important lesson is broader than that repository. `link-generators` can define a
+desired Mihomo VPS-Gateway configuration, and `amnezia-mihomo-gateway` can provide the
+current integration mechanics, but neither a file name nor a familiar value proves that
+Bootstrap owns the live resource.
+
+**Rule:** before AWG/Mihomo integration mutates system-wide state, Bootstrap must discover
+or record the exact pre-change state and ownership. Repair/uninstall may restore only
+resources proven OWNED; generator output is desired-state input, never ownership proof.
+
