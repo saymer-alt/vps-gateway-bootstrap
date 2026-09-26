@@ -280,6 +280,28 @@ future validation should compare the two paths under the same endpoint,
 client, transport and load before attributing a specific performance gain to
 one mechanism.
 
+
+
+Validation evidence from the same test:
+- browser public IPv4 was `104.28.225.220` (Cloudflare, Stockholm), not the VPS
+  public address `95.85.224.104`;
+- no forwarded IP was detected by the leak-test page;
+- IPv6 connectivity from the browser was not reachable, so no separate public
+  client IPv6 address was exposed in that test;
+- DNS resolution was observed through xTom/dns.sb and WoodyNet resolvers in
+  Frankfurt, including `147.78.178.170`, `185.222.218.53`,
+  `45.80.188.142`, `45.80.188.71`, `74.63.24.206` and
+  `74.63.24.211`, plus IPv6 resolver addresses from the same resolver
+  infrastructure;
+- no ISP DNS and no VPS-host DNS address appeared in the reported resolver set.
+
+These observations support the intended end-to-end path for this deployment:
+application traffic exited through the selected Mihomo/Cloudflare path while
+DNS requests were also resolved away from the client ISP. DNS egress location
+did not match HTTP egress location (Frankfurt resolvers vs Stockholm public
+IP), which is acceptable: resolver location and application egress are
+independent properties and must be validated separately.
+
 **Rule:** when an ingress application can explicitly route its own AWG traffic
 to Mihomo and end-to-end validation proves the intended external IP, prefer
 that application-level chain over adding host-wide NAT/policy-routing state.
