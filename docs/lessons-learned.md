@@ -235,3 +235,54 @@ A bootstrap should never rely on rotation alone to mask a restart/error loop: re
 producer, verify `logrotate -d` has no duplicate ownership, and enforce an explicit
 journald size/retention/free-space budget appropriate to the host.
 
+
+
+## 25. Prefer application-level AWG -> Mihomo chaining when the ingress already supports it
+
+A live Ubuntu 24.04 VPS test on 2026-09-26 used an AmneziaWG 3.1 inbound created
+directly in 3X-UI/Xray and routed that inbound to Mihomo without the older
+host-level AWG interception path. End-to-end external-IP testing showed the
+Mihomo egress address rather than the VPS public address, so the target service
+saw the selected Mihomo upstream as the traffic source.
+
+In this topology the data path is conceptually:
+
+```text
+AWG client
+   ↓
+3X-UI / Xray AWG inbound
+   ↓
+Mihomo
+   ↓
+selected upstream
+   ↓
+Internet
+```
+
+rather than:
+
+```text
+AWG client
+   ↓
+host NAT / marking / policy routing
+   ↓
+Mihomo
+   ↓
+selected upstream
+   ↓
+Internet
+```
+
+The operator also observed higher throughput with the direct 3X-UI/Xray ->
+Mihomo path than with the previous host-routing integration on this VPS. This
+is an operational observation from one deployment, not a universal benchmark:
+future validation should compare the two paths under the same endpoint,
+client, transport and load before attributing a specific performance gain to
+one mechanism.
+
+**Rule:** when an ingress application can explicitly route its own AWG traffic
+to Mihomo and end-to-end validation proves the intended external IP, prefer
+that application-level chain over adding host-wide NAT/policy-routing state.
+Use host-level AWG interception only for topologies that actually require it.
+Bootstrap should discover and validate the selected mode instead of assuming
+that every AWG deployment needs system routing integration.
