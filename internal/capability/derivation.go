@@ -188,7 +188,7 @@ func DeriveSysctlApply(keys []SysctlKey) (CapabilityID, error) {
 	}
 	normalized := sortedUniqueCopy(len(keys), func(i int) string { return string(keys[i]) })
 	for _, key := range normalized {
-		if err := checkSysctlKey(key); err != nil {
+		if err := CheckSysctlKey(key); err != nil {
 			return "", fmt.Errorf("sysctl key %q: %v", key, err)
 		}
 	}
@@ -250,7 +250,7 @@ func DeriveFirewallMSSClamp(ifaces []string) (CapabilityID, error) {
 	}
 	normalized := sortedUniqueCopy(len(ifaces), func(i int) string { return ifaces[i] })
 	for _, iface := range normalized {
-		if err := validateIfaceName(iface); err != nil {
+		if err := ValidInterfaceName(iface); err != nil {
 			return "", fmt.Errorf("interface %q: %v", iface, err)
 		}
 	}

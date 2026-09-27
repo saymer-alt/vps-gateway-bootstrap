@@ -191,11 +191,11 @@ func serialize(name string, spec capSpec, values map[string]string) string {
 func validateValue(kind paramKind, val string) error {
 	switch kind {
 	case paramKeySet:
-		return validateSortedSet(val, checkSysctlKey)
+		return validateSortedSet(val, CheckSysctlKey)
 	case paramChainSet:
 		return validateSortedSet(val, validateChainName)
 	case paramIfaceSet:
-		return validateSortedSet(val, validateIfaceName)
+		return validateSortedSet(val, ValidInterfaceName)
 	case paramTable:
 		return validateTableNumber(val)
 	case paramSelector:
@@ -207,11 +207,11 @@ func validateValue(kind paramKind, val string) error {
 	}
 }
 
-// checkSysctlKey validates one element of the sysctl keys parameter against
+// CheckSysctlKey validates one element of the sysctl keys parameter against
 // the compiled v1 allowlist: the static keys, plus interface-scoped keys of
 // the compiled families with a strictly validated interface part. Shared by
 // canonicalization (C1) and typed derivation (C2).
-func checkSysctlKey(key string) error {
+func CheckSysctlKey(key string) error {
 	if compiledSysctlKeys[key] {
 		return nil
 	}
@@ -219,13 +219,13 @@ func checkSysctlKey(key string) error {
 		if iface == "all" || iface == "default" {
 			return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
 		}
-		return validateIfaceName(iface)
+		return ValidInterfaceName(iface)
 	}
 	if iface, ok := scopedSysctlIface(key, "net.ipv6.conf.", ".disable_ipv6"); ok {
 		if iface == "all" || iface == "default" {
 			return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
 		}
-		return validateIfaceName(iface)
+		return ValidInterfaceName(iface)
 	}
 	return errors.New("key is outside the compiled v1 sysctl allowlist")
 }
@@ -270,10 +270,10 @@ func scopedSysctlIface(key, prefix, suffix string) (string, bool) {
 	return iface, true
 }
 
-// validateIfaceName accepts a strict subset of Linux interface names: 1..15
+// ValidInterfaceName accepts a strict subset of Linux interface names: 1..15
 // bytes (IFNAMSIZ-1), [a-z0-9._-], no leading or trailing separator, and not
 // the "." or ".." path forms.
-func validateIfaceName(name string) error {
+func ValidInterfaceName(name string) error {
 	if len(name) < 1 || len(name) > 15 {
 		return fmt.Errorf("interface name %q must be 1..15 bytes", name)
 	}
