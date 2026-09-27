@@ -262,28 +262,77 @@ func fmtAny(v any) string {
 func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 	if p, err := c.lookPath("ufw"); err == nil {
 		r.Firewall.UFW.Installed = true
-		if s := text(c, ctx, p, "status"); strings.Contains(s, "Status: active") {
-			r.Firewall.UFW.Active = true
+		// `status verbose` carries both the active flag and the Default
+		// policy line, so one invocation serves both observations.
+		out, e := output(c, ctx, p, "status", "verbose")
+		if e != nil {
+			addObservation(&r.Unknowns, "FIREWALL_UFW_UNKNOWN", "firewall", e.Error())
+		} else {
+			if strings.Contains(string(out), "Status: active") {
+				r.Firewall.UFW.Active = true
+			}
+			policies, perr := parseUFUPolicies(string(out))
+			if perr != nil {
+				addObservation(&r.Unknowns, "FIREWALL_UFW_UNKNOWN", "firewall", "parse: "+perr.Error())
+			} else if r.Firewall.UFW.Active && len(policies) == 0 {
+				addObservation(&r.Unknowns, "FIREWALL_UFW_UNKNOWN", "firewall", "no Default policy line in ufw status verbose output")
+			} else {
+				for hook, policy := range policies {
+					setEffectivePolicy(r, "ufw", hook, policy)
+				}
+			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "ufw")
 	}
 	if p, err := c.lookPath("nft"); err == nil {
 		r.Firewall.NFTables.Installed = true
-		if _, e := output(c, ctx, p, "list", "ruleset"); e == nil {
+		out, e := output(c, ctx, p, "list", "ruleset")
+		if e != nil {
+			addObservation(&r.Unknowns, "FIREWALL_NFTABLES_UNKNOWN", "firewall", e.Error())
+		} else {
 			r.Firewall.NFTables.Active = true
+			policies, ambiguous := parseNftPolicies(string(out))
+			for hook, policy := range policies {
+				setEffectivePolicy(r, "nftables", hook, policy)
+			}
+			for hook, toks := range ambiguous {
+				addObservation(&r.Unknowns, "FIREWALL_NFTABLES_UNKNOWN", "firewall",
+					"multiple base chains for hook "+hook+" disagree ("+strings.Join(toks, ", ")+"); the effective policy is not a single value")
+			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "nftables")
 	}
 	if p, err := c.lookPath("iptables"); err == nil {
 		r.Firewall.IPTables.Installed = true
-		if _, e := output(c, ctx, p, "-S"); e == nil {
+		out, e := output(c, ctx, p, "-S")
+		if e != nil {
+			addObservation(&r.Unknowns, "FIREWALL_IPTABLES_UNKNOWN", "firewall", e.Error())
+		} else {
 			r.Firewall.IPTables.Active = true
+			policies, perr := parseIptablesPolicies(string(out))
+			if perr != nil {
+				addObservation(&r.Unknowns, "FIREWALL_IPTABLES_UNKNOWN", "firewall", "parse: "+perr.Error())
+			} else {
+				for hook, policy := range policies {
+					setEffectivePolicy(r, "iptables", hook, policy)
+				}
+			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "iptables")
 	}
 	if len(r.Firewall.Layers) == 0 {
 		addObservation(&r.Unknowns, "FIREWALL_UNKNOWN", "firewall", "no supported firewall frontend detected")
 	}
+}
+
+// setEffectivePolicy records one layer's observed policy in the reserved
+// Firewall.Effective view under the layer-prefixed key, so coexisting
+// layers never silently override one another.
+func setEffectivePolicy(r *Result, layer, hook, policy string) {
+	if r.Firewall.Effective == nil {
+		r.Firewall.Effective = map[string]string{}
+	}
+	r.Firewall.Effective[layer+"."+hook+"_policy"] = policy
 }
 
 func (c *Collector) collectSSH(ctx context.Context, r *Result) {
