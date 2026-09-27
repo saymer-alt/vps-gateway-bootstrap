@@ -191,24 +191,7 @@ func serialize(name string, spec capSpec, values map[string]string) string {
 func validateValue(kind paramKind, val string) error {
 	switch kind {
 	case paramKeySet:
-		return validateSortedSet(val, func(elem string) error {
-			if compiledSysctlKeys[elem] {
-				return nil
-			}
-			if iface, ok := scopedSysctlIface(elem, "net.ipv4.conf.", ".rp_filter"); ok {
-				if iface == "all" || iface == "default" {
-					return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
-				}
-				return validateIfaceName(iface)
-			}
-			if iface, ok := scopedSysctlIface(elem, "net.ipv6.conf.", ".disable_ipv6"); ok {
-				if iface == "all" || iface == "default" {
-					return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
-				}
-				return validateIfaceName(iface)
-			}
-			return errors.New("key is outside the compiled v1 sysctl allowlist")
-		})
+		return validateSortedSet(val, checkSysctlKey)
 	case paramChainSet:
 		return validateSortedSet(val, validateChainName)
 	case paramIfaceSet:
@@ -222,6 +205,29 @@ func validateValue(kind paramKind, val string) error {
 	default:
 		return errors.New("unknown parameter kind")
 	}
+}
+
+// checkSysctlKey validates one element of the sysctl keys parameter against
+// the compiled v1 allowlist: the static keys, plus interface-scoped keys of
+// the compiled families with a strictly validated interface part. Shared by
+// canonicalization (C1) and typed derivation (C2).
+func checkSysctlKey(key string) error {
+	if compiledSysctlKeys[key] {
+		return nil
+	}
+	if iface, ok := scopedSysctlIface(key, "net.ipv4.conf.", ".rp_filter"); ok {
+		if iface == "all" || iface == "default" {
+			return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
+		}
+		return validateIfaceName(iface)
+	}
+	if iface, ok := scopedSysctlIface(key, "net.ipv6.conf.", ".disable_ipv6"); ok {
+		if iface == "all" || iface == "default" {
+			return errors.New("interface-scoped form is reserved for per-interface keys; use the compiled static key")
+		}
+		return validateIfaceName(iface)
+	}
+	return errors.New("key is outside the compiled v1 sysctl allowlist")
 }
 
 // validateSortedSet requires a comma list whose elements each pass check and
@@ -344,11 +350,7 @@ func validateTableNumber(val string) error {
 	return nil
 }
 
-// validateSelector accepts the canonical IPv4 CIDR form with the NIGHT-12
-// safety subset: masked canonical form (no host bits), IPv4 only (no IPv6,
-// no IPv4-mapped IPv6), and never /0, unspecified, loopback, multicast or
-// link-local — the same acceptance set as the MUVG config layer's selector
-// validation, so capability and config can never disagree.
+// validateSelector parses val as a CIDR and applies checkSelectorPrefix.
 func validateSelector(val string) error {
 	prefix, err := netip.ParsePrefix(val)
 	if err != nil {
@@ -357,11 +359,21 @@ func validateSelector(val string) error {
 		}
 		return fmt.Errorf("selector %q is not a valid CIDR", val)
 	}
+	return checkSelectorPrefix(prefix)
+}
+
+// checkSelectorPrefix applies the canonical IPv4 CIDR rules with the NIGHT-12
+// safety subset: masked canonical form (no host bits), IPv4 only (no IPv6, no
+// IPv4-mapped IPv6), and never /0, unspecified, loopback, multicast or
+// link-local — the same acceptance set as the MUVG config layer's selector
+// validation, so capability and config can never disagree. Shared by
+// canonicalization (C1) and typed derivation (C2).
+func checkSelectorPrefix(prefix netip.Prefix) error {
 	if !prefix.Addr().Is4() || prefix.Addr().Is4In6() {
 		return errors.New("IPv6 is outside MUVG v1 scope")
 	}
 	if prefix.Masked() != prefix {
-		return fmt.Errorf("selector %q has host bits set; use the canonical form", val)
+		return fmt.Errorf("selector %q has host bits set; use the canonical form", prefix.String())
 	}
 	if prefix.Bits() <= 0 {
 		return errors.New("0.0.0.0/0 is not a valid MUVG source selector")
