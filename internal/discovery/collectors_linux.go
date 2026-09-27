@@ -299,10 +299,15 @@ func (c *Collector) collectSSH(ctx context.Context, r *Result) {
 	} else {
 		r.SSH.Architecture = "service"
 	}
-	for _, l := range listeners(c, ctx) {
-		if l.Protocol == "tcp" && l.Service == "sshd" {
-			r.SSH.Listeners = append(r.SSH.Listeners, l)
-			r.SSH.EffectivePorts = appendUnique(r.SSH.EffectivePorts, l.Port)
+	ls, err := listeners(c, ctx)
+	if err != nil {
+		addObservation(&r.Unknowns, "SSH_LISTENERS_UNKNOWN", "ssh", err.Error())
+	} else {
+		for _, l := range ls {
+			if l.Protocol == "tcp" && l.Service == "sshd" {
+				r.SSH.Listeners = append(r.SSH.Listeners, l)
+				r.SSH.EffectivePorts = appendUnique(r.SSH.EffectivePorts, l.Port)
+			}
 		}
 	}
 }
@@ -368,13 +373,21 @@ func (c *Collector) collectServices(ctx context.Context, r *Result) {
 }
 
 func (c *Collector) collectPorts(ctx context.Context, r *Result) {
-	r.Ports = listeners(c, ctx)
+	ls, err := listeners(c, ctx)
+	if err != nil {
+		addObservation(&r.Unknowns, "PORTS_UNKNOWN", "ports", err.Error())
+		return
+	}
+	r.Ports = ls
 }
 
-func listeners(c *Collector, ctx context.Context) []Listener {
+// listeners returns the TCP listener inventory from `ss -H -lntp`. A command
+// failure is returned as an error, never as an empty inventory: the caller
+// must record an explicit UNKNOWN observation (UNKNOWN != absent).
+func listeners(c *Collector, ctx context.Context) ([]Listener, error) {
 	out, err := output(c, ctx, "ss", "-H", "-lntp")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var result []Listener
 	for _, line := range strings.Split(string(out), "\n") {
@@ -392,7 +405,7 @@ func listeners(c *Collector, ctx context.Context) []Listener {
 		}
 		result = append(result, p)
 	}
-	return result
+	return result, nil
 }
 
 func splitEndpoint(s string) (string, int) {

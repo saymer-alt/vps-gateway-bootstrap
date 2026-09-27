@@ -45,7 +45,10 @@ func routeTableName(id int) string {
 
 func (c *Collector) collectExtendedPorts(ctx context.Context, r *Result) {
 	out, err := output(c, ctx, "ss", "-H", "-lnup")
-	if err != nil { return }
+	if err != nil {
+		addObservation(&r.Unknowns, "PORTS_UDP_UNKNOWN", "ports", err.Error())
+		return
+	}
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 4 { continue }
