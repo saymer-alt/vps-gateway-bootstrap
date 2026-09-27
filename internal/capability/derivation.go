@@ -65,10 +65,11 @@ type SysctlKey string
 // project chains must carry the compiled chain prefix and the tag must carry
 // the compiled tag prefix. The exact names remain subject to the
 // namespace-naming decision (L1); changing these constants is a one-line,
-// tests-pinned change.
+// tests-pinned change. Exported so the ownership/namespace layers (NIGHT-15
+// O1, NIGHT-18) validate against the single compiled source of truth.
 const (
-	projectChainPrefix = "vpsgw_"
-	projectTagPrefix   = "muvg"
+	ProjectChainPrefix = "vpsgw_"
+	ProjectTagPrefix   = "muvg"
 )
 
 // CapabilitySpec is the typed per-action derivation input. Fields that are
@@ -228,15 +229,15 @@ func DeriveFirewallTagged(chains []string, tag string) (CapabilityID, error) {
 		if err := validateChainName(chain); err != nil {
 			return "", fmt.Errorf("chain %q: %v", chain, err)
 		}
-		if !strings.HasPrefix(chain, projectChainPrefix) {
-			return "", fmt.Errorf("chain %q is outside the compiled project namespace (%q prefix)", chain, projectChainPrefix)
+		if !strings.HasPrefix(chain, ProjectChainPrefix) {
+			return "", fmt.Errorf("chain %q is outside the compiled project namespace (%q prefix)", chain, ProjectChainPrefix)
 		}
 	}
 	if err := validateTag(tag); err != nil {
 		return "", fmt.Errorf("tag %q: %v", tag, err)
 	}
-	if !strings.HasPrefix(tag, projectTagPrefix) {
-		return "", fmt.Errorf("tag %q is outside the compiled project namespace (%q prefix)", tag, projectTagPrefix)
+	if !strings.HasPrefix(tag, ProjectTagPrefix) {
+		return "", fmt.Errorf("tag %q is outside the compiled project namespace (%q prefix)", tag, ProjectTagPrefix)
 	}
 	return ParseCapability("muvg.firewall.tagged.v1;chains=" + strings.Join(normalized, ",") + ";tag=" + tag)
 }
