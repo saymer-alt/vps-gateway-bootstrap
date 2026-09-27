@@ -30,7 +30,23 @@ func (c *Collector) collectDocker(ctx context.Context, r *Result) {
 		return out
 	}())
 	for _, x := range containers {
-		r.Docker.Containers = append(r.Docker.Containers, Container{ID: x.ID, Name: x.Names, Image: x.Image, State: x.State, Status: x.Status, Ports: splitCSV(x.Ports)})
+		container := Container{ID: x.ID, Name: x.Names, Image: x.Image, State: x.State, Status: x.Status, Ports: splitCSV(x.Ports)}
+		for _, tok := range container.Ports {
+			pp, kind, perr := parseDockerPort(tok)
+			switch kind {
+			case portPublished:
+				container.PublishedPorts = append(container.PublishedPorts, pp)
+			case portRange:
+				// A range mapping is a positively observed fact that the
+				// single-pair model cannot represent; keep it visible.
+				addObservation(&r.Observations, "DOCKER_PORT_RANGE_OBSERVED", "docker", "container "+x.Names+": "+tok)
+			case portExposed:
+				// not published to the host; stays in the raw Ports rendering
+			default:
+				addObservation(&r.Unknowns, "DOCKER_PORTS_UNKNOWN", "docker", "container "+x.Names+": "+perr.Error())
+			}
+		}
+		r.Docker.Containers = append(r.Docker.Containers, container)
 	}
 	for _, m := range containerMalformed {
 		addObservation(&r.Unknowns, "DOCKER_CONTAINERS_UNKNOWN", "docker", "container listing: "+m)
@@ -53,6 +69,49 @@ func (c *Collector) collectDocker(ctx context.Context, r *Result) {
 	}
 	for _, m := range networkMalformed {
 		addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", "network listing: "+m)
+	}
+
+	// Populate the typed subnet/gateway view: one inspect for every
+	// listed network with a name that is safe as a single argv element
+	// (the command is compiled; the operands are identifiers this
+	// collector listed moments earlier). Names rejected by the validator
+	// and listing/inspect mismatches are surfaced, never guessed around.
+	args := make([]string, 0, len(r.Docker.Networks)+2)
+	args = append(args, "network", "inspect")
+	skipped := map[string]bool{}
+	for _, n := range r.Docker.Networks {
+		if validDockerNetworkName(n.Name) {
+			args = append(args, n.Name)
+		} else {
+			skipped[n.Name] = true
+			addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("skipping network with unexpected name %q from inspect", n.Name))
+		}
+	}
+	if len(args) > 2 {
+		out, e := output(c, ctx, p, args...)
+		if e != nil {
+			addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", e.Error())
+		} else {
+			ipam, ambiguous, seen, perr := parseDockerNetworkInspect(out)
+			if perr != nil {
+				addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", "parse: "+perr.Error())
+			} else {
+				for i := range r.Docker.Networks {
+					if cfg, ok := ipam[r.Docker.Networks[i].Name]; ok {
+						r.Docker.Networks[i].Subnet = cfg.Subnet
+						r.Docker.Networks[i].Gateway = cfg.Gateway
+					}
+				}
+				for name, count := range ambiguous {
+					addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("network %q has %d IPAM configurations; the single-subnet model cannot represent it", name, count))
+				}
+				for _, n := range r.Docker.Networks {
+					if _, wasSeen := seen[n.Name]; !wasSeen && !skipped[n.Name] {
+						addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("network %q was listed but is absent from the inspect output", n.Name))
+					}
+				}
+			}
+		}
 	}
 }
 

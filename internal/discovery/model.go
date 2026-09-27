@@ -132,7 +132,14 @@ type Listener struct { Address string `json:"address"`; Port int `json:"port"`; 
 type Service struct { Name string `json:"name"`; Exists bool `json:"exists"`; Enabled bool `json:"enabled"`; Active bool `json:"active"`; SubState string `json:"substate"` }
 
 type Docker struct { Installed bool `json:"installed"`; Active bool `json:"active"`; Version string `json:"version,omitempty"`; Containers []Container `json:"containers"`; Networks []DockerNetwork `json:"networks"` }
-type Container struct { ID string `json:"id"`; Name string `json:"name"`; Image string `json:"image"`; State string `json:"state"`; Status string `json:"status"`; Ports []string `json:"ports"` }
+type Container struct { ID string `json:"id"`; Name string `json:"name"`; Image string `json:"image"`; State string `json:"state"`; Status string `json:"status"`; Ports []string `json:"ports"`; PublishedPorts []PublishedPort `json:"published_ports,omitempty"` }
+
+// PublishedPort is the typed normalization of one published container
+// port mapping (docs/discovery-schema.md: host_address, host_port,
+// container_port, protocol). Exposed-only ports and range mappings are
+// not single host:port pairs: they stay in the raw Ports rendering and
+// the collector surfaces them as observations instead of guessing.
+type PublishedPort struct { HostAddress string `json:"host_address,omitempty"`; HostPort int `json:"host_port,omitempty"`; ContainerPort int `json:"container_port"`; Protocol string `json:"protocol"` }
 type DockerNetwork struct { ID string `json:"id"`; Name string `json:"name"`; Driver string `json:"driver"`; Subnet string `json:"subnet,omitempty"`; Gateway string `json:"gateway,omitempty"` }
 
 type Gateway struct { Mihomo Component `json:"mihomo"`; Mieru Component `json:"mieru"`; WireGuard Component `json:"wireguard"`; Amnezia Component `json:"amnezia"` }
