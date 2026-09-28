@@ -53,9 +53,26 @@ service restart). Points preserved for verification:
 verification of exploitability and severity in the current pinned-CLI
 context.
 
+**Status update (2026-09-28, ZAI-02/ZAI-03):** the `--lock` half of this
+finding was independently verified (ZAI-02, confirmed end to end against
+the code) and corrected in this repository: the `apply` CLI no longer
+accepts a lock-path flag, so the sanctioned apply path uses only the
+compiled project lock identity (`/etc/vps-gateway/apply.lock`), lock
+lifecycle writes are no longer caller-directable, and two invocations can
+no longer bypass mutual exclusion by choosing different lock files.
+Provenance: CODEX-01 raised the finding; ZAI-02 verified it; the ZAI-03
+containment commit corrected the bounded lock issue, with regression tests
+pinning the refusal of lock-path selection, sentinel preservation, the
+shared compiled identity, and fail-closed behavior when the lock is held
+(`TestExecuteBlockedWhenLockHeld`). Finding B (`--state`) is a separate,
+still-pending defect and was deliberately NOT changed in the same task:
+its write primitive (atomic verified-state replace), gate timing
+(post-validation only), and failure modes are independent of the lock
+mechanism.
+
 ## B. State-path concern (current path — keep separate from A)
 
-`--state` (`apply.go:110-112`, `:140`) is recorded separately from `--lock`
+`--state` (`apply.go:110-113`, `:136`) is recorded separately from `--lock`
 and must not be merged with it in conclusions. Future verification must
 determine, for the configured state path:
 

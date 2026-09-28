@@ -353,3 +353,57 @@ func TestApplyShowsActionErrorOnFailure(t *testing.T) {
 		t.Fatalf("stage missing: %s", out.String())
 	}
 }
+
+// Containment regression (ZAI-03): the CLI must not offer any lock-path
+// selection. `--lock` is not a recognized apply flag, so a caller cannot
+// redirect the mutation lock to an arbitrary destination, and the argument
+// is refused before any orchestrator work, confirmation, or mutation.
+func TestApplyRejectsArbitraryLockPath(t *testing.T) {
+	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
+	sentinel := filepath.Join(t.TempDir(), "sentinel.txt")
+	sentinelContent := []byte("do-not-touch\n")
+	if err := os.WriteFile(sentinel, sentinelContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t), "--lock", sentinel}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2 (unknown flag); output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "unknown apply flag") {
+		t.Fatalf("expected unknown-flag refusal, got: %s", out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("executor calls after lock-path refusal: %v", rec.calls)
+	}
+
+	// Sentinel preservation: the refused invocation must not have created,
+	// truncated, overwritten, or removed the file the caller named.
+	got, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatalf("sentinel file disturbed by refused invocation: %v", err)
+	}
+	if !bytes.Equal(got, sentinelContent) {
+		t.Fatalf("sentinel content changed: %q", got)
+	}
+}
+
+// Containment regression (ZAI-03): every production apply wiring resolves to
+// the same compiled project lock identity — two equivalent invocations share
+// one mutation lock, and the identity is the repository's compiled default,
+// not a caller choice. (The struct field stays overridable in-process for
+// test isolation; the CLI surface exposes no path to change it.)
+func TestApplyMutationLockIdentityIsSharedAndCompiled(t *testing.T) {
+	first := defaultApplyOrchestrator(time.Second)
+	second := defaultApplyOrchestrator(2 * time.Second)
+	if first.LockPath == "" || second.LockPath == "" {
+		t.Fatalf("lock identity must be non-empty: %q / %q", first.LockPath, second.LockPath)
+	}
+	if first.LockPath != orchestrate.DefaultLockPath || second.LockPath != orchestrate.DefaultLockPath {
+		t.Fatalf("lock identity drifted from the compiled project default: %q / %q", first.LockPath, second.LockPath)
+	}
+	if first.LockPath != second.LockPath {
+		t.Fatalf("equivalent apply invocations must share one mutation lock: %q vs %q", first.LockPath, second.LockPath)
+	}
+}
