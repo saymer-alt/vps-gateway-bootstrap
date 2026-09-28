@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -109,7 +110,34 @@ func parseRuleEntry(e map[string]any) (Rule, error) {
 		rule.Table = table
 		rule.TableRaw = tableRaw
 	}
+	// Selector/action keys outside the modeled subset (iif, oif, uidrange,
+	// ipproto, suppress_prefixlength, not, ...) are preserved as fail-closed
+	// evidence: this rule must not be evaluated as a plain from/to/fwmark
+	// rule downstream, because its real match semantics differ.
+	if extra := unmodeledKeys(e, modeledRuleKeys); len(extra) > 0 {
+		rule.Unmodeled = extra
+	}
 	return rule, nil
+}
+
+// modeledRuleKeys are the `ip -j rule show` keys the D1 evaluator fully
+// understands. Any other key in a rule entry is recorded on the rule.
+var modeledRuleKeys = []string{"priority", "from", "src", "srclen", "to", "dst", "dstlen", "fwmark", "fwmask", "table"}
+
+// unmodeledKeys returns the sorted keys of e that are not in modeled.
+func unmodeledKeys(e map[string]any, modeled []string) []string {
+	known := make(map[string]bool, len(modeled))
+	for _, k := range modeled {
+		known[k] = true
+	}
+	var out []string
+	for k := range e {
+		if !known[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 const selectorAll = "all"
@@ -256,6 +284,12 @@ func parseRouteEntry(e map[string]any) (Route, string, error) {
 			return route, "", fmt.Errorf("metric: must be a non-negative integer")
 		}
 		route.Metric = int(f)
+	}
+	// nexthop entries (ECMP/multipath) change which device actually egresses
+	// per packet; the top-level dev of such an entry is not the effective
+	// decision, so the route is flagged and never treated as single-path.
+	if _, present := e["nexthop"]; present {
+		route.Multipath = true
 	}
 	return route, tableRaw, nil
 }

@@ -166,7 +166,21 @@ const (
 	ReasonRouteWrongInterface  Reason = "ROUTE_WRONG_INTERFACE"
 	ReasonRouteStaleDevice     Reason = "ROUTE_STALE_DEVICE"
 	ReasonRouteTerminating     Reason = "ROUTE_TERMINATING"
-	ReasonTUNUncorrelated      Reason = "TUN_UNCORRELATED"
+	// ReasonRuleUnmodeledSemantics: a rule that provably matches on its
+	// modeled fields also carries unmodeled selector/action keys (iif,
+	// suppress_prefixlength, not, ...), so its real match semantics are not
+	// provable — the walk cannot continue on it.
+	ReasonRuleUnmodeledSemantics Reason = "RULE_UNMODELED_SEMANTICS"
+	// ReasonTableDefaultAmbiguous: the selected table has several default
+	// routes (or a multipath default) whose kernel-side winner cannot be
+	// proven from the inventory — first-parsed is not a proof.
+	ReasonTableDefaultAmbiguous Reason = "TABLE_DEFAULT_AMBIGUOUS"
+	// ReasonTableCompetingMoreSpecific: the selected table contains a
+	// more-specific route that can redirect some destinations away from the
+	// default's device, so a default-route claim cannot bound all IPv4
+	// destinations.
+	ReasonTableCompetingMoreSpecific Reason = "TABLE_COMPETING_MORE_SPECIFIC"
+	ReasonTUNUncorrelated            Reason = "TUN_UNCORRELATED"
 	ReasonAutoRouteEnabled     Reason = "AUTO_ROUTE_ENABLED"
 	ReasonAutoRouteUnknown     Reason = "AUTO_ROUTE_UNKNOWN"
 	ReasonInventoryUnknown     Reason = "INVENTORY_UNKNOWN"
@@ -266,6 +280,11 @@ func hasSelectorDiversion(in Input) bool {
 		if err != nil || !matches {
 			continue
 		}
+		// An unmodeled rule is not a proven diversion: its real match
+		// semantics differ from the modeled fields.
+		if len(rule.Unmodeled) > 0 {
+			continue
+		}
 		tableID, ok := resolveTable(rule, in.Routing.Tables)
 		if !ok {
 			continue
@@ -274,7 +293,7 @@ func hasSelectorDiversion(in Input) bool {
 		if !found {
 			continue
 		}
-		if def, kind := tableDefault(group); kind == defaultViaDevice && def.Device == in.TUN.Device {
+		if def, kind, ambiguous := tableDefault(group); !ambiguous && kind == defaultViaDevice && def.Device == in.TUN.Device {
 			return true
 		}
 	}
@@ -335,6 +354,10 @@ func walk(in Input, tunDevice string, excludedDevices map[string]bool) Assessmen
 			return unknown(ReasonAmbiguousRuleMatch, append(details, ruleCoordinate(rule))...)
 		}
 		if !matches {
+			// Provably non-matching on the modeled fields: unmodeled keys
+			// cannot make a rule match that the modeled fields exclude
+			// (from/to/fwmark are conjunctive selectors), so skipping is
+			// sound even for rules carrying unmodeled semantics.
 			continue
 		}
 		// Same-priority matching rules have no defined evaluation order
@@ -343,6 +366,12 @@ func walk(in Input, tunDevice string, excludedDevices map[string]bool) Assessmen
 			if m, err := ruleMatches(rules[j], in.Selector.CIDR); err == nil && m {
 				return unknown(ReasonAmbiguousRuleMatch, append(details, ruleCoordinate(rule), ruleCoordinate(rules[j]))...)
 			}
+		}
+		// The rule provably matches on its modeled fields but carries
+		// unmodeled selector/action keys: its real semantics may differ from
+		// the modeled match, so the walk cannot continue on it.
+		if len(rule.Unmodeled) > 0 {
+			return unknown(ReasonRuleUnmodeledSemantics, append(details, ruleCoordinate(rule))...)
 		}
 		tableID, ok := resolveTable(rule, in.Routing.Tables)
 		if !ok {
@@ -363,7 +392,10 @@ func walk(in Input, tunDevice string, excludedDevices map[string]bool) Assessmen
 			details = append(details, tableCoordinate(rule, tableID))
 			continue
 		}
-		def, kind := tableDefault(group)
+		def, kind, ambiguous := tableDefault(group)
+		if ambiguous {
+			return unknown(ReasonTableDefaultAmbiguous, append(details, tableCoordinate(rule, tableID), routeCoordinate(def, tableID))...)
+		}
 		switch kind {
 		case defaultViaDevice:
 			if excludedDevices[def.Device] {
@@ -372,6 +404,16 @@ func walk(in Input, tunDevice string, excludedDevices map[string]bool) Assessmen
 				continue
 			}
 			if def.Device == tunDevice {
+				// A more-specific route in the selected table can redirect
+				// destinations that match it away from the default's device:
+				// a default-route claim cannot bound all IPv4 destinations
+				// while such a route exists (terminating more-specifics drop
+				// instead of leaking and do not compete; routes via the TUN
+				// device keep traffic inside the TUN and do not compete).
+				if comp := competingMoreSpecific(group, tunDevice); comp != "" {
+					details = append(details, tableCoordinate(rule, tableID), comp, routeCoordinate(def, tableID), "device:"+def.Device)
+					return unknown(ReasonTableCompetingMoreSpecific, details...)
+				}
 				reasons = append(reasons, string(ReasonPathViaTUN))
 				details = append(details, routeCoordinate(def, tableID), "device:"+def.Device)
 				return safe(reasons, details)
@@ -439,25 +481,85 @@ const (
 	defaultTerminating
 )
 
-// tableDefault classifies the default route of one table: the first default
-// route in the table decides (a table has one effective default; multipath
-// defaults are outside the model and were rejected upstream by the strict
-// routing parser's all-or-nothing discipline). A device-ful unicast default
-// is classified by the caller against the correlated TUN device; terminating
-// types fail closed.
-func tableDefault(group discovery.RouteTable) (discovery.Route, defaultKind) {
+// tableDefault classifies the default route of one table. It is
+// deterministic-or-ambiguous, never first-parsed-wins: every default route in
+// the table is collected and classified, and the result is usable only when
+// every default agrees on the outcome (all terminating, or all device-ful
+// through one identical device). Differing devices, mixed kinds, unknown
+// default types, and multipath (nexthop) defaults are ambiguous — the
+// kernel-side winner cannot be proven from the inventory, so the caller must
+// fail closed. Multipath defaults are therefore also ambiguous: the top-level
+// device of a nexthop route is not the effective per-packet decision.
+func tableDefault(group discovery.RouteTable) (discovery.Route, defaultKind, bool) {
+	var candidates []discovery.Route
 	for _, r := range group.Routes {
-		if !isDefaultRoute(r) {
+		if isDefaultRoute(r) {
+			candidates = append(candidates, r)
+		}
+	}
+	if len(candidates) == 0 {
+		return discovery.Route{}, noDefault, false
+	}
+	terminating := 0
+	devices := map[string]bool{}
+	var firstDevice discovery.Route
+	for _, r := range candidates {
+		if r.Multipath {
+			return candidates[0], noDefault, true
+		}
+		switch {
+		case terminatingRouteTypes[r.Type]:
+			terminating++
+		case r.Type == "" || r.Type == "unicast":
+			if !devices[r.Device] {
+				devices[r.Device] = true
+				firstDevice = r
+			}
+		default:
+			// A default route of an unmodeled type: its forwarding semantics
+			// are not interpretable.
+			return candidates[0], noDefault, true
+		}
+	}
+	if terminating > 0 && len(devices) > 0 {
+		return candidates[0], noDefault, true
+	}
+	if terminating > 0 {
+		return candidates[0], defaultTerminating, false
+	}
+	if len(devices) > 1 {
+		return candidates[0], noDefault, true
+	}
+	return firstDevice, defaultViaDevice, false
+}
+
+// competingMoreSpecific reports evidence of the first more-specific route in
+// the table that can redirect destinations away from the default's device:
+// device-ful unicast routes through any other device, multipath routes
+// (unmodeled nexthop selection), and unmodeled route types. Terminating
+// types (blackhole/unreachable/prohibit) drop instead of leaking and do not
+// compete with the direct-leak claim; routes through the TUN device keep the
+// traffic inside the TUN and do not compete either.
+func competingMoreSpecific(group discovery.RouteTable, tunDevice string) string {
+	for _, r := range group.Routes {
+		if isDefaultRoute(r) {
 			continue
 		}
 		if terminatingRouteTypes[r.Type] {
-			return r, defaultTerminating
+			continue
+		}
+		if r.Multipath {
+			return routeCoordinate(r, 0)
 		}
 		if r.Type == "" || r.Type == "unicast" {
-			return r, defaultViaDevice
+			if r.Device != tunDevice {
+				return routeCoordinate(r, 0)
+			}
+			continue
 		}
+		return routeCoordinate(r, 0)
 	}
-	return discovery.Route{}, noDefault
+	return ""
 }
 
 // isDefaultRoute reports whether the route is the table default.

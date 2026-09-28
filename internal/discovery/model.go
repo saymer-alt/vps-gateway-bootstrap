@@ -110,6 +110,13 @@ type Rule struct {
 	Table     int                  `json:"table"`
 	TableRaw  string               `json:"table_raw"`
 	Status    FieldStatus          `json:"status"`
+	// Unmodeled records selector/action keys outside the D1 model (iif, oif,
+	// uidrange, ipproto, suppress_prefixlength, not, ...). They are preserved
+	// verbatim as fail-closed evidence: a rule carrying them can match or
+	// divert differently than its modeled from/to/fwmark fields suggest, so
+	// downstream evaluation must never treat such a rule as a plain
+	// from/to/fwmark rule.
+	Unmodeled []string             `json:"unmodeled,omitempty"`
 }
 type Route struct {
 	Destination string        `json:"destination"`
@@ -121,6 +128,10 @@ type Route struct {
 	Type        string        `json:"type,omitempty"`   // unicast default; blackhole/unreachable/... as observed
 	Scope       string        `json:"scope,omitempty"`
 	Status      FieldStatus   `json:"status"`
+	// Multipath marks a route carrying nexthop entries (ECMP): the egress
+	// device is a kernel-side nexthop selection the evaluator cannot model,
+	// so such routes must never be reduced to the single top-level device.
+	Multipath   bool          `json:"multipath,omitempty"`
 }
 type RouteTable struct { ID int `json:"id"`; Name string `json:"name"`; Routes []Route `json:"routes"` }
 

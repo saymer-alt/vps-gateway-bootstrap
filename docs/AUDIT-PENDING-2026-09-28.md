@@ -232,6 +232,34 @@ assessment, preserve for verification (`internal/leak`, input parsing in
 State of fact: current D1/D2 (`internal/leak`) remains a pure evaluator; it
 performs no I/O and does not authorize mutation.
 
+**Status update (2026-09-28, ZAI-05/ZAI-07):** confirmed and corrected at
+the PURE evaluator/parser layer. ZAI-07 verified the evaluator's routing
+parsers silently dropped selector/action keys outside the modeled subset
+(`iif`, `suppress_prefixlength`, `not`, ...) — such rules were then walked
+as plain from/to rules — silently dropped `nexthop` (multipath) routes,
+classified a table's default as first-parsed-wins, and ignored
+more-specific competing routes when claiming `SAFE`. Corrected: the rule
+parser records unmodeled keys on the rule and the evaluator refuses to
+walk a provably-matching rule that carries them
+(`RULE_UNMODELED_SEMANTICS`; provably disjoint rules are still skippable);
+multipath routes are flagged at the parser and a multipath default makes
+the table ambiguous (`TABLE_DEFAULT_AMBIGUOUS`); multiple defaults are now
+deterministic-or-ambiguous (all-terminating or one-identical-device agree,
+anything else fails closed); and a `SAFE` claim requires the selected
+table to contain no competing more-specific route
+(`TABLE_COMPETING_MORE_SPECIFIC` — terminating more-specifics drop instead
+of leaking and do not compete; routes via the TUN do not compete). Covered
+by `internal/leak/topology_envelope_test.go` and new routing-parser tests
+(the package does not compile against the pre-fix evaluator). Supported
+envelope: IPv4-only, proven selector/TUN correlation, explicit-false
+auto-route, modeled rule selectors only, deterministic default selection,
+no competing more-specific routes, live TUN, optional route-get
+authoritative in both directions. `SAFE` remains a machine-safety fact
+scoped to the IPv4 policy path — never ownership, approval or authority —
+and still says nothing about firewall/AWG loop safety (`LOOP_SAFE` is a
+separate, unbuilt family). The package still has zero production
+importers; D3 production/admission wiring remains unimplemented.
+
 ## H. Handoff/documentation corrections identified (report-only)
 
 Items to reconcile against code later — no mass-edit of historical

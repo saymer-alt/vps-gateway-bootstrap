@@ -123,6 +123,51 @@ func TestParseRuleInventoryEmptyArrayIsNoError(t *testing.T) {
 	}
 }
 
+// ZAI-07 (D3-1): selector/action keys outside the D1 model are preserved as
+// fail-closed evidence, never silently dropped — an iif-constrained or
+// suppressed rule must not be evaluated downstream as a plain from/to rule.
+func TestParseRuleInventoryUnmodeledKeysAreRecorded(t *testing.T) {
+	rules, err := parseRuleInventory([]byte(
+		`[{"priority":100,"from":"172.29.172.0/24","iif":"br-awg","table":"mihomo"},` +
+			`{"priority":110,"from":"all","fwmark":136,"suppress_prefixlength":0,"table":"main"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules[0].Unmodeled) != 1 || rules[0].Unmodeled[0] != "iif" {
+		t.Fatalf("iif key must be recorded: %#v", rules[0].Unmodeled)
+	}
+	if len(rules[1].Unmodeled) != 1 || rules[1].Unmodeled[0] != "suppress_prefixlength" {
+		t.Fatalf("suppress_prefixlength key must be recorded: %#v", rules[1].Unmodeled)
+	}
+	// Clean modeled entries stay clean (deterministic empty).
+	clean, err := parseRuleInventory([]byte(ruleInventoryReal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range clean {
+		if len(r.Unmodeled) != 0 {
+			t.Fatalf("modeled rule must carry no unmodeled keys: %#v", r.Unmodeled)
+		}
+	}
+}
+
+// ZAI-07 (D3-2): nexthop entries (ECMP/multipath) are flagged, never reduced
+// to the top-level device — which for multipath output may not even exist.
+func TestParseRouteInventoryMultipathIsFlagged(t *testing.T) {
+	tables, _, err := parseRouteInventory([]byte(
+		`[{"dst":"default","table":100,"nexthop":[{"gateway":"192.0.2.1","dev":"ens3","weight":1},{"dev":"tun-mihomo","weight":1}]},` +
+			`{"dst":"10.0.0.0/8","dev":"ens3","table":254}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tables[0].Routes[0].Multipath {
+		t.Fatalf("nexthop route must be flagged multipath: %#v", tables[0].Routes[0])
+	}
+	if tables[1].Routes[0].Multipath {
+		t.Fatalf("single-path route must not be flagged: %#v", tables[1].Routes[0])
+	}
+}
+
 func TestParseRouteInventoryRealShape(t *testing.T) {
 	tables, defaults, err := parseRouteInventory([]byte(
 		`[{"dst":"default","gateway":"192.0.2.1","dev":"ens3","table":254},` +
