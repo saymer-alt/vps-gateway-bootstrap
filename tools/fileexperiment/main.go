@@ -229,7 +229,7 @@ func runFileExperiment(args []string, o *orchestrate.Orchestrator, opts pipeline
 	}
 	fmt.Fprintf(stdout, "Persisted last-known-good state: %v\n", out.Persisted)
 
-	if out.Stage == orchestrate.StageCompleted {
+	if out.Stage == orchestrate.StageCompleted && len(out.Blockers) == 0 {
 		return 0
 	}
 	return 3

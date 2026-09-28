@@ -1,6 +1,9 @@
 # Pending Audit Findings — CODEX-01 (recorded 2026-09-28)
 
-Status: **UNVERIFIED**. This is a preservation record, not an architecture
+Status: **PARTIALLY RESOLVED**. This began as a preservation record of
+unverified findings; per-finding status updates below (2026-09-28) record
+what has since been independently verified and corrected. Findings without
+a status update remain unverified. This document is not an architecture
 document. It exists so that findings from a fresh independent agent review
 ("CODEX-01") of this repository at
 `5ed1f96d37d5332c487a0424c6918f9a3a020136` survive between machines and
@@ -117,6 +120,26 @@ the newer, separate observation.
 
 **Not** claimed as a confirmed defect: the exact return/defer behavior must
 be proven by a dedicated audit (including a targeted test) before any fix.
+
+**Status update (2026-09-28, ZAI-02/ZAI-04):** confirmed and corrected.
+CODEX-01 raised the observation; ZAI-02 verified it end to end — including
+through the real `orchestrate.Execute` with an injected terminal journal
+write failure, where the caller received `COMPLETED` with `Persisted=true`
+and no blockers while the durable record stayed in progress and the next
+mutating run was refused by the recovery latch. ZAI-04 then corrected the
+defect: `Execute` now uses named result values, so the deferred
+finalization blocker lands in the Outcome the caller receives, and both
+callers (`cmd/vps-gateway apply`, `tools/fileexperiment`) treat a
+COMPLETED result carrying blockers as unsuccessful (exit 3). Regression
+tests: `TestExecuteSurfacesJournalFinalizationFailure` (finalization
+failure caller-visible, no clean COMPLETED, durable record stays truthful),
+`TestExecuteSurfacesFinalizationFailureOnFailedStage` (failure-path
+semantics preserved, blocker added), `TestExecuteCleanCompletionHasNoBlockers`
+(successful finalization unchanged); all three fail on the pre-fix code.
+Line references above describe the pre-fix code. Still open, deliberately
+untouched here: the state-persistence-before-journal-terminal ordering
+(HANDOFF §5.8, designed journal-terminal-first ordering not implemented),
+recovery v2 (R-family) and the P1-B blocker remain unresolved.
 
 ## D. Existing mutation paths clarification
 

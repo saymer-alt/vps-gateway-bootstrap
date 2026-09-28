@@ -219,6 +219,11 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 
 	switch out.Stage {
 	case orchestrate.StageCompleted:
+		if len(out.Blockers) > 0 {
+			// The transaction completed but journal finalization failed:
+			// report the run as unsuccessful instead of clean success.
+			return 3
+		}
 		return 0
 	case orchestrate.StageBlocked:
 		// Fail-closed by the orchestrator (confirmation mismatch, staleness,

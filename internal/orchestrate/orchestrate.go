@@ -276,8 +276,13 @@ func (o Orchestrator) statePath() string {
 // On any failure after mutation, the persisted state is NOT updated; the
 // engine has already rolled the transaction back, and re-discovery findings
 // are reported for the operator.
-func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (Outcome, error) {
-	out := Outcome{}
+//
+// The result values are named deliberately: the journal finalizer registered
+// below runs after the return statement has been evaluated, and — with named
+// results — its blocker append lands in the Outcome the caller actually
+// receives. With unnamed results that append reached only a local copy and a
+// failed durable journal finalization was reported as clean success.
+func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out Outcome, err error) {
 	if !p.Ready {
 		out.Stage = StageBlocked
 		out.Blockers = append(out.Blockers, p.Blockers...)
