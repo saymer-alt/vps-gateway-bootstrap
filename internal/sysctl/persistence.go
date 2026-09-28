@@ -8,8 +8,12 @@
 // /etc/sysctl.conf is NOT — it is modeled as explicit uncertainty and never
 // silently assigned a rank. Globs, '-'-prefixed assignments and other
 // constructs outside the strict subset fail closed to UNKNOWN for any
-// relevant key they could touch. Nothing here grants ownership: collision
-// and override facts are safety observations only.
+// relevant key they could touch. Directory listing failures and unreadable
+// files are carried through Resolve into per-key uncertainty: a directory
+// that could not be inventoried has unknown filenames and unknown content,
+// so irrelevance cannot be proven for any relevant key (UNKNOWN != absent).
+// Nothing here grants ownership: collision and override facts are safety
+// observations only.
 package sysctl
 
 import (
@@ -355,33 +359,45 @@ type ResolvedKey struct {
 	OverriddenBy        *Winner // a later source overrides the project drop-in
 	SysctlConfUncertain bool    // /etc/sysctl.conf assigns this key; ordering empirical
 	Unsupported         bool    // an unsupported construct touches this key
+	DirUncertain        bool    // a persistence directory could not be inventoried; irrelevance unprovable for every key
 	UncertainReasons    []string
 }
 
 // Resolution is the S4 output: per-key persistence resolution across the
-// surviving sources, with every uncertainty explicit.
+// surviving sources, with every uncertainty explicit. DirErrors is carried
+// through from the inventory: when it is non-empty, every relevant key's
+// persistence state is uncertain — including allowlisted keys absent from
+// Keys (their absence is unprovable, not a confident no-assignment).
 type Resolution struct {
 	Keys                map[SysctlKey]ResolvedKey
 	SysctlConfUncertain bool
-	Globs               []string // glob patterns recorded in surviving sources
+	DirErrors           []DirError
+	Globs               []string // glob patterns recorded in surviving sources and /etc/sysctl.conf
 }
 
 // Resolve computes the per-key persistence resolution from the inventory:
 // same-name shadowing by directory precedence, then global lexicographic
 // filename ordering across the surviving files (later filename wins per
 // key), then later-line-wins within a file. /etc/sysctl.conf is never ranked
-// — its assignments are represented as explicit uncertainty. Unreadable
-// sources and unsupported constructs make the affected keys uncertain. The
-// resolution is observation/safety input: it grants no ownership.
+// — its assignments, unsupported constructs, and even its unreadability are
+// represented as explicit per-key uncertainty, because its ordering position
+// is empirically unestablished. Directory listing failures (DirErrors) make
+// every relevant key uncertain: the failed directory's filenames and content
+// are unknown, so it could shadow or override any key. Unreadable surviving
+// sources and unsupported constructs fail closed per key. The resolution is
+// observation/safety input: it grants no ownership.
 func Resolve(inv PersistenceInventory) Resolution {
-	res := Resolution{Keys: map[SysctlKey]ResolvedKey{}}
+	res := Resolution{Keys: map[SysctlKey]ResolvedKey{}, DirErrors: append([]DirError(nil), inv.DirErrors...)}
 	var dropIns []FileObservation
 	var uncertainSources []string
 	confAssigned := map[SysctlKey][]string{}
+	confUnsupported := map[SysctlKey][]string{}
+	confUnreadable := false
 	for _, f := range inv.Files {
 		if f.IsSysctlConf {
 			if f.ReadErr != nil {
 				res.SysctlConfUncertain = true
+				confUnreadable = true
 				continue
 			}
 			for _, a := range f.Assignments {
@@ -389,6 +405,12 @@ func Resolve(inv PersistenceInventory) Resolution {
 					fmt.Sprintf("/etc/sysctl.conf assigns this key (line %d); its ordering position is empirically unestablished", a.Line))
 				res.SysctlConfUncertain = true
 			}
+			for _, u := range f.Unsupported {
+				confUnsupported[SysctlKey(u.Key)] = append(confUnsupported[SysctlKey(u.Key)],
+					fmt.Sprintf("/etc/sysctl.conf carries an unsupported construct for this key (line %d): %s — its ordering position is empirically unestablished", u.Line, u.Reason))
+				res.SysctlConfUncertain = true
+			}
+			res.Globs = append(res.Globs, f.GlobPatterns...)
 			continue
 		}
 		dropIns = append(dropIns, f)
@@ -442,6 +464,28 @@ func Resolve(inv PersistenceInventory) Resolution {
 		if reasons, ok := confAssigned[key]; ok {
 			rk.SysctlConfUncertain = true
 			rk.UncertainReasons = append(rk.UncertainReasons, reasons...)
+		}
+		// /etc/sysctl.conf uncertainty that is not keyed to a parsed
+		// assignment: relevant unsupported constructs it carries, and its
+		// own unreadability (an unreadable conf could assign or override
+		// any relevant key — its ordering is empirically unestablished).
+		if reasons, ok := confUnsupported[key]; ok {
+			rk.Unsupported = true
+			rk.UncertainReasons = append(rk.UncertainReasons, reasons...)
+		}
+		if confUnreadable {
+			rk.SysctlConfUncertain = true
+			rk.UncertainReasons = append(rk.UncertainReasons,
+				"/etc/sysctl.conf could not be read; it could assign or override this key and its ordering position is empirically unestablished")
+		}
+		// A directory that could not be inventoried has unknown filenames
+		// and unknown content: it could shadow (same name, higher rank) or
+		// outrank (lexicographically later filename) any surviving file, so
+		// irrelevance cannot be proven for any relevant key.
+		for _, de := range inv.DirErrors {
+			rk.DirUncertain = true
+			rk.UncertainReasons = append(rk.UncertainReasons,
+				fmt.Sprintf("persistence directory %s could not be inventoried: %v — files it may contain are unknown", de.Dir, de.Err))
 		}
 		// Candidates from surviving readable files, latest filename wins.
 		var winner *Winner

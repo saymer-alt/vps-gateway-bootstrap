@@ -193,6 +193,24 @@ verification (`internal/sysctl`):
 These are latent concerns: the sysctl package is pure and wired into no
 mutation authority today.
 
+**Status update (2026-09-28, ZAI-05/ZAI-06):** confirmed and corrected at
+the PURE observation/resolution layer. ZAI-05 re-verified the package has
+zero production importers; ZAI-06 then verified the two primary concerns as
+real uncertainty-loss defects (`Resolve` consumed neither `DirErrors` nor
+the sysctl.conf unsupported/read-failure classes) and corrected them: the
+resolution now carries directory-inventory failures into per-key
+uncertainty (`ResolvedKey.DirUncertain`, `Resolution.DirErrors` — a failed
+directory cannot be proven irrelevant for any relevant key), and
+`/etc/sysctl.conf` relevant unsupported constructs and its own unreadability
+now produce per-key uncertainty instead of only a resolution-level flag.
+Covered by `internal/sysctl/persistence_uncertainty_test.go` (tests cannot
+pass against the pre-fix implementation); key-scoped handling of unrelated
+unsupported syntax is unchanged (no global poisoning), and `rp_filter` max
+semantics and runtime/persistence separation are pinned by existing tests.
+Status: PURE S5 readiness semantics strengthened — the package remains
+observation/resolution only, still NOT wired into mutation/admission;
+S5 (effective-state evaluator) itself remains unimplemented.
+
 ## G. Direct-leak pre-integration concerns (latent — evaluator pure)
 
 Before D3 (doctor integration) or any production consumption of a SAFE
