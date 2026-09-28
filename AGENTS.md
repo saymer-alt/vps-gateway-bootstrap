@@ -24,6 +24,10 @@ Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
 `docs/requirements-from-real-vps.md`, `docs/environment-matrix.md`,
 `docs/archaeology.md` (history is evidence, not templates).
 
+A pending-audit record (`docs/AUDIT-PENDING-2026-09-28.md`) preserves
+unverified review findings awaiting verification; it is context, not
+contract.
+
 ## 2. Non-negotiable safety rules
 
 - `UNKNOWN != absent`. Missing information is never permission to act.
