@@ -389,3 +389,16 @@ do not use `sysctl -p` on a mixed-purpose monolithic file unless every setting
 in that file has been revalidated against the live gateway contract. Apply the
 specific key(s), or use an owned fragment, then verify critical routing sysctls
 such as `rp_filter` before and after the change.
+
+
+**Current status after recovery (2026-09-29):** after a full VPS reboot the
+Docker-based AWG 2.0 path recovered and no active incident remained. No
+immediate repair was required while the service was healthy. The remaining
+risk is persistent configuration drift: `/etc/sysctl.conf` still contains
+`net.ipv4.conf.all.rp_filter = 1` and
+`net.ipv4.conf.default.rp_filter = 1`, while the gateway integration requires
+`rp_filter=0`. Until that persistent conflict is reconciled, avoid running
+`sysctl -p /etc/sysctl.conf` on this host. At the next maintenance window,
+verify live `rp_filter` on `all`, `default`, the external interface,
+`docker0` and `amn0`, then reconcile the persistent setting so a future
+whole-file sysctl reload cannot silently break the Docker AWG path again.
