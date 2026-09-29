@@ -236,3 +236,23 @@ Routing
 
 RESULT: READY FOR PRODUCTION
 ```
+
+
+### 19. Whole-file sysctl reloads can invalidate a live gateway contract
+
+A live Ubuntu 24.04 gateway incident on 2026-09-29 showed that applying one
+intended sysctl change with `sysctl -p /etc/sysctl.conf` can also reactivate
+unrelated legacy tuning from the same monolithic file. In that case,
+`net.ipv4.conf.all.rp_filter=1` and
+`net.ipv4.conf.default.rp_filter=1` were reapplied while the active
+Docker -> Mihomo/gVisor integration required `rp_filter=0`. The Docker-based
+AWG 2.0 path stopped working, while an application-level AWG 3.1 path in
+3X-UI remained operational. A reboot restored service because the gateway
+routing unit reapplied its required live `rp_filter=0` state.
+
+Requirement: Bootstrap must treat sysctl as owned, scoped state rather than
+a monolithic file. It should discover both persistent definitions and
+effective per-interface values, detect conflicting definitions for critical
+routing keys, and apply only the intended key/fragment. A generic
+`sysctl -p /etc/sysctl.conf` must not be used as the normal reconciliation
+mechanism for a production gateway.
