@@ -54,7 +54,9 @@ default path when present) and reports the source in the summary.
 ```text
 cmd/vps-gateway      CLI; mutation is reachable only through the
                      experiment-pinned apply command (see docs/security-model.md)
-tools/fileexperiment pinned single-file experiment runner (own binary)
+tools/fileexperiment pinned single-file experiment runner — planning/preview
+                     only; its mutation surface is intentionally disabled
+                     pending ownership provenance (P1-A containment)
 tools/livedryrun     strictly read-only development tool (Prepare only)
 internal/discovery   read-only machine discovery (fully injectable Runner)
 internal/state       desired-state model, diff, plan, preflight, persistence

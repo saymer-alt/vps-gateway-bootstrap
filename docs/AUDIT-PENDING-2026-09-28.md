@@ -4,10 +4,13 @@ Status: **PARTIALLY RESOLVED**. This began as a preservation record of
 unverified findings; per-finding status updates below (2026-09-28) record
 what has since been independently verified and corrected. Findings without
 a status update remain unverified. Checkpoint summary (2026-09-28, final
-overnight sweep): **A** — VERIFIED/FIXED (lock half; `--state` half = B
-remains open, deliberately deferred as the last current-path containment
-defect); **C** — VERIFIED/FIXED; **D** — VERIFIED (both paths named in the
-current handoff); **E** — VERIFIED (no compiled host enforcement exists;
+overnight sweep; D updated 2026-09-29): **A** — VERIFIED/FIXED (lock half;
+`--state` half = B remains open, deliberately deferred as the last
+current-path containment defect); **C** — VERIFIED/FIXED; **D** —
+VERIFIED, then CONTAINED (the fileexperiment mutation surface was found
+narrowly reachable as an ownership-authority defect by CODEX TASK-02 and
+disabled on 2026-09-29 — see the status block below); **E** — VERIFIED (no
+compiled host enforcement exists;
 wording guidance stands); **F, G** — VERIFIED/FIXED at the PURE layer;
 **H** — largely addressed (current handoff supersedes the stale
 statements); **B** — VERIFIED, STILL OPEN. This document is not an
@@ -161,6 +164,23 @@ named when summarizing what can execute today:
 Additionally: lifecycle writes (lock, journal, state, backups) are a
 separate category from business-action writes and must be considered when
 making confinement claims — see findings A and B.
+
+**Status update (2026-09-29, CODEX TASK-02 / ZAI-13):** the second path was
+found to be a narrowly reachable ownership-authority defect — the
+experiment's embedded legacy OWNED label plus its shape-only guard never
+established ownership provenance, so a foreign file independently created
+at the pinned target could reach `FileExecutor` and be replaced (the P1-A
+data flow, instantiated; reproduced by test before the fix: the mutating
+run exited 0 against a seeded foreign file). **Containment applied**: the
+`fileexperiment` mutation surface is intentionally disabled — the tool is
+planning/preview only (discovery, diff, plan, fingerprint, preview), no
+confirmation is accepted, `orchestrate.Execute` is unreachable (source
+tripwire `TestFileExperimentHasNoExecutePath`), and no lock, journal,
+backup, or state write can originate from it. Historically accurate note
+preserved above; the current path inventory is ONE sanctioned mutation
+path (`vps-gateway apply`) plus the read-only file experiment. This is
+containment only: **architectural P1-A remains unresolved** and the
+widening moratorium stands.
 
 ## E. Saymer3 wording clarification
 

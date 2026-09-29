@@ -70,28 +70,35 @@ func TestFileExperimentDryRunStopsBeforeConfirmation(t *testing.T) {
 	}
 }
 
+// Containment (ZAI-13): a run without --dry-run is a mutating attempt and is
+// refused — the file is never created, and the output names the containment.
 func TestFileExperimentRefusesWithoutConfirmation(t *testing.T) {
 	o, root := experimentTestOrchestrator(t)
 	var out bytes.Buffer
 	code := runFileExperiment(nil, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
-	if code != 2 {
-		t.Fatalf("exit=%d, want 2", code)
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3 (containment refusal)", code)
+	}
+	if !strings.Contains(out.String(), "mutation is disabled") {
+		t.Fatalf("containment notice missing: %s", out.String())
 	}
 	if _, err := os.Stat(experimentFilePath(root)); !os.IsNotExist(err) {
-		t.Fatalf("file created without confirmation: %v", err)
+		t.Fatalf("file created despite containment: %v", err)
 	}
 }
 
-// The pinned path/content/mode must be written exactly, and a second run of
-// the same experiment must report convergence (nothing left to do).
-func TestFileExperimentExecutesAndIsIdempotent(t *testing.T) {
+// Containment (ZAI-13): the experiment is planning/preview only. The preview
+// still shows the candidate plan and its fingerprint, but the previously
+// mutating confirm run is refused, writes nothing, and a second preview still
+// reports the same candidate (nothing converged, nothing changed).
+func TestFileExperimentPreviewOnlyConfirmIsRefused(t *testing.T) {
 	o, root := experimentTestOrchestrator(t)
 	var out bytes.Buffer
-	// The fingerprint is learned from the tool's own dry-run, the same way
-	// the operator would read it before confirming.
+	// The fingerprint is learned from the tool's own preview, the same way
+	// the operator would read it.
 	code := runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
 	if code != 0 {
-		t.Fatalf("dry-run exit=%d", code)
+		t.Fatalf("preview exit=%d", code)
 	}
 	fp := fingerprintFromOutput(out.String())
 	if fp == "" {
@@ -100,29 +107,24 @@ func TestFileExperimentExecutesAndIsIdempotent(t *testing.T) {
 
 	out.Reset()
 	code = runFileExperiment([]string{"--confirm", fp, "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &out, &out)
-	if code != 0 {
-		t.Fatalf("execute exit=%d output=%s", code, out.String())
+	if code == 0 {
+		t.Fatalf("confirm run must not succeed; output=%s", out.String())
 	}
-	if !strings.Contains(out.String(), "Stage: COMPLETED") {
-		t.Fatalf("outcome: %s", out.String())
+	if !strings.Contains(out.String(), "mutation is disabled") {
+		t.Fatalf("containment notice missing: %s", out.String())
 	}
-	data, err := os.ReadFile(experimentFilePath(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "vps-gateway file experiment\n" {
-		t.Fatalf("content=%q", data)
+	if _, err := os.Stat(experimentFilePath(root)); !os.IsNotExist(err) {
+		t.Fatalf("file created despite containment: %v", err)
 	}
 
-	// Idempotency: a fresh run of the same experiment now reports
-	// convergence — the file already matches the desired content.
-	var dry2 bytes.Buffer
-	code = runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &dry2, &dry2)
+	// The preview still works afterwards and shows the same candidate.
+	var preview2 bytes.Buffer
+	code = runFileExperiment([]string{"--dry-run", "--root", root}, o, pipeline.Options{Root: ptrTrue()}, strings.NewReader(""), &preview2, &preview2)
 	if code != 0 {
-		t.Fatalf("second dry-run exit=%d output=%s", code, dry2.String())
+		t.Fatalf("second preview exit=%d output=%s", code, preview2.String())
 	}
-	if !strings.Contains(dry2.String(), "already converged") {
-		t.Fatalf("second dry-run must report convergence: %s", dry2.String())
+	if !strings.Contains(preview2.String(), "Plan fingerprint: ") {
+		t.Fatalf("preview broken: %s", preview2.String())
 	}
 }
 

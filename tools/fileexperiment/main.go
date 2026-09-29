@@ -1,27 +1,32 @@
-// Command fileexperiment is a one-off pinned experiment runner: it executes
-// the full orchestration lifecycle for a SINGLE bootstrap-owned file —
-// /etc/vps-gateway/experiment-file-test.conf — on the local machine.
+// Command fileexperiment is a pinned experiment PLANNING tool: it executes
+// the read-only part of the orchestration lifecycle (discovery → config →
+// diff → plan → fingerprint → preview) for a SINGLE bootstrap-owned file —
+// /etc/vps-gateway/experiment-file-test.conf — and nothing else.
 //
-// Constraints baked into this tool:
-//   - the plan must contain exactly one CREATE/UPDATE action for the pinned
-//     path with the pinned content and mode; anything else aborts;
-//   - the path must stay inside /etc/vps-gateway/ (bootstrap-owned per
-//     docs/ownership.md);
-//   - execution requires typing the plan fingerprint prefix;
-//   - --dry-run stops after showing the plan, before any confirmation.
+// MUTATION IS INTENTIONALLY DISABLED (2026-09-29 containment, CODEX TASK-02):
+// the experiment's embedded legacy OWNED label plus its shape-only guard
+// never established ownership provenance, so an unproven foreign file at the
+// pinned target could reach the executor and be replaced (P1-A data flow,
+// narrowly reachable). Until ownership admission (O5/O6) exists, this tool
+// must not reach mutating execution: no confirmation, no orchestrate.Execute,
+// no lock, journal, backup, or state writes. It remains useful for:
+//
+//   - exercising discovery;
+//   - producing a candidate Plan and its fingerprint;
+//   - showing what WOULD have been changed (--dry-run / any run);
+//   - testing PURE ownership work later;
+//   - reproducing the foreign-file collision safely.
 //
 // It is NOT part of the production CLI registry: cmd/vps-gateway remains
 // pinned to the first production experiment (fail2ban repair).
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
@@ -35,7 +40,9 @@ import (
 const (
 	experimentContent = "vps-gateway file experiment\n"
 	experimentMode    = 0600
-	confirmHint       = "confirmation refused: type the first 12 characters of the plan fingerprint to approve this exact plan"
+	// containmentNotice is the operator-facing refusal: mutation in this
+	// tool is disabled on purpose, pending ownership provenance (P1-A).
+	containmentNotice = "mutation is disabled in this tool pending ownership provenance (P1-A containment): it is planning/preview only and executed nothing"
 )
 
 func experimentPath(root string) string {
@@ -106,15 +113,20 @@ func newExperimentOrchestrator(timeout time.Duration, root string) *orchestrate.
 	}
 }
 
-// runFileExperiment implements the pinned lifecycle. The o parameter is
-// injectable for tests; production passes nil. opts carries pipeline
-// options: production passes the zero value, so the privilege fact is
-// detected from the current process; tests pass an explicit Root.
+// runFileExperiment implements the pinned PLANNING lifecycle. The o
+// parameter is injectable for tests; production passes nil. opts carries
+// pipeline options: production passes the zero value, so the privilege fact
+// is detected from the current process; tests pass an explicit Root.
+//
+// Containment: the function NEVER reaches orchestrate.Execute — every run
+// ends in the read-only preview plus the containment refusal. The registry
+// stays wired only because Prepare's executor-coverage check needs it to
+// produce a Ready plan.
 func runFileExperiment(args []string, o *orchestrate.Orchestrator, opts pipeline.Options, stdin io.Reader, stdout, stderr io.Writer) int {
+	_ = stdin // the confirmation reader is gone: nothing is ever executed
 	timeout := 60 * time.Second
 	root := "/"
 	dryRun := false
-	confirmPrefix := ""
 	rest := args
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
@@ -122,11 +134,12 @@ func runFileExperiment(args []string, o *orchestrate.Orchestrator, opts pipeline
 			dryRun = true
 		case "--confirm":
 			if i+1 >= len(rest) {
-				fmt.Fprintln(stderr, "--confirm requires the plan fingerprint prefix")
+				fmt.Fprintln(stderr, "--confirm requires a value")
 				return 2
 			}
 			i++
-			confirmPrefix = rest[i]
+			fmt.Fprintln(stderr, "--confirm is refused: "+containmentNotice)
+			return 2
 		case "--root":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(stderr, "--root requires a path")
@@ -186,52 +199,11 @@ func runFileExperiment(args []string, o *orchestrate.Orchestrator, opts pipeline
 	fmt.Fprintf(stdout, "Preflight: %s\n", p.Preflight.Status)
 
 	if dryRun {
-		fmt.Fprintln(stdout, "DRY-RUN: stopping before confirmation; nothing was asked of the operator and nothing can execute.")
+		fmt.Fprintln(stdout, "DRY-RUN: stopped before the (disabled) execution boundary; nothing was executed.")
 		return 0
 	}
-
-	var typed string
-	if confirmPrefix != "" {
-		typed = confirmPrefix
-	} else {
-		fmt.Fprintln(stdout, "This will WRITE the file shown above on this machine.")
-		fmt.Fprint(stdout, "Type the first 12 characters of the plan fingerprint to approve (anything else aborts): ")
-		line, err := bufio.NewReader(stdin).ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(stderr, confirmHint)
-			return 2
-		}
-		typed = line
-	}
-	typed = strings.ToLower(strings.TrimSpace(typed))
-	if len(typed) < 12 || !strings.HasPrefix(fp, typed) {
-		fmt.Fprintln(stderr, confirmHint)
-		return 2
-	}
-
-	conf := orchestrate.Confirmation{PlanFingerprint: fp, ApprovedBy: "cli-experiment", At: time.Now().UTC()}
-	out, err := o.Execute(p, conf, nil)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "Stage: %s\n", out.Stage)
-	for _, ar := range out.Transaction.Actions {
-		if ar.Error != "" {
-			fmt.Fprintf(stderr, "  %s [%s]: %s\n", ar.Resource, ar.Status, ar.Error)
-		}
-	}
-	for _, b := range out.Blockers {
-		fmt.Fprintln(stderr, "  - "+b)
-	}
-	if out.ReDiscovery != nil {
-		fmt.Fprintf(stdout, "Re-discovery: %s\n", out.ReDiscovery.Status)
-	}
-	fmt.Fprintf(stdout, "Persisted last-known-good state: %v\n", out.Persisted)
-
-	if out.Stage == orchestrate.StageCompleted && len(out.Blockers) == 0 {
-		return 0
-	}
+	fmt.Fprintln(stdout, "This is where the experiment used to ask for confirmation and execute. It no longer does.")
+	fmt.Fprintln(stdout, "CONTAINMENT: "+containmentNotice+".")
 	return 3
 }
 
