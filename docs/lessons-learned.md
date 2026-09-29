@@ -308,3 +308,52 @@ that application-level chain over adding host-wide NAT/policy-routing state.
 Use host-level AWG interception only for topologies that actually require it.
 Bootstrap should discover and validate the selected mode instead of assuming
 that every AWG deployment needs system routing integration.
+
+
+## 26. Network configuration must not contradict the host's IPv6 policy
+
+A post-update validation of the four real VPS hosts on 2026-09-29 found the
+fleet healthy after reboot: Mihomo 1.19.31 and Docker were active on all four
+hosts, the AmneziaWG container was running on all four, and no reboot was
+pending. Three hosts had no failed systemd units. On `hungry-boyd`
+(Ubuntu 24.04.5), however, `ifup@ens3.service` and `networking.service`
+were failed even though IPv4 connectivity, SSH, Mihomo, Docker and AWG were
+working.
+
+The boot journal showed the actual sequence:
+
+```text
+Error: ipv6: IPv6 is disabled on this device.
+ifup: failed to bring up ens3
+Error: ipv4: Address already assigned.
+```
+
+The live interface already had the working IPv4 configuration
+`95.85.224.104/32` with default gateway `10.0.0.1`. The host's
+`/etc/network/interfaces` simultaneously declared a static IPv6 address for
+`ens3`, while `/etc/sysctl.conf` explicitly disabled IPv6 with
+`net.ipv6.conf.all.disable_ipv6=1`,
+`net.ipv6.conf.default.disable_ipv6=1`, and
+`net.ipv6.conf.lo.disable_ipv6=1`. During boot, the IPv6 stanza therefore
+failed; a later retry then encountered the IPv4 address that had already been
+assigned.
+
+The repair preserved the working IPv4 configuration, backed up
+`/etc/network/interfaces`, removed only the obsolete `iface ens3 inet6
+static` stanza, applied the intended IPv6-disabled sysctl policy, and reset
+the stale failed-unit state. `systemctl --failed` then reported zero failed
+units. The same cleanup also found a harmless duplicate
+`vm.swappiness = 10` entry in `/etc/sysctl.conf`; it was reduced to one
+entry without changing the effective value.
+
+**Rules:**
+- Discovery must compare declared interface configuration with effective
+  sysctl IPv6 policy before treating a network-service failure as a real loss
+  of connectivity.
+- A host configured as IPv4-only must not retain an active static IPv6 stanza
+  for the same interface.
+- After package updates/reboot, validate both effective connectivity and
+  `systemctl --failed`; a working SSH session does not prove that the boot
+  network transaction completed cleanly.
+- Repeated sysctl keys are configuration drift even when values are identical;
+  managed configuration should keep one authoritative value.
