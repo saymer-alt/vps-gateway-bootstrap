@@ -201,10 +201,9 @@ contract.
 - Operational lessons go to `docs/lessons-learned.md` (numbered, with a Rule).
 - Status claims (what is implemented vs unreachable) live in `README.md`,
   `ROADMAP.md` and `docs/plan-apply.md`; keep them in sync with reality.
-- Known documentation debt must be visible, not silently ignored:
-  README/ROADMAP/plan-apply still contain pre-`apply` wording about the CLI
-  being unable to reach the orchestrator; fixing them is pending operator
-  approval.
+  The former pre-`apply` wording debt (README layout, plan-apply locking
+  status) was reconciled on 2026-09-28; the current authoritative status
+  checkpoint is `docs/HANDOFF-2026-09-28.md`.
 
 ## 13. When to STOP and ask the operator
 

@@ -3,8 +3,16 @@
 Status: **PARTIALLY RESOLVED**. This began as a preservation record of
 unverified findings; per-finding status updates below (2026-09-28) record
 what has since been independently verified and corrected. Findings without
-a status update remain unverified. This document is not an architecture
-document. It exists so that findings from a fresh independent agent review
+a status update remain unverified. Checkpoint summary (2026-09-28, final
+overnight sweep): **A** — VERIFIED/FIXED (lock half; `--state` half = B
+remains open, deliberately deferred as the last current-path containment
+defect); **C** — VERIFIED/FIXED; **D** — VERIFIED (both paths named in the
+current handoff); **E** — VERIFIED (no compiled host enforcement exists;
+wording guidance stands); **F, G** — VERIFIED/FIXED at the PURE layer;
+**H** — largely addressed (current handoff supersedes the stale
+statements); **B** — VERIFIED, STILL OPEN. This document is not an
+architecture document. It exists so that findings from a fresh independent
+agent review
 ("CODEX-01") of this repository at
 `5ed1f96d37d5332c487a0424c6918f9a3a020136` survive between machines and
 agents. Recording a finding does NOT mean it is confirmed: every item below

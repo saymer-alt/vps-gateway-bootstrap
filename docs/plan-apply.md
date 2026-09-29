@@ -13,7 +13,7 @@
 | Apply | engine and executors implemented and tested end to end; reachable from the CLI only through the experiment-pinned `apply` command (fingerprint confirmation + experiment guard); the first production experiment (fail2ban repair, Saymer3) completed the full lifecycle |
 | Rollback | implemented and tested at transaction level (reverse order, backup restore) |
 | Management probe | model in `internal/probe`; SSH finalization is blocked by the orchestrator unless a reachable probe result for the new management port is supplied (`docs/management-probe.md`); no real transport implemented |
-| Locking | `internal/lock`; acquired before the first mutation and held for the whole transaction inside the orchestrator; CLI wiring pending |
+| Locking | `internal/lock`; acquired under the orchestrator after operator confirmation and held for the whole transaction. The lock destination is a compiled project identity (`/etc/vps-gateway/apply.lock`) and is not caller-configurable (no CLI flag) — see the current handoff (`docs/HANDOFF-2026-09-28.md`) |
 | Persistence | only after successful re-discovery, final validation and convergence check; verified state only |
 
 ## The mutation boundary

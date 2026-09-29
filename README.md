@@ -52,7 +52,10 @@ default path when present) and reports the source in the summary.
 ## Layout
 
 ```text
-cmd/vps-gateway      CLI (apply engine and orchestration intentionally not linked)
+cmd/vps-gateway      CLI; mutation is reachable only through the
+                     experiment-pinned apply command (see docs/security-model.md)
+tools/fileexperiment pinned single-file experiment runner (own binary)
+tools/livedryrun     strictly read-only development tool (Prepare only)
 internal/discovery   read-only machine discovery (fully injectable Runner)
 internal/state       desired-state model, diff, plan, preflight, persistence
 internal/apply       transaction engine: plan → backup → apply → validate → rollback
@@ -61,9 +64,18 @@ internal/doctor      triage of discovery results (OK/WARN/FAIL)
 internal/validate    strict effective-state gate (PASS/FAIL)
 internal/pipeline    read-only pipeline: discovery → model → diff → plan → preflight
 internal/probe       external management-probe model (controller-side; not wired)
-internal/lock        machine-local exclusive lock (used by orchestration)
+internal/lock        machine-local exclusive lock (compiled project identity)
 internal/fsatomic    shared atomic file write primitive
-docs/                design documents (see docs/roadmap.md for the full plan)
+internal/journal     durable transaction journal and recovery latch
+internal/approval    approval-artifact verifier primitives (v1; not wired)
+internal/machineid   machine-id identity primitives
+internal/identity    typed field-status observation records
+internal/capability  PURE capability vocabulary and typed derivation (C1/C2; unwired)
+internal/ownership   PURE ownership-verdict foundation (O1; unwired)
+internal/leak        PURE direct-leak safety evaluator (D1/D2; unwired)
+internal/sysctl      PURE sysctl observation/resolution foundation (S1-S4; unwired)
+docs/                design documents and handoffs (see docs/HANDOFF-2026-09-28.md
+                     for the current checkpoint)
 ```
 
 ## Development
