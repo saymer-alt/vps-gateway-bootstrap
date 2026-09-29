@@ -136,3 +136,30 @@ every current host. This is intentional: the threshold stays strict until an
 explicit decision changes it. Any recalibration must be a deliberate,
 reviewed change (for example profile-aware thresholds), never a silent
 relaxation introduced just to make the current fleet pass.
+
+
+## Live fleet checkpoint — 2026-09-29
+
+Read-only post-update/reboot validation of the four current gateway VPS hosts
+produced the following observed state. This is a dated evidence snapshot, not
+a template and not a guarantee that the same topology will remain current.
+
+| Host | OS / kernel | RAM observed | Root FS | Mihomo | Docker / AWG | Host policy routing | Failed units after cleanup |
+|---|---|---:|---:|---|---|---|---|
+| `Saymer` | Ubuntu 24.04.5 / 6.8.0-111 | 913 MiB | 68% used of 8.7 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 |
+| `Saymer2` | Debian 12 / 6.1.0-53 | 925 MiB | 58% used of 9.9 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | No custom Mihomo policy rules/table observed in this check | 0 |
+| `hungry-boyd` | Ubuntu 24.04.5 / 6.8.0-111 | 961 MiB | 68% used of 9.8 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 after IPv6/interface cleanup |
+| `Saymer3` | Ubuntu 24.04.5 / 6.8.0-111 | 913 MiB | 66% used of 8.7 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active; `radio` container also active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 |
+
+All four hosts had about 1.5 GiB swap configured and none required another
+reboot after package updates. The three Ubuntu hosts above expose the same
+observed host-level Mihomo policy-routing shape; Debian `Saymer2` did not
+show that host-level integration during this checkpoint.
+
+On `hungry-boyd`, the initial post-reboot check found
+`ifup@ens3.service` and `networking.service` failed while IPv4, SSH,
+Mihomo, Docker and AWG were actually working. The cause and repair are
+recorded as Lesson 26 in `docs/lessons-learned.md`: a static IPv6 stanza
+conflicted with an explicit IPv6-disabled sysctl policy. After removing the
+obsolete IPv6 stanza, applying the intended sysctl policy and clearing stale
+failed state, `systemctl --failed` returned zero units.
