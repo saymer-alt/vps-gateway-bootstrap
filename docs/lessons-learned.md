@@ -357,3 +357,35 @@ entry without changing the effective value.
   network transaction completed cleanly.
 - Repeated sysctl keys are configuration drift even when values are identical;
   managed configuration should keep one authoritative value.
+
+### Follow-up: the AWG 2.0 outage was caused by whole-file sysctl reapplication, not proven to be IPv6 itself
+
+Later on 2026-09-29, after the IPv6 cleanup, the Docker-based AWG 2.0 path on
+`hungry-boyd` stopped accepting/forwarding client traffic while an AWG 3.1
+inbound hosted directly by 3X-UI continued to work. A full VPS reboot restored
+the Docker AWG 2.0 path without any further configuration change.
+
+The important additional evidence is that the operator had run
+`sysctl -p /etc/sysctl.conf` to apply the IPv6-disable settings. That command
+also reapplied unrelated IPv4 tuning from the same file, including:
+
+```text
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+```
+
+This conflicts with the established `amnezia-mihomo-gateway` runtime contract:
+its installer explicitly requires `rp_filter=0` for the asymmetric
+Docker -> Mihomo/gVisor path, writes `all/default.rp_filter=0`, and its routing
+service also forces every live per-interface `rp_filter` to zero. The reboot
+therefore plausibly repaired the outage by re-running that routing service and
+restoring `rp_filter=0`.
+
+This is strong causal evidence, but not a packet-capture proof because the
+broken runtime state was not inspected before reboot.
+
+**Additional rule:** when applying one sysctl change on a production gateway,
+do not use `sysctl -p` on a mixed-purpose monolithic file unless every setting
+in that file has been revalidated against the live gateway contract. Apply the
+specific key(s), or use an owned fragment, then verify critical routing sysctls
+such as `rp_filter` before and after the change.
