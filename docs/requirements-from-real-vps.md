@@ -256,3 +256,23 @@ effective per-interface values, detect conflicting definitions for critical
 routing keys, and apply only the intended key/fragment. A generic
 `sysctl -p /etc/sysctl.conf` must not be used as the normal reconciliation
 mechanism for a production gateway.
+
+### 20. Persistent UDP services need coordinated port allocation
+
+The current fleet requires two additional long-lived UDP service ports on each
+VPS: one for an AWG 3.1 inbound in 3X-UI and one for TUIC. These ports coexist
+with Docker-published AWG 2.0, Mieru ranges, Xray/Mihomo sockets, UFW and Linux
+ephemeral allocation.
+
+Requirement: never select these ports from a static global list without live
+discovery. Before allocating either port, inspect the effective Mieru range,
+current UDP listeners, Docker published ports, UFW rules,
+`net.ipv4.ip_local_port_range` and `net.ipv4.ip_local_reserved_ports`. Existing
+service ports must be preserved. If a chosen long-lived UDP port lies inside
+the ephemeral range, merge it into `ip_local_reserved_ports` without replacing
+existing reservations. Open only the selected UDP port in UFW and validate the
+actual listener after service creation.
+
+The pair must be tracked as two distinct owned allocations (`AWG31_UDP_PORT`
+and `TUIC_UDP_PORT`) so later repair/uninstall logic cannot confuse them with
+Mieru, AWG 2.0 or unrelated Xray/Mihomo UDP sockets.
