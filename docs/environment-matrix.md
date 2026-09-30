@@ -149,7 +149,7 @@ a template and not a guarantee that the same topology will remain current.
 | `Saymer` | Ubuntu 24.04.5 / 6.8.0-111 | 913 MiB | 68% used of 8.7 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 |
 | `Saymer2` | Debian 12 / 6.1.0-53 | 925 MiB | 58% used of 9.9 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | No custom Mihomo policy rules/table observed in this check | 0 |
 | `hungry-boyd` | Ubuntu 24.04.5 / 6.8.0-111 | 961 MiB | 68% used of 9.8 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 after IPv6/interface cleanup |
-| `Saymer3` | Ubuntu 24.04.5 / 6.8.0-111 | 913 MiB | 66% used of 8.7 GiB | 1.19.31 active | Docker active; `amnezia-awg2` active; `radio` container also active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 |
+| `Saymer3` | Ubuntu 24.04.5 / 6.8.0-111 | 913 MiB | 66% used of 8.7 GiB | Mihomo active | Docker active; `amnezia-awg2` active; `radio` container also active | `fwmark 0x88 -> main`; `172.29.172.0/24 -> mihomo`; table default via `tun-mihomo` | 0 |
 
 All four hosts had about 1.5 GiB swap configured and none required another
 reboot after package updates. The three Ubuntu hosts above expose the same
@@ -216,25 +216,16 @@ one for AWG 3.1 in 3X-UI and one for TUIC. Port selection is being performed
 against live listeners, Docker-published ports, UFW, Mieru, Linux ephemeral
 ranges and `ip_local_reserved_ports` rather than by picking arbitrary numbers.
 
-Observed state from the first read-only audit:
+Confirmed effective Mieru state and current allocation evidence:
 
-| Host | UFW | Existing AWG 2.0 | Mieru evidence | Ephemeral range | Reserved ports | X-UI |
-|---|---:|---:|---|---|---|---|
-| `Saymer` | active, 9 rules | UDP 31825 | 2000 live TCP sockets; exact configured range not yet confirmed by effective config | 1024–65535 | 51001–53000 | active |
-| `Saymer2` | active, 12 rules | UDP 32926 | 2001 live TCP sockets; exact configured range not yet confirmed by effective config | 32768–60999 | none observed | active |
-| `hungry-boyd` | active, 19 rules | UDP 39551 | confirmed `50000-52000/UDP` from `/etc/mita/server_config.json` | 10000–39999 | none observed | active |
-| `Saymer3` | active, 11 rules | UDP 51820 | 2001 live UDP sockets; exact configured range not yet confirmed by effective config | 10000–39999 | none observed | active |
+| Host | Existing AWG 2.0 | Effective Mieru | Ephemeral range | Reserved ports | Existing AWG 3.1 | Notes |
+|---|---:|---|---|---|---:|---|
+| `Saymer` | UDP 31825 | `51001-53000/TCP` | 1024–65535 | 51001–53000 | none observed | candidate UDP 42000 and 43000 were both free during audit; any chosen persistent ports inside this very broad ephemeral range should be merged into `ip_local_reserved_ports` |
+| `Saymer2` | UDP 32926 | `20000-22000/TCP` | 32768–60999 | none observed | none observed | candidate UDP 23000, 42000 and 43000 were free; 23000/23001 sit outside the ephemeral range and above Mieru |
+| `hungry-boyd` | UDP 39551 | `50000-52000/UDP` | 10000–39999 | none observed | UDP 42000 active in X-UI and allowed by UFW | candidate UDP 43000 was free; 42000 must be preserved as the existing AWG 3.1 listener |
+| `Saymer3` | UDP 51820 published by Docker | `40000-42000/UDP` | 10000–39999 | none observed | none observed | candidate UDP 43000 was free; UFW currently allows `51821/udp` as `# AWG`, while Docker AWG 2.0 actually listens on 51820/udp — treat this as firewall/config drift to investigate before deleting or rewriting either rule |
 
-`hungry-boyd` already has an X-UI UDP listener on port 42000; this is the
-existing working AWG 3.1 inbound observed during the 2026-09-29 recovery.
-Therefore 42000 must be preserved and treated as allocated, not selected for a
-second service.
-
-The first audit intentionally does **not** promote inferred Mieru ranges on
-`Saymer`, `Saymer2` or `Saymer3` to facts. Their ~2000 live sockets strongly
-suggest contiguous ranges, but the exact effective Mieru configuration still
-needs to be read before final port allocation. Candidate AWG 3.1/TUIC pairs
-must be checked immediately before use against listeners, UFW and the effective
-Mieru range; if a persistent service port lies inside the host ephemeral range,
-it should also be merged into `ip_local_reserved_ports` without overwriting
-existing reservations.
+The exact Mieru ranges were confirmed from both on-disk configuration and
+`mita describe config`, replacing the earlier inferred ranges. Final AWG 3.1
+and TUIC allocations still require a last socket check of both ports in each
+pair immediately before opening UFW or creating 3X-UI inbounds.
