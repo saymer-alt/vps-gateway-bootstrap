@@ -35,6 +35,46 @@ UFW had no matching rules for the new candidates except the already existing `42
 
 Before creating each new 3X-UI inbound, recheck the selected port with `ss -H -lunp` and verify UFW state. Do not reuse or delete existing AWG 2.0 ports.
 
+## UFW application — 2026-09-30
+
+The selected IPv4 UDP allowances were added successfully:
+
+- `Saymer`: 42000/udp (`AWG 3.1`) and 43000/udp (`TUIC`).
+- `Saymer2`: 23000/udp (`AWG 3.1`) and 23001/udp (`TUIC`).
+- `hungry-boyd`: existing 42000/udp (`AWG 3.1`) preserved; 43000/udp (`TUIC`) added.
+- `Saymer3`: 43000/udp (`AWG 3.1`) and 43001/udp (`TUIC`).
+
+Because UFW IPv6 support is enabled, `ufw allow ...` also created IPv6 variants. On `Saymer`, `hungry-boyd` and `Saymer3`, a broad `Anywhere (v6) DENY IN Anywhere (v6)` rule appears before the newly appended IPv6 service allowances. UFW evaluates rules in order and the first match wins, so those later IPv6 service-specific ALLOW rules are not an effective exception to the earlier blanket IPv6 deny. Treat them as misleading/dead rules unless IPv6 policy is intentionally changed. IPv4 service rules are unaffected by that ordering.
+
+`Saymer2` does not show the same blanket IPv6 deny in the current UFW listing; its generated IPv6 service rules therefore need to be evaluated under that host's separate IPv6 policy rather than assumed equivalent to the three Ubuntu hosts above.
+
+## Saymer local-port reservation finding
+
+After UFW allocation, `Saymer` showed:
+
+```text
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.ip_local_reserved_ports = 51001-53000
+```
+
+Persistent definitions are layered/conflicting:
+
+```text
+/etc/sysctl.conf:68  net.ipv4.ip_local_port_range = 10000 39999
+/etc/sysctl.conf:70  net.ipv4.ip_local_port_range = 32768 60999
+/etc/sysctl.conf:71  net.ipv4.ip_local_reserved_ports=51001-53000
+/etc/sysctl.d/99-telemt.conf:4  net.ipv4.ip_local_port_range = 1024 65535
+/etc/sysctl.d/99-sysctl.conf -> same legacy sysctl.conf content
+```
+
+The live range is therefore the broad TeleMT-era 1024-65535 value. AWG 3.1 port 42000 and TUIC port 43000 lie inside that live ephemeral range and should be added to `ip_local_reserved_ports`, preserving the Mieru reservation. Intended merged value:
+
+```text
+42000,43000,51001-53000
+```
+
+Apply only `net.ipv4.ip_local_reserved_ports`; do not use a whole-file `sysctl -p` because this fleet has already demonstrated that monolithic reloads can reactivate unrelated legacy settings. The duplicate historical `ip_local_port_range` definitions should be documented/reconciled separately rather than altered as part of the service-port allocation transaction.
+
 ## Open issue discovered during audit
 
 On `Saymer3`, Docker publishes AWG 2.0 on 51820/udp while UFW currently contains an `ALLOW IN 51821/udp` rule commented as AWG. Treat this as firewall/config drift. Do not delete or rewrite either side until the ownership/history and live reachability are checked.
