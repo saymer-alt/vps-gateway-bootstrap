@@ -402,3 +402,72 @@ risk is persistent configuration drift: `/etc/sysctl.conf` still contains
 verify live `rp_filter` on `all`, `default`, the external interface,
 `docker0` and `amn0`, then reconcile the persistent setting so a future
 whole-file sysctl reload cannot silently break the Docker AWG path again.
+
+## 27. Current UI defaults do not describe persisted Xray/WireGuard state
+
+A four-VPS TUIC investigation on 2026-09-30 found an old 3X-UI WARP outbound
+persisted with `noKernelTun: false`, even though current 3X-UI code creates new
+WARP outbounds with userspace TUN (`noKernelTun: true`). Xray therefore created
+`wg0`, installed IPv6 policy routing in table 10230 and re-enabled host IPv6
+when the WARP config contained an IPv6 address. Deleting the WARP account in
+the modal was not sufficient until the staged outbound removal was actually
+saved to the Xray template; before that save, the generated config still
+contained `tag=warp` and Xray logged `Using kernel TUN`.
+
+A process/fd ownership check proved that `wg0` belonged to Xray under
+`x-ui.service`, not Mihomo or the AWG inbound. The exact upstream Xray code also
+confirmed the sysctl and route/rule side effects. See
+`docs/tuic-warp-ipv6-incident-2026-09-30.md` for the evidence and source links.
+
+**Rule:** for external applications, discover effective generated
+configuration and live kernel objects. Never infer runtime behaviour from the
+current UI default or from the fact that an account/object was deleted in one
+screen. Persisted legacy state can survive upgrades and keep using an older
+data path.
+
+## 28. Share-link parameters are version-specific semantics, not native-config aliases
+
+The same incident exposed a second independent TUIC failure. Mihomo 1.19.31's
+TUIC `tuic://` converter intentionally removes/ignores the `allow_insecure`
+field; it does not translate that query parameter to the native TUIC option
+`skip-cert-verify`. Self-signed SE2 and Moscow TUIC nodes therefore failed TLS
+even though their share links appeared to request insecure certificate
+handling. SE2 logged a TLS cryptographic handshake failure before TUIC
+authentication; its certificate/key pair, SAN, validity and serverAuth purpose
+were all valid.
+
+Converting the provider to native Mihomo YAML and explicitly setting
+`skip-cert-verify: true` for the self-signed nodes made SE2 and Moscow work.
+
+**Rule:** subscription/import formats are parsers with their own versioned
+semantics. Validate the effective imported proxy object against the exact
+installed Mihomo version. Do not assume a share-link field is equivalent to a
+similarly named native YAML field. Keep a provider payload in one format
+(URI-lines or YAML `proxies:`), not a mixture.
+
+## 29. IPv6 readiness is per-interface and end-to-end
+
+`Saymer3` demonstrated that a host can look dual-stack while IPv6 Internet is
+actually a black hole. It simultaneously had
+`net.ipv6.conf.all.disable_ipv6=1`, `default.disable_ipv6=1`, but
+`ens3.disable_ipv6=0`; `ens3` held two global IPv6 addresses and a default IPv6
+route. Direct tests then showed IPv4 Google connectivity 5/5 while IPv6 was
+0/5, each failure timing out at about four seconds.
+
+TUIC had already authenticated successfully and logged `[connect]
+google.com:443`, so the broken address family manifested as intermittent
+post-auth application failure: some checks returned a normal delay while
+others stalled. After the operator set only
+`net.ipv6.conf.ens3.disable_ipv6=1`, IPv6 failed fast and ten consecutive
+Mihomo delay checks through the Moscow TUIC node succeeded. The setting was
+recorded in an operator-managed narrow sysctl fragment for reboot persistence;
+post-reboot validation is still required.
+
+The provider-side reason for the broken advertised IPv6 path was not proven.
+Only the host-side symptom and mitigation were proven.
+
+**Rule:** IPv6 production validation must inspect per-interface effective
+sysctls, addresses and routes and must perform independent real `-4`/`-6`
+connectivity tests. Neither a global sysctl value nor the presence of an IPv6
+address/default route proves usable IPv6. For intermittent domain-based
+failures, test address families separately before changing the application.
