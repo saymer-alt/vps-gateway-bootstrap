@@ -90,3 +90,28 @@ The duplicate historical `ip_local_port_range` definitions remain documented dri
 ## Open issue discovered during audit
 
 On `Saymer3`, Docker publishes AWG 2.0 on 51820/udp while UFW currently contains an `ALLOW IN 51821/udp` rule commented as AWG. Treat this as firewall/config drift. Do not delete or rewrite either side until the ownership/history and live reachability are checked.
+
+## Handoff before manual 3X-UI configuration
+
+Network-side preparation is complete for the planned manual 3X-UI work.
+
+Current intended service mapping:
+
+| Host | AWG 3.1 | TUIC | Manual action remaining |
+|---|---:|---:|---|
+| `Saymer` | 42000/udp | 43000/udp | create both inbounds in 3X-UI |
+| `Saymer2` | 23000/udp | 23001/udp | create both inbounds in 3X-UI |
+| `hungry-boyd` | 42000/udp | 43000/udp | preserve existing AWG 3.1; create TUIC only |
+| `Saymer3` | 43000/udp | 43001/udp | create both inbounds in 3X-UI |
+
+Operational guardrails for the next session:
+
+- recheck the selected UDP port with `ss -H -lunp` immediately before each inbound is created;
+- keep the existing Docker AWG 2.0 listeners untouched;
+- do not reuse Mieru ranges;
+- do not use whole-file `sysctl -p` while reconciling unrelated sysctl drift;
+- preserve `hungry-boyd` AWG 3.1 on 42000/udp as the known-working reference;
+- investigate the `Saymer3` 51820/51821 AWG firewall mismatch separately, after the new inbounds are validated;
+- treat the automatically generated IPv6 UFW service rules on hosts with an earlier blanket IPv6 deny as non-effective unless IPv6 policy is deliberately redesigned.
+
+This checkpoint intentionally stops before storing 3X-UI-generated credentials, UUIDs, keys, passwords, or exported client links. Those values should only be recorded later if there is a deliberate need and an appropriate non-secret storage strategy.
