@@ -6,7 +6,7 @@ This dated operational note records the live four-VPS audit used to allocate per
 
 | Host | Existing AWG 2.0 | Effective Mieru | Existing AWG 3.1 | Ephemeral range | Existing reserved ports |
 |---|---:|---|---:|---|---|
-| `Saymer` | 31825/udp | 51001-53000/TCP | none observed | 1024-65535 | 51001-53000 |
+| `Saymer` | 31825/udp | 51001-53000/TCP | none observed | 1024-65535 | 42000,43000,51001-53000 |
 | `Saymer2` | 32926/udp | 20000-22000/TCP | none observed | 32768-60999 | none observed |
 | `hungry-boyd` | 39551/udp | 50000-52000/UDP | 42000/udp active in X-UI and allowed by UFW | 10000-39999 | none observed |
 | `Saymer3` | 51820/udp published by Docker | 40000-42000/UDP | none observed | 10000-39999 | none observed |
@@ -28,7 +28,7 @@ UFW had no matching rules for the new candidates except the already existing `42
 
 | Host | AWG 3.1 | TUIC | Notes |
 |---|---:|---:|---|
-| `Saymer` | 42000/udp | 43000/udp | both are inside the unusually broad local ephemeral range, so they must be merged into the existing `ip_local_reserved_ports` without replacing `51001-53000` |
+| `Saymer` | 42000/udp | 43000/udp | both are inside the unusually broad local ephemeral range and are now merged into `ip_local_reserved_ports` together with the existing Mieru reservation |
 | `Saymer2` | 23000/udp | 23001/udp | both are outside the local ephemeral range and above the Mieru TCP range |
 | `hungry-boyd` | 42000/udp | 43000/udp | AWG 3.1 already exists and must be preserved; only TUIC is new |
 | `Saymer3` | 43000/udp | 43001/udp | both are outside the local ephemeral range and above the Mieru UDP range |
@@ -48,7 +48,7 @@ Because UFW IPv6 support is enabled, `ufw allow ...` also created IPv6 variants.
 
 `Saymer2` does not show the same blanket IPv6 deny in the current UFW listing; its generated IPv6 service rules therefore need to be evaluated under that host's separate IPv6 policy rather than assumed equivalent to the three Ubuntu hosts above.
 
-## Saymer local-port reservation finding
+## Saymer local-port reservation — completed
 
 After UFW allocation, `Saymer` showed:
 
@@ -64,16 +64,28 @@ Persistent definitions are layered/conflicting:
 /etc/sysctl.conf:70  net.ipv4.ip_local_port_range = 32768 60999
 /etc/sysctl.conf:71  net.ipv4.ip_local_reserved_ports=51001-53000
 /etc/sysctl.d/99-telemt.conf:4  net.ipv4.ip_local_port_range = 1024 65535
-/etc/sysctl.d/99-sysctl.conf -> same legacy sysctl.conf content
+/etc/sysctl.d/99-sysctl.conf -> ../sysctl.conf
 ```
 
-The live range is therefore the broad TeleMT-era 1024-65535 value. AWG 3.1 port 42000 and TUIC port 43000 lie inside that live ephemeral range and should be added to `ip_local_reserved_ports`, preserving the Mieru reservation. Intended merged value:
+The live range is therefore the broad TeleMT-era 1024-65535 value. Because AWG 3.1 port 42000 and TUIC port 43000 lie inside that range, they were added to the existing reservation without changing the ephemeral range itself.
+
+Before mutation, `/etc/sysctl.d/99-sysctl.conf` was verified as a symlink to `/etc/sysctl.conf`, and `/etc/sysctl.conf` was backed up as `/etc/sysctl.conf.bak-ports-20260930`. Only the `net.ipv4.ip_local_reserved_ports` line was changed persistently, and only that runtime key was applied with `sysctl -w`; no whole-file `sysctl -p` was used.
+
+Final verified state:
 
 ```text
-42000,43000,51001-53000
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.ip_local_reserved_ports = 42000,43000,51001-53000
 ```
 
-Apply only `net.ipv4.ip_local_reserved_ports`; do not use a whole-file `sysctl -p` because this fleet has already demonstrated that monolithic reloads can reactivate unrelated legacy settings. The duplicate historical `ip_local_port_range` definitions should be documented/reconciled separately rather than altered as part of the service-port allocation transaction.
+Persistent state matches through both `/etc/sysctl.conf` and the `99-sysctl.conf` symlink:
+
+```text
+/etc/sysctl.conf:71:net.ipv4.ip_local_reserved_ports=42000,43000,51001-53000
+/etc/sysctl.d/99-sysctl.conf:71:net.ipv4.ip_local_reserved_ports=42000,43000,51001-53000
+```
+
+The duplicate historical `ip_local_port_range` definitions remain documented drift and should be reconciled separately, not as part of the AWG/TUIC port-allocation transaction.
 
 ## Open issue discovered during audit
 
