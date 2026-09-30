@@ -192,3 +192,10 @@ container restart requirement. Post-update validation showed no reboot
 required, zero failed systemd units, `mihomo`, Docker,
 `warp-docker-routing.service` and `check-warp-routing.timer` active, and
 `amnezia-awg2` still running on UDP 39551.
+
+The same package refresh on `Saymer` and `Saymer3` exposed the same six
+installable security updates (`openssl`, `libssl3t64`, and four `libheif`
+packages). Additional `dnsmasq-base` and, on `Saymer3`, Mesa updates were
+visible in `apt list --upgradable` but correctly deferred by Ubuntu phased
+updates; they were not forced. `Saymer2` (Debian 12) reported no pending
+upgrades.
