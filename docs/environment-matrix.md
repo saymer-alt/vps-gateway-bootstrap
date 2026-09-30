@@ -163,3 +163,32 @@ recorded as Lesson 26 in `docs/lessons-learned.md`: a static IPv6 stanza
 conflicted with an explicit IPv6-disabled sysctl policy. After removing the
 obsolete IPv6 stanza, applying the intended sysctl policy and clearing stale
 failed state, `systemctl --failed` returned zero units.
+
+## Fleet follow-up — 2026-09-30
+
+A four-host `rp_filter` audit was performed after the `hungry-boyd` recovery.
+Live values on all relevant interfaces were `0`, as required by the active
+Docker -> Mihomo/gVisor gateway path where that integration is used.
+
+Persistent configuration findings:
+
+- `Saymer`: clean; no legacy `rp_filter=1` remained in `/etc/sysctl.conf`.
+- `Saymer2`: clean; only the Amnezia-owned `rp_filter=0` fragment was observed.
+- `hungry-boyd`: legacy `all/default.rp_filter=1` entries were removed from
+  `/etc/sysctl.conf` after backup; live values remained `0`.
+- `Saymer3`: the same legacy `all/default.rp_filter=1` drift was found and
+  removed from `/etc/sysctl.conf` after backup; live values remained `0`.
+
+The Ubuntu system baseline `10-network-security.conf` may still define
+`rp_filter=2`; later Amnezia-owned `99-*` fragments intentionally override it
+for the gateway. The dangerous case was the legacy monolithic
+`/etc/sysctl.conf` value because a manual `sysctl -p /etc/sysctl.conf` applied
+that file directly and could restore incompatible runtime state.
+
+On `hungry-boyd`, six additional Ubuntu 24.04 standard security updates
+(`openssl`, `libssl3t64` and four `libheif` packages) were installed on
+2026-09-30. `needrestart` reported the running kernel up to date and no
+container restart requirement. Post-update validation showed no reboot
+required, zero failed systemd units, `mihomo`, Docker,
+`warp-docker-routing.service` and `check-warp-routing.timer` active, and
+`amnezia-awg2` still running on UDP 39551.
