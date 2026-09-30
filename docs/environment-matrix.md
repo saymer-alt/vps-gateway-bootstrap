@@ -208,3 +208,33 @@ reboot required, zero failed systemd units, `mihomo`, Docker,
 `amnezia-awg2` still running on UDP 31825 (`Saymer`) and UDP 51820 (`Saymer3`).
 The phased `dnsmasq-base` update on `Saymer` and the phased `dnsmasq-base`/Mesa
 updates on `Saymer3` remained deferred and were intentionally not forced.
+
+### UDP service-port audit — 2026-09-30
+
+The next deployment goal is two additional persistent UDP listeners per VPS:
+one for AWG 3.1 in 3X-UI and one for TUIC. Port selection is being performed
+against live listeners, Docker-published ports, UFW, Mieru, Linux ephemeral
+ranges and `ip_local_reserved_ports` rather than by picking arbitrary numbers.
+
+Observed state from the first read-only audit:
+
+| Host | UFW | Existing AWG 2.0 | Mieru evidence | Ephemeral range | Reserved ports | X-UI |
+|---|---:|---:|---|---|---|---|
+| `Saymer` | active, 9 rules | UDP 31825 | 2000 live TCP sockets; exact configured range not yet confirmed by effective config | 1024–65535 | 51001–53000 | active |
+| `Saymer2` | active, 12 rules | UDP 32926 | 2001 live TCP sockets; exact configured range not yet confirmed by effective config | 32768–60999 | none observed | active |
+| `hungry-boyd` | active, 19 rules | UDP 39551 | confirmed `50000-52000/UDP` from `/etc/mita/server_config.json` | 10000–39999 | none observed | active |
+| `Saymer3` | active, 11 rules | UDP 51820 | 2001 live UDP sockets; exact configured range not yet confirmed by effective config | 10000–39999 | none observed | active |
+
+`hungry-boyd` already has an X-UI UDP listener on port 42000; this is the
+existing working AWG 3.1 inbound observed during the 2026-09-29 recovery.
+Therefore 42000 must be preserved and treated as allocated, not selected for a
+second service.
+
+The first audit intentionally does **not** promote inferred Mieru ranges on
+`Saymer`, `Saymer2` or `Saymer3` to facts. Their ~2000 live sockets strongly
+suggest contiguous ranges, but the exact effective Mieru configuration still
+needs to be read before final port allocation. Candidate AWG 3.1/TUIC pairs
+must be checked immediately before use against listeners, UFW and the effective
+Mieru range; if a persistent service port lies inside the host ephemeral range,
+it should also be merged into `ip_local_reserved_ports` without overwriting
+existing reservations.
