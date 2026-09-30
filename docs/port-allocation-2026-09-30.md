@@ -115,3 +115,31 @@ Operational guardrails for the next session:
 - treat the automatically generated IPv6 UFW service rules on hosts with an earlier blanket IPv6 deny as non-effective unless IPv6 policy is deliberately redesigned.
 
 This checkpoint intentionally stops before storing 3X-UI-generated credentials, UUIDs, keys, passwords, or exported client links. Those values should only be recorded later if there is a deliberate need and an appropriate non-secret storage strategy.
+
+## AWG 3.1 subnet allocation — 2026-09-30
+
+The existing AWG networks must remain globally distinct. Current occupied `/24` networks supplied during the live configuration session are:
+
+| Environment | Existing AWG network |
+|---|---|
+| SE AWG 2.0 | `10.8.1.0/24` |
+| SE2 AWG 2.0 | `10.8.9.0/24` |
+| EE AWG 2.0 | `10.8.26.0/24` |
+| MSK AWG 2.0 | `10.8.88.0/24` |
+| EE AWG 3.1 | `10.8.205.0/24` |
+
+For the three new AWG 3.1 inbounds, use a dedicated non-overlapping allocation block:
+
+| Host | AWG 3.1 port | Planned subnet |
+|---|---:|---|
+| `Saymer` | 42000/udp | `10.8.201.0/24` |
+| `Saymer2` | 23000/udp | `10.8.202.0/24` |
+| `Saymer3` | 43000/udp | `10.8.203.0/24` |
+
+Preserve the already existing EE AWG 3.1 `10.8.205.0/24`; do not renumber it merely to make the sequence contiguous. `10.8.204.0/24` remains intentionally unused/reserved for future allocation unless a later live audit shows it is already occupied elsewhere.
+
+### MTU policy for current 3X-UI AmneziaWG
+
+For the current 3X-UI AmneziaWG implementation, leaving the inbound MTU field empty is intentional: an unset value is derived from the default tunnel MTU and S4 transport padding rather than pinned to 1420. With the selected profile `S4 = 13`, the effective value is `1420 - 13 = 1407` (subject to the implementation's 1280 floor). Current client/subscription generation also emits this effective MTU. Therefore leave the MTU field empty for these inbounds and verify that the exported client config contains `MTU = 1407`. If a future/older panel build exports no MTU or behaves differently, pin `1407` explicitly rather than using `1420` with this S4 value.
+
+The external-interface field should normally remain empty for auto-detection. Do not type a placeholder such as `eth0` merely because the UI shows it as an example; live interface discovery remains authoritative.
