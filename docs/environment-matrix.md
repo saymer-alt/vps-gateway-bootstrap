@@ -199,3 +199,12 @@ packages). Additional `dnsmasq-base` and, on `Saymer3`, Mesa updates were
 visible in `apt list --upgradable` but correctly deferred by Ubuntu phased
 updates; they were not forced. `Saymer2` (Debian 12) reported no pending
 upgrades.
+
+Those six security updates were subsequently installed successfully on both
+`Saymer` and `Saymer3`. On both hosts `needrestart` reported the running kernel
+up to date and no container restart requirement. Post-update checks showed no
+reboot required, zero failed systemd units, `mihomo`, Docker,
+`warp-docker-routing.service` and `check-warp-routing.timer` active, with
+`amnezia-awg2` still running on UDP 31825 (`Saymer`) and UDP 51820 (`Saymer3`).
+The phased `dnsmasq-base` update on `Saymer` and the phased `dnsmasq-base`/Mesa
+updates on `Saymer3` remained deferred and were intentionally not forced.
