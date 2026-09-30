@@ -143,3 +143,33 @@ Preserve the already existing EE AWG 3.1 `10.8.205.0/24`; do not renumber it mer
 For the current 3X-UI AmneziaWG implementation, leaving the inbound MTU field empty is intentional: an unset value is derived from the default tunnel MTU and S4 transport padding rather than pinned to 1420. With the selected profile `S4 = 13`, the effective value is `1420 - 13 = 1407` (subject to the implementation's 1280 floor). Current client/subscription generation also emits this effective MTU. Therefore leave the MTU field empty for these inbounds and verify that the exported client config contains `MTU = 1407`. If a future/older panel build exports no MTU or behaves differently, pin `1407` explicitly rather than using `1420` with this S4 value.
 
 The external-interface field should normally remain empty for auto-detection. Do not type a placeholder such as `eth0` merely because the UI shows it as an example; live interface discovery remains authoritative.
+
+## Post-configuration TUIC acceptance — 2026-09-30
+
+All four planned TUIC public UDP ports were ultimately brought to a working
+state. The port allocation itself was not the cause of the later failures.
+The detailed multi-cause investigation is recorded in
+`docs/tuic-warp-ipv6-incident-2026-09-30.md`.
+
+Final operational mapping remained unchanged:
+
+| Host | TUIC UDP port | Acceptance note |
+|---|---:|---|
+| `Saymer` | 43000 | healthy |
+| `hungry-boyd` | 43000 | healthy after removal of stale Xray WARP kernel-TUN state |
+| `Saymer2` | 23001 | healthy after switching self-signed TUIC subscription data to native Mihomo YAML with `skip-cert-verify: true` |
+| `Saymer3` | 43001 | healthy in repeated tests after the same native YAML fix plus disabling the proven-broken native IPv6 path on `ens3` |
+
+Important lessons from acceptance:
+
+- old persisted 3X-UI/Xray WARP state can differ from current UI defaults;
+- Mihomo 1.19.31 does not map TUIC share-link `allow_insecure` to native
+  `skip-cert-verify`;
+- a host may have IPv6 addresses/default route while real IPv6 Internet is a
+  black hole;
+- a single successful delay sample is not sufficient acceptance for an
+  intermittent address-family failure;
+- apply network sysctls surgically and avoid whole-file `sysctl -p` on these
+  gateways unless every key in the file has been revalidated.
+
+No generated credentials or private material were added to the repository.
