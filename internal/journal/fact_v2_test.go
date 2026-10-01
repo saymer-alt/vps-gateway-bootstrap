@@ -240,6 +240,55 @@ func TestJournalV2FullCorroborationChain(t *testing.T) {
 	if v3.Status != ownership.VerificationMismatch {
 		t.Fatalf("failed transaction: %q (%v), want MISMATCH", v3.Status, v3.Reasons)
 	}
+
+	// Full four-plane chain to OWNED_VERIFIED (ZAI-23): state-v2 record →
+	// claim → journal-v2 fact → Corroborate → DeriveVerdict with a
+	// matching live observation. Every plane is a real, independently
+	// validated type; the verdict is classification only.
+	liveSpec := specHash
+	derived, derr := ownership.DeriveVerdict(ownership.DerivationInput{
+		Identity:        ownership.ResourceIdentity{Class: ownership.ClassFile, Path: v2Path},
+		Live:            ownership.LiveFact{State: ownership.LivePresent, SpecHash: &liveSpec},
+		Claim:           &claim,
+		JournalResource: v2Res,
+		Candidates:      []ownership.TransactionFact{fact},
+		CurrentHost:     host,
+	})
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if derived.Verdict != ownership.OwnedVerified {
+		t.Fatalf("full chain verdict = %s (%v), want OWNED_VERIFIED", derived.Verdict, derived.Reasons)
+	}
+	// Drifted live spec → OWNED_DRIFT.
+	other := ownership.SpecHash{0xee}
+	drifted, derr := ownership.DeriveVerdict(ownership.DerivationInput{
+		Identity:        ownership.ResourceIdentity{Class: ownership.ClassFile, Path: v2Path},
+		Live:            ownership.LiveFact{State: ownership.LivePresent, SpecHash: &other},
+		Claim:           &claim,
+		JournalResource: v2Res,
+		Candidates:      []ownership.TransactionFact{fact},
+		CurrentHost:     host,
+	})
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if drifted.Verdict != ownership.OwnedDrift {
+		t.Fatalf("drift verdict = %s (%v), want OWNED_DRIFT", drifted.Verdict, drifted.Reasons)
+	}
+	// The claim alone (no candidates) can never reach an owned verdict.
+	solo, derr := ownership.DeriveVerdict(ownership.DerivationInput{
+		Identity:   ownership.ResourceIdentity{Class: ownership.ClassFile, Path: v2Path},
+		Live:       ownership.LiveFact{State: ownership.LivePresent, SpecHash: &liveSpec},
+		Claim:      &claim,
+		CurrentHost: host,
+	})
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if solo.Verdict == ownership.OwnedVerified || solo.Verdict == ownership.OwnedDrift {
+		t.Fatalf("state-only derivation must never be owned: %s", solo.Verdict)
+	}
 }
 
 // 36/§30: no state evidence is minted by the journal — writing journal v2

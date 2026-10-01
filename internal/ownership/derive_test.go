@@ -491,3 +491,98 @@ func contains(reasons []string, sub string) bool {
 	}
 	return false
 }
+
+// Rolled-back transaction (ZAI-23 §31): a durably proven successful
+// rollback means the mutation did NOT persist as applied — the fact cannot
+// corroborate (O5-A MISMATCH), so a present resource with only this
+// evidence stays COLLISION inside the reserved namespace, never owned.
+func TestDeriveRolledBackTransactionIsNeverOwned(t *testing.T) {
+	rolled := validClaim()
+	in := deriveInput(fileIdentity, present(&liveSpec))
+	in.Claim = claimPtr(rolled)
+	in.Candidates = []TransactionFact{func() TransactionFact {
+		f := TransactionFact{
+			TxID:              testTx,
+			PlanFingerprint:   testFP,
+			HostIdentity:      testHost,
+			Outcome:           TransactionOutcomeFailed,
+			RollbackAttempted: true,
+			RollbackResult:    "ROLLED_BACK",
+			Actions:           []TransactionAction{{Resource: testRes, Status: "ROLLED_BACK"}},
+		}
+		return f
+	}()}
+	d, err := DeriveVerdict(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Verdict == OwnedVerified || d.Verdict == OwnedDrift {
+		t.Fatalf("rolled-back transaction must never be owned: %s (%v)", d.Verdict, d.Reasons)
+	}
+	if d.Verdict != Collision {
+		t.Fatalf("verdict = %s (%v), want COLLISION", d.Verdict, d.Reasons)
+	}
+}
+
+// Rollback-failed transaction (ZAI-23 §32): a failed rollback is dangerous
+// ambiguous evidence — corroboration fails closed (the ownership verifier
+// treats the latch/rollback-failure shape as MISMATCH), so the derivation
+// is COLLISION here, never owned and never silently CONFLICT.
+func TestDeriveRollbackFailedTransactionIsNeverOwned(t *testing.T) {
+	in := deriveInput(fileIdentity, present(&liveSpec))
+	in.Candidates = []TransactionFact{func() TransactionFact {
+		return TransactionFact{
+			TxID:              testTx,
+			PlanFingerprint:   testFP,
+			HostIdentity:      testHost,
+			Outcome:           TransactionOutcomeFailed,
+			RollbackAttempted: true,
+			RollbackResult:    "ROLLBACK_FAILED",
+			Actions:           []TransactionAction{{Resource: testRes, Status: "ROLLED_BACK"}},
+		}
+	}()}
+	d, err := DeriveVerdict(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Verdict == OwnedVerified || d.Verdict == OwnedDrift {
+		t.Fatalf("rollback-failed transaction must never be owned: %s (%v)", d.Verdict, d.Reasons)
+	}
+	if d.Verdict != Collision {
+		t.Fatalf("verdict = %s (%v), want COLLISION (conservative)", d.Verdict, d.Reasons)
+	}
+}
+
+// Journal-only attack (ZAI-23 §22): a valid journal fact with no state
+// claim can never establish ownership on its own.
+func TestDeriveJournalOnlyIsNeverOwned(t *testing.T) {
+	in := deriveInput(fileIdentity, present(&liveSpec))
+	in.Claim = nil
+	d, err := DeriveVerdict(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Verdict == OwnedVerified || d.Verdict == OwnedDrift {
+		t.Fatalf("journal-only must never be owned: %s (%v)", d.Verdict, d.Reasons)
+	}
+	if d.Verdict != Collision {
+		t.Fatalf("verdict = %s (%v), want COLLISION (reserved namespace)", d.Verdict, d.Reasons)
+	}
+}
+
+// State-only attack (ZAI-23 §21): a state claim with no journal
+// corroboration candidates can never establish ownership.
+func TestDeriveStateOnlyIsNeverOwned(t *testing.T) {
+	in := deriveInput(fileIdentity, present(&liveSpec))
+	in.Candidates = nil
+	d, err := DeriveVerdict(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Verdict == OwnedVerified || d.Verdict == OwnedDrift {
+		t.Fatalf("state-only must never be owned: %s (%v)", d.Verdict, d.Reasons)
+	}
+	if d.Verdict != Collision {
+		t.Fatalf("verdict = %s (%v), want COLLISION", d.Verdict, d.Reasons)
+	}
+}
