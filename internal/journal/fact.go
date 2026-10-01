@@ -60,8 +60,8 @@ import (
 // host identity, missing identity fields) return an error — a malformed
 // record can never become a favorable fact.
 func (r Record) CorroborationFact() (ownership.TransactionFact, error) {
-	if r.SchemaVersion != SchemaVersion {
-		return ownership.TransactionFact{}, fmt.Errorf("journal record %s: unsupported schema version %d (this build translates version %d only); refusing optimistic interpretation", r.TransactionID, r.SchemaVersion, SchemaVersion)
+	if !readableSchemaVersions[r.SchemaVersion] {
+		return ownership.TransactionFact{}, fmt.Errorf("journal record %s: unsupported schema version %d (this build translates versions 1 and 2 only); refusing optimistic interpretation", r.TransactionID, r.SchemaVersion)
 	}
 	if r.TransactionID == "" {
 		return ownership.TransactionFact{}, fmt.Errorf("journal record carries no transaction id; it cannot be corroborated")
@@ -77,13 +77,24 @@ func (r Record) CorroborationFact() (ownership.TransactionFact, error) {
 		if a.Resource == "" {
 			return ownership.TransactionFact{}, fmt.Errorf("journal record %s has an action without a resource coordinate", r.TransactionID)
 		}
-		// SpecHash is deliberately absent: the v1 schema stores no per-
-		// action spec hash, and synthesizing one from live state, plan
-		// data, or a display representation is prohibited (R5-A gap).
+		// SpecHash: v1 records store none and are translated with nil
+		// (corroboration caps at INCOMPLETE — never synthesized). v2
+		// records carry the canonical hash recorded at journal Begin; a
+		// malformed value fails closed instead of degrading the fact.
+		var specHash *ownership.SpecHash
+		if r.SchemaVersion >= 2 {
+			if a.SpecHash != "" {
+				h, err := ownership.ParseSpecHashHex(a.SpecHash)
+				if err != nil {
+					return ownership.TransactionFact{}, fmt.Errorf("journal record %s action %s: %w", r.TransactionID, a.Resource, err)
+				}
+				specHash = &h
+			}
+		}
 		actions = append(actions, ownership.TransactionAction{
 			Resource: a.Resource,
 			Status:   a.Status,
-			SpecHash: nil,
+			SpecHash: specHash,
 		})
 	}
 	fact := ownership.TransactionFact{

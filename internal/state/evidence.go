@@ -84,43 +84,16 @@ func (e EvidenceRecord) stateEvidence() (ownership.StateEvidence, error) {
 	return se, nil
 }
 
-// decodeSpecHash requires exactly 64 lowercase hex characters: the
-// canonical durable encoding. Uppercase, short, long, non-hex and empty
-// values are rejected — never normalized into acceptance.
+// decodeSpecHash delegates to the canonical shared codec
+// (ownership.ParseSpecHashHex): exactly 64 lowercase hex characters,
+// rejected — never normalized — otherwise.
 func decodeSpecHash(s string) (ownership.SpecHash, error) {
-	if len(s) != 64 {
-		return ownership.SpecHash{}, fmt.Errorf("spec hash must be exactly 64 hex characters, got %d", len(s))
-	}
-	var out ownership.SpecHash
-	for i := 0; i < 64; i++ {
-		c := s[i]
-		var v byte
-		switch {
-		case c >= '0' && c <= '9':
-			v = c - '0'
-		case c >= 'a' && c <= 'f':
-			v = c - 'a' + 10
-		default:
-			return ownership.SpecHash{}, fmt.Errorf("spec hash must be lowercase hex; offending character at position %d", i)
-		}
-		if i%2 == 0 {
-			out[i/2] = v << 4
-		} else {
-			out[i/2] |= v
-		}
-	}
-	return out, nil
+	return ownership.ParseSpecHashHex(s)
 }
 
 // encodeSpecHash renders the canonical durable form.
 func encodeSpecHash(h ownership.SpecHash) string {
-	const hexDigits = "0123456789abcdef"
-	out := make([]byte, 64)
-	for i, b := range h {
-		out[i*2] = hexDigits[b>>4]
-		out[i*2+1] = hexDigits[b&0x0f]
-	}
-	return string(out)
+	return h.Hex()
 }
 
 // ParseState strictly parses a state document. Version handling is
@@ -346,4 +319,11 @@ func EvidenceRecordsToClaims(records []EvidenceRecord) ([]ownership.StateEvidenc
 		out = append(out, se)
 	}
 	return out, nil
+}
+
+// ToClaim converts the durable record into the pure ownership claim type,
+// running the full O1 validation. The result is a claim — corroboration
+// and verdicts belong to the ownership evidence layer.
+func (e EvidenceRecord) ToClaim() (ownership.StateEvidence, error) {
+	return e.stateEvidence()
 }

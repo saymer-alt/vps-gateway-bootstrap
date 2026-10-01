@@ -28,8 +28,14 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
-// SchemaVersion is the transaction-record schema version.
-const SchemaVersion = 1
+// SchemaVersion is the transaction-record schema version this build
+// writes. v2 adds per-action durable evidence (SpecHash, R5-A); v1
+// documents remain readable but carry no spec hashes (the O5-D adapter
+// and corroboration treat them as INCOMPLETE — never upgraded).
+const SchemaVersion = 2
+
+// Schema versions this build reads. Unknown future versions fail closed.
+var readableSchemaVersions = map[int]bool{1: true, 2: true}
 
 // DefaultDir is the production journal location. Pinned like the trust
 // anchor and the state file: not configurable.
@@ -96,24 +102,31 @@ type ActionRecord struct {
 	RetryClass RetryClass `json:"retry_class"`
 	Status     string     `json:"status,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	// SpecHash is the canonical intended-specification hash
+	// (state.ActionSpecHash, 64-char lowercase hex) of the action's typed
+	// specification, recorded durably at journal Begin — evidence of
+	// intent that survives a mid-mutation crash (R5-A). It proves the
+	// intended specification, never that the mutation occurred. Absent in
+	// v1 records (corroboration caps those at INCOMPLETE).
+	SpecHash string `json:"spec_hash,omitempty"`
 }
 
 // Record is the durable transaction record.
 type Record struct {
-	SchemaVersion int              `json:"schema_version"`
-	TransactionID string           `json:"transaction_id"`
-	HostIdentity  string           `json:"host_identity,omitempty"` // machine-id:<...> when known
-	PlanFingerprint string         `json:"plan_fingerprint"`
-	Approval      *ApprovalEvidence `json:"approval,omitempty"`
-	Actions       []ActionRecord   `json:"actions"`
-	StartedAt     time.Time        `json:"started_at"`
-	UpdatedAt     time.Time        `json:"updated_at"`
-	Stage         string           `json:"stage"`
-	MutationPossible bool          `json:"mutation_possible"`
-	RollbackAttempted bool         `json:"rollback_attempted,omitempty"`
-	RollbackResult  string         `json:"rollback_result,omitempty"` // "ROLLED_BACK" | "ROLLBACK_FAILED"
-	Outcome       string           `json:"outcome,omitempty"`
-	RecoveryRequired bool         `json:"recovery_required,omitempty"`
+	SchemaVersion     int               `json:"schema_version"`
+	TransactionID     string            `json:"transaction_id"`
+	HostIdentity      string            `json:"host_identity,omitempty"` // machine-id:<...> when known
+	PlanFingerprint   string            `json:"plan_fingerprint"`
+	Approval          *ApprovalEvidence `json:"approval,omitempty"`
+	Actions           []ActionRecord    `json:"actions"`
+	StartedAt         time.Time         `json:"started_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	Stage             string            `json:"stage"`
+	MutationPossible  bool              `json:"mutation_possible"`
+	RollbackAttempted bool              `json:"rollback_attempted,omitempty"`
+	RollbackResult    string            `json:"rollback_result,omitempty"` // "ROLLED_BACK" | "ROLLBACK_FAILED"
+	Outcome           string            `json:"outcome,omitempty"`
+	RecoveryRequired  bool              `json:"recovery_required,omitempty"`
 }
 
 // NewTransactionID mints a unique id per mutating execution.
@@ -200,8 +213,8 @@ func (j *Journal) loadAll() ([]Record, error) {
 		if err := json.Unmarshal(data, &rec); err != nil {
 			return nil, fmt.Errorf("journal record %s is corrupt: %w", e.Name(), err)
 		}
-		if rec.SchemaVersion != SchemaVersion {
-			return nil, fmt.Errorf("journal record %s: unsupported schema version %d", e.Name(), rec.SchemaVersion)
+		if !readableSchemaVersions[rec.SchemaVersion] {
+			return nil, fmt.Errorf("journal record %s: unsupported schema version %d (readable: 1, 2)", e.Name(), rec.SchemaVersion)
 		}
 		out = append(out, rec)
 	}

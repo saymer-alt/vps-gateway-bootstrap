@@ -15,19 +15,24 @@ import (
 )
 
 // finalizeBreaker is a scripted SERVICE executor that makes the terminal
-// journal write fail deterministically, independent of euid. It implements
-// TransactionBinder to learn the durable transaction id, and its Apply
-// replaces the journal record FILE with an empty DIRECTORY of the same name:
-// journal loads (loadAll) skip directories, so every read-side gate
-// (PersistenceBlockers, later BlockingRecords of other runs) still works,
-// but Journal.Update's os.Rename of the fresh temp file over that directory
-// fails with EISDIR — root included. The Begin-time record content is kept
-// in stash so a test can restore the truthful durable state afterwards.
+// journal write fail deterministically, independent of euid. Since R5-A
+// the engine persists per-action progress during the transaction, so the
+// injection must NOT break those writes (an APPLIED whose persistence
+// fails fails the transaction fail-closed — that is the R5-A contract,
+// covered by the progress-failure test): the breaker instead lets every
+// progress write succeed and swaps the journal record FILE for an empty
+// DIRECTORY at the executor's Validate boundary — after the durable
+// APPLIED write, before the terminal finalize. Journal.Update's os.Rename
+// of the fresh temp file over that directory fails with EISDIR — root
+// included; journal loads (loadAll) skip directories, so read-side gates
+// still work. The Begin-time record content is kept in stash so a test can
+// restore the truthful durable state afterwards.
 type finalizeBreaker struct {
 	journalDir string
 	stash      []byte
 	txID       string
 	failApply  bool
+	broken     bool
 	calls      []string
 }
 
@@ -42,6 +47,30 @@ func (e *finalizeBreaker) Backup(id, resource string) error {
 
 func (e *finalizeBreaker) Apply(id, resource, kind string) error {
 	e.calls = append(e.calls, "apply")
+	if e.failApply {
+		return errors.New("apply failed (scripted)")
+	}
+	return nil
+}
+
+func (e *finalizeBreaker) Validate(id, resource string) error {
+	e.calls = append(e.calls, "validate")
+	return e.breakNow()
+}
+
+func (e *finalizeBreaker) Rollback(id, resource string) error {
+	e.calls = append(e.calls, "rollback")
+	// Failed-stage scenario: break the record at the rollback boundary so
+	// the terminal finalize fails on an already-FAILED run.
+	return e.breakNow()
+}
+
+// breakNow swaps the record file for a directory once; idempotent.
+func (e *finalizeBreaker) breakNow() error {
+	if e.broken {
+		return nil
+	}
+	e.broken = true
 	recPath := filepath.Join(e.journalDir, e.txID+".json")
 	data, err := os.ReadFile(recPath)
 	if err != nil {
@@ -51,23 +80,7 @@ func (e *finalizeBreaker) Apply(id, resource, kind string) error {
 	if err := os.Remove(recPath); err != nil {
 		return err
 	}
-	if err := os.Mkdir(recPath, 0700); err != nil {
-		return err
-	}
-	if e.failApply {
-		return errors.New("apply failed (scripted)")
-	}
-	return nil
-}
-
-func (e *finalizeBreaker) Validate(id, resource string) error {
-	e.calls = append(e.calls, "validate")
-	return nil
-}
-
-func (e *finalizeBreaker) Rollback(id, resource string) error {
-	e.calls = append(e.calls, "rollback")
-	return nil
+	return os.Mkdir(recPath, 0700)
 }
 
 // restoreJournalRecord puts the Begin-time record content back so the

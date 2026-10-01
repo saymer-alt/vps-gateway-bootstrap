@@ -157,7 +157,9 @@ func (o Orchestrator) Confirm(p Plan, c Confirmation) error {
 }
 
 func short(f string) string {
-	if len(f) > 12 { return f[:12] }
+	if len(f) > 12 {
+		return f[:12]
+	}
 	return f
 }
 
@@ -166,7 +168,9 @@ func short(f string) string {
 // the machine. Readiness here is necessary but not sufficient: confirmation,
 // management requirements and the lock are checked at execution time.
 func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan {
-	if cfg == nil { cfg = &pipeline.Config{} }
+	if cfg == nil {
+		cfg = &pipeline.Config{}
+	}
 	res := pipeline.Assemble(o.Discover(), cfg, opts)
 	p := Plan{
 		Discovery: res.Discovery,
@@ -181,7 +185,9 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 	// earlier actions already mutated the machine.
 	registered := map[state.ActionKind]bool{}
 	for kind, ex := range o.Registry.ByKind {
-		if ex != nil { registered[kind] = true }
+		if ex != nil {
+			registered[kind] = true
+		}
 	}
 	missing := state.MissingExecutors(p.Plan, registered)
 	ok := len(missing) == 0
@@ -207,8 +213,12 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 		}
 	}
 
-	if p.Plan.Blocked { p.Blockers = append(p.Blockers, p.Plan.BlockReasons...) }
-	if p.Preflight.Status != state.PreflightReady { p.Blockers = append(p.Blockers, p.Preflight.Blocking...) }
+	if p.Plan.Blocked {
+		p.Blockers = append(p.Blockers, p.Plan.BlockReasons...)
+	}
+	if p.Preflight.Status != state.PreflightReady {
+		p.Blockers = append(p.Blockers, p.Preflight.Blocking...)
+	}
 	p.Ready = !p.Plan.Blocked && p.Preflight.Status == state.PreflightReady
 	p.opts = opts
 	p.prepared = true
@@ -216,10 +226,14 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 }
 
 func coverageReason(missing []state.ActionKind) string {
-	if len(missing) == 0 { return "all planned action kinds have registered executors" }
+	if len(missing) == 0 {
+		return "all planned action kinds have registered executors"
+	}
 	out := "no executor registered for action kind(s)"
 	for i, k := range missing {
-		if i > 0 { out += "," }
+		if i > 0 {
+			out += ","
+		}
 		out += " " + string(k)
 	}
 	return out
@@ -248,17 +262,23 @@ const (
 )
 
 func (o Orchestrator) now() time.Time {
-	if o.Now != nil { return o.Now() }
+	if o.Now != nil {
+		return o.Now()
+	}
 	return time.Now().UTC()
 }
 
 func (o Orchestrator) lockPath() string {
-	if o.LockPath != "" { return o.LockPath }
+	if o.LockPath != "" {
+		return o.LockPath
+	}
 	return DefaultLockPath
 }
 
 func (o Orchestrator) statePath() string {
-	if o.StatePath != "" { return o.StatePath }
+	if o.StatePath != "" {
+		return o.StatePath
+	}
 	return DefaultStatePath
 }
 
@@ -311,7 +331,9 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	}
 	registered := map[state.ActionKind]bool{}
 	for kind, ex := range o.Registry.ByKind {
-		if ex != nil { registered[kind] = true }
+		if ex != nil {
+			registered[kind] = true
+		}
 	}
 	if missing := state.MissingExecutors(p.Plan, registered); len(missing) > 0 {
 		out.Stage = StageBlocked
@@ -404,10 +426,20 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 				return out, nil
 			}
 		}
+		// Durable intended-specification evidence (R5-A): every action's
+		// canonical SpecHash is recorded at Begin, so the intended spec is
+		// provable even if the process dies mid-mutation. Hash derivation
+		// failure blocks the transaction before any mutation.
+		specHashes, err := planSpecHashes(p.Plan)
+		if err != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "spec hash derivation: "+err.Error())
+			return out, nil
+		}
 		rec = &journal.Record{
 			TransactionID:    journal.NewTransactionID(o.now()),
 			PlanFingerprint:  Fingerprint(p.Plan),
-			Actions:          journalActionRecords(p.Plan),
+			Actions:          journalActionRecords(p.Plan, specHashes),
 			Stage:            "MUTATING",
 			MutationPossible: true,
 		}
@@ -458,15 +490,20 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	reg.Actions = actions
 	bound := map[apply.ActionExecutor]bool{}
 	for _, ex := range o.Registry.ByKind {
-		if ex == nil || bound[ex] { continue }
+		if ex == nil || bound[ex] {
+			continue
+		}
 		bound[ex] = true
 		if binder, ok := ex.(apply.ActionBinder); ok {
 			binder.BindActions(actions)
 		}
 	}
 
-	// The engine re-checks the gate itself; belt and braces.
-	tr := (apply.Engine{Executor: reg}).Apply(p.Plan, preflightGate{pf: p.Preflight})
+	// The engine re-checks the gate itself; belt and braces. The progress
+	// sink persists per-action lifecycle transitions durably (R5-A) — an
+	// APPLIED whose persistence fails fails the transaction (the engine
+	// rolls the action back rather than continuing without evidence).
+	tr := (apply.Engine{Executor: reg, Progress: o.progressSink(rec)}).Apply(p.Plan, preflightGate{pf: p.Preflight})
 	out.Transaction = tr
 	if tr.Status != apply.StatusApplied {
 		out.Stage = StageFailedTransaction
@@ -601,17 +638,64 @@ func (o Orchestrator) planHasMutation(p state.Plan) bool {
 }
 
 // journalActionRecords snapshots the plan's actions into journal records
-// with their retry classification (all PENDING until the engine reports).
-func journalActionRecords(p state.Plan) []journal.ActionRecord {
+// with their retry classification (all PENDING until the engine reports)
+// and their canonical intended-specification hashes (R5-A: durable
+// evidence of intent, recorded at Begin). Actions without a typed
+// specification (read-only VALIDATE actions) carry no hash.
+func journalActionRecords(p state.Plan, specHashes map[string]string) []journal.ActionRecord {
 	var out []journal.ActionRecord
 	for _, a := range p.Actions {
 		rec := journal.ActionRecord{ID: a.ID, Resource: a.Resource, Kind: string(a.Kind), Status: "PENDING"}
 		if cls, err := journal.ClassifyRetry(a.Kind); err == nil {
 			rec.RetryClass = cls
 		}
+		rec.SpecHash = specHashes[a.ID]
 		out = append(out, rec)
 	}
 	return out
+}
+
+// planSpecHashes derives the canonical intended-specification hash for
+// every action that carries one (mutation actions). Read-only VALIDATE
+// actions have no specification and are absent from the result.
+func planSpecHashes(p state.Plan) (map[string]string, error) {
+	out := map[string]string{}
+	for _, a := range p.Actions {
+		if a.Spec == nil {
+			continue
+		}
+		h, err := state.ActionSpecHash(a)
+		if err != nil {
+			return nil, fmt.Errorf("action %q: %w", a.ID, err)
+		}
+		out[a.ID] = h.Hex()
+	}
+	return out, nil
+}
+
+// progressSink returns the durable per-action progress writer for one
+// in-flight transaction (R5-A): each event flips the action's durable
+// status and rewrites the record atomically. Nil journal → nil sink (the
+// caller refuses mutating plans without a journal anyway).
+func (o Orchestrator) progressSink(rec *journal.Record) func(apply.ProgressEvent, string) error {
+	if o.Journal == nil {
+		return nil
+	}
+	if rec == nil {
+		// Read-only plans never open a journal record (journaling is for
+		// mutating transactions): lifecycle events have nothing durable to
+		// update and are no-ops.
+		return func(apply.ProgressEvent, string) error { return nil }
+	}
+	return func(event apply.ProgressEvent, actionID string) error {
+		for i := range rec.Actions {
+			if rec.Actions[i].ID == actionID {
+				rec.Actions[i].Status = string(event)
+				return o.Journal.Update(rec)
+			}
+		}
+		return fmt.Errorf("progress event %s for unknown action %q", event, actionID)
+	}
 }
 
 // finalizeJournal records the transaction outcome after the engine has run
@@ -678,9 +762,13 @@ func (o Orchestrator) executorPreflightBlockers(p *Plan) []string {
 	var blockers []string
 	for _, a := range p.Plan.Actions {
 		ex, ok := o.Registry.ByKind[a.Kind]
-		if !ok || ex == nil { continue }
+		if !ok || ex == nil {
+			continue
+		}
 		checker, ok := ex.(apply.PreflightChecker)
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 		if err := checker.PreflightCheck(a); err != nil {
 			blockers = append(blockers, fmt.Sprintf("executor preflight %s: %v", a.Resource, err))
 		}
@@ -695,13 +783,20 @@ func (o Orchestrator) executorPreflightBlockers(p *Plan) []string {
 func requiredManagementPorts(p state.Plan) []int {
 	var ports []int
 	for _, a := range p.Actions {
-		if a.Kind != state.ActionSSHFinalize || a.Spec == nil || a.Spec.SSH == nil { continue }
+		if a.Kind != state.ActionSSHFinalize || a.Spec == nil || a.Spec.SSH == nil {
+			continue
+		}
 		if port := a.Spec.SSH.NewPort; port > 0 {
 			found := false
 			for _, have := range ports {
-				if have == port { found = true; break }
+				if have == port {
+					found = true
+					break
+				}
 			}
-			if !found { ports = append(ports, port) }
+			if !found {
+				ports = append(ports, port)
+			}
 		}
 	}
 	return ports
@@ -709,7 +804,9 @@ func requiredManagementPorts(p state.Plan) []int {
 
 func managementBlockers(p state.Plan, results []probe.Result) []string {
 	ports := requiredManagementPorts(p)
-	if len(ports) == 0 { return nil }
+	if len(ports) == 0 {
+		return nil
+	}
 	var blockers []string
 	for _, port := range ports {
 		satisfied := false
@@ -729,5 +826,5 @@ func managementBlockers(p state.Plan, results []probe.Result) []string {
 // preflightGate adapts a prepared Preflight to the engine's gate interface.
 type preflightGate struct{ pf state.Preflight }
 
-func (g preflightGate) Ready() bool { return g.pf.Status == state.PreflightReady }
+func (g preflightGate) Ready() bool       { return g.pf.Status == state.PreflightReady }
 func (g preflightGate) Reasons() []string { return g.pf.Blocking }
