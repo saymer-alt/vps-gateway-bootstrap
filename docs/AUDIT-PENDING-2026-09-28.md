@@ -1,19 +1,21 @@
 # Pending Audit Findings — CODEX-01 (recorded 2026-09-28)
 
-Status: **PARTIALLY RESOLVED**. This began as a preservation record of
-unverified findings; per-finding status updates below (2026-09-28) record
-what has since been independently verified and corrected. Findings without
-a status update remain unverified. Checkpoint summary (2026-09-28, final
-overnight sweep; D updated 2026-09-29): **A** — VERIFIED/FIXED (lock half;
-`--state` half = B remains open, deliberately deferred as the last
-current-path containment defect); **C** — VERIFIED/FIXED; **D** —
-VERIFIED, then CONTAINED (the fileexperiment mutation surface was found
-narrowly reachable as an ownership-authority defect by CODEX TASK-02 and
-disabled on 2026-09-29 — see the status block below); **E** — VERIFIED (no
-compiled host enforcement exists;
-wording guidance stands); **F, G** — VERIFIED/FIXED at the PURE layer;
-**H** — largely addressed (current handoff supersedes the stale
-statements); **B** — VERIFIED, STILL OPEN. This document is not an
+Status: **RESOLVED** (all findings verified and, where defects, corrected;
+2026-10-01). This began as a preservation record of unverified findings;
+per-finding status updates below record what was independently verified
+and corrected. Checkpoint summary: **A** — VERIFIED/FIXED (lock half,
+`bb99a74`; `--state` half = B, `2026-10-01`); **B** — VERIFIED/FIXED
+(2026-10-01, ZAI-18: the `apply --state` flag was removed; see the status
+block below); **C** — VERIFIED/FIXED; **D** — VERIFIED, then CONTAINED
+(the fileexperiment mutation surface was found narrowly reachable as an
+ownership-authority defect by CODEX TASK-02 and disabled on 2026-09-29 —
+see the status block below); **E** — VERIFIED (no compiled host
+enforcement exists; wording guidance stands); **F, G** — VERIFIED/FIXED at
+the PURE layer; **H** — largely addressed (current handoff supersedes the
+stale statements). The only residual from this record is the designed
+journal-terminal-first ordering (a separate architectural item, see §C).
+This document is
+not an
 architecture document. It exists so that findings from a fresh independent
 agent review
 ("CODEX-01") of this repository at
@@ -99,6 +101,29 @@ determine, for the configured state path:
   participate in any authority decision);
 - writes on failure paths (what is written when the run fails);
 - whether this is authority-relevant or merely storage configurability.
+
+**Status update (2026-10-01, ZAI-18):** VERIFIED and FIXED. ZAI-02 verified
+the finding (caller-selectable atomic 0600 replace of any caller-named
+path, post-validation only, no parent creation, symlink replaced rather
+than followed, no authority input on the apply path); the fix was then
+deferred five times as the last known current-path containment defect.
+ZAI-18 removed the `apply --state` flag: state persistence lands only in
+the compiled project location (`state.PersistedStatePath` =
+`/etc/vps-gateway/state.json` via `orchestrate.DefaultStatePath` — single
+source of truth; the `Orchestrator.StatePath` field remains a test seam).
+Regression tests: flag refusal in both split and equals-joined forms
+(`TestApplyRejectsArbitraryStatePath`), relative-form refusal
+(`TestApplyRejectsRelativeStatePath`), sentinel preservation, the pinned
+compiled identity chain (`TestApplyStatePathIsCompiledAndShared`), and
+fail-closed persistence (`TestApplyStatePersistFailureSurfaces` — a save
+failure surfaces as FAILED_PERSIST with no fallback write). Symlink
+classification (unchanged by the fix, documented): a symlink at the state
+path is atomically replaced by `SaveModel`'s rename, never written
+through; a symlinked parent directory follows normal traversal — a latent
+concern for a future filesystem-authority slice, not reachable through
+any caller input now that the path is compiled. Line references above
+describe the pre-fix code. The `install --dry-run --state FILE` flag is a
+different, read-only command and was deliberately left unchanged.
 
 ## C. Journal-finalization concern (current path)
 

@@ -98,7 +98,7 @@ func runApply(args []string, o *orchestrate.Orchestrator, stdin io.Reader, stdou
 func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Options, stdin io.Reader, stdout, stderr io.Writer) int {
 	timeout, rest := parseTimeout(args)
 	dryRun := false
-	configPath, statePath, confirmPrefix := "", "", ""
+	configPath, confirmPrefix := "", ""
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
 		case "--dry-run":
@@ -107,10 +107,6 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 			if i+1 >= len(rest) { fmt.Fprintln(stderr, "--config requires a file path"); return 2 }
 			i++
 			configPath = rest[i]
-		case "--state":
-			if i+1 >= len(rest) { fmt.Fprintln(stderr, "--state requires a file path"); return 2 }
-			i++
-			statePath = rest[i]
 		case "--confirm":
 			if i+1 >= len(rest) { fmt.Fprintln(stderr, "--confirm requires the plan fingerprint prefix"); return 2 }
 			i++
@@ -133,11 +129,12 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	if o == nil {
 		o = defaultApplyOrchestrator(timeout)
 	}
-	if statePath != "" { o.StatePath = statePath }
-	// The lock path is deliberately not caller-configurable: no CLI flag may
-	// redirect the mutation lock, so every apply run shares one compiled
-	// project lock identity and cannot bypass mutual exclusion by choosing
-	// another destination. Tests isolate through the Orchestrator struct.
+	// Lifecycle paths (state and lock) are deliberately not caller-
+	// configurable: no CLI flag may redirect them, so every apply run uses
+	// the compiled project locations (/etc/vps-gateway/state.json via
+	// defaultApplyOrchestrator, and the compiled lock identity) and cannot
+	// redirect lifecycle writes by choosing another destination. Tests
+	// isolate through the Orchestrator struct.
 
 	// Phase 1-6: read-only planning on the live machine.
 	p := o.Prepare(cfg, opts)

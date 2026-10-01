@@ -389,6 +389,116 @@ func TestApplyRejectsArbitraryLockPath(t *testing.T) {
 	}
 }
 
+// Containment regression (ZAI-18): the CLI must not offer any state-path
+// selection. `--state` is not a recognized apply flag, so a caller cannot
+// redirect state persistence to an arbitrary destination, and the argument
+// is refused at the parser before any orchestrator work, confirmation, or
+// mutation. Both the split and the equals-joined flag forms are refused.
+func TestApplyRejectsArbitraryStatePath(t *testing.T) {
+	for _, flag := range []string{"--state", "--state=/tmp/attacker-chosen.json"} {
+		t.Run(flag, func(t *testing.T) {
+			o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
+			sentinel := filepath.Join(t.TempDir(), "attacker-chosen.json")
+			sentinelContent := []byte("caller-chosen bytes\n")
+			if err := os.WriteFile(sentinel, sentinelContent, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var out bytes.Buffer
+			code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t), flag, sentinel}, o, rootOpts(), strings.NewReader(""), &out, &out)
+			if code != 2 {
+				t.Fatalf("exit=%d, want 2 (unknown flag); output=%s", code, out.String())
+			}
+			if !strings.Contains(out.String(), "unknown apply flag") {
+				t.Fatalf("expected unknown-flag refusal, got: %s", out.String())
+			}
+			if len(rec.calls) != 0 {
+				t.Fatalf("executor calls after state-path refusal: %v", rec.calls)
+			}
+			got, err := os.ReadFile(sentinel)
+			if err != nil {
+				t.Fatalf("sentinel file disturbed by refused invocation: %v", err)
+			}
+			if !bytes.Equal(got, sentinelContent) {
+				t.Fatalf("sentinel content changed: %q", got)
+			}
+		})
+	}
+}
+
+// Containment regression (ZAI-18): a relative attacker-chosen state path is
+// refused exactly like an absolute one — the flag itself is gone, so no
+// path form reaches the orchestrator.
+func TestApplyRejectsRelativeStatePath(t *testing.T) {
+	o, rec, _ := applyTestOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}}})
+	var out bytes.Buffer
+	code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t), "--state", "relative/state.json"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 2 || !strings.Contains(out.String(), "unknown apply flag") {
+		t.Fatalf("exit=%d output=%s, want unknown-flag refusal", code, out.String())
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("executor calls: %v", rec.calls)
+	}
+}
+
+// Containment regression (ZAI-18): the authoritative state location is the
+// compiled project path — one deterministic identity through the single
+// source-of-truth constant chain, shared by every production wiring. Every
+// normal invocation persists to exactly this path (the compiled test seam
+// proves a normal confirmed run writes the injected equivalent).
+func TestApplyStatePathIsCompiledAndShared(t *testing.T) {
+	first := defaultApplyOrchestrator(time.Second)
+	second := defaultApplyOrchestrator(2 * time.Second)
+	if first.StatePath == "" || second.StatePath == "" {
+		t.Fatalf("state identity must be non-empty: %q / %q", first.StatePath, second.StatePath)
+	}
+	if first.StatePath != orchestrate.DefaultStatePath || second.StatePath != orchestrate.DefaultStatePath {
+		t.Fatalf("state identity drifted from the compiled project default: %q / %q", first.StatePath, second.StatePath)
+	}
+	if first.StatePath != second.StatePath {
+		t.Fatalf("equivalent apply invocations must share one state identity: %q vs %q", first.StatePath, second.StatePath)
+	}
+	if first.StatePath != state.PersistedStatePath {
+		t.Fatalf("state identity must equal the single source of truth %q: %q", state.PersistedStatePath, first.StatePath)
+	}
+}
+
+// Containment regression (ZAI-18): a persistence failure at the pinned
+// state path is surfaced, not redirected — the run fails FAILED_PERSIST,
+// reports the error, and no fallback location is written anywhere.
+func TestApplyStatePersistFailureSurfaces(t *testing.T) {
+	var calls [][]string
+	svc := &apply.ServiceExecutor{Runner: func(name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		return nil
+	}}
+	o, _, _ := applyTestOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t), loadSaymer3Discovery(t), repairedSaymer3Discovery(t),
+	}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc}})
+	// Point the pinned-path seam at a parent directory that does not exist:
+	// SaveModel refuses to create parents, so persistence fails closed.
+	missingDir := filepath.Join(t.TempDir(), "does-not-exist")
+	o.StatePath = filepath.Join(missingDir, "state.json")
+	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
+	prefix := fingerprintPrefix(t, prepared)
+
+	var out bytes.Buffer
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3 (FAILED_PERSIST); output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "FAILED_PERSIST") {
+		t.Fatalf("persist failure not surfaced: %s", out.String())
+	}
+	// No fallback state file was written anywhere in the test root.
+	matches, _ := filepath.Glob(filepath.Join(t.TempDir(), "*"))
+	for _, m := range matches {
+		if filepath.Base(m) == "state.json" {
+			t.Fatalf("a fallback state file appeared: %s", m)
+		}
+	}
+}
+
 // Containment regression (ZAI-03): every production apply wiring resolves to
 // the same compiled project lock identity — two equivalent invocations share
 // one mutation lock, and the identity is the repository's compiled default,
