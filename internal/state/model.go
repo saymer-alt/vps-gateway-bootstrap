@@ -2,7 +2,10 @@ package state
 
 import "time"
 
-const SchemaVersion = 1
+// SchemaVersion is the state document schema this build writes (v2 adds
+// the durable ownership-evidence claim plane; v1 remains readable). See
+// evidence.go for the strict v2 reader and the evidence boundary.
+const SchemaVersion = 2
 
 type Status string
 
@@ -17,9 +20,9 @@ const (
 type Ownership string
 
 const (
-	Owned     Ownership = "OWNED"
-	External  Ownership = "EXTERNAL"
-	Unknown   Ownership = "UNKNOWN"
+	Owned    Ownership = "OWNED"
+	External Ownership = "EXTERNAL"
+	Unknown  Ownership = "UNKNOWN"
 )
 
 type DiffKind string
@@ -37,17 +40,26 @@ const (
 )
 
 type Model struct {
-	SchemaVersion    int       `json:"schema_version"`
-	BootstrapVersion string    `json:"bootstrap_version,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Profile          string    `json:"profile"`
-	Actual           Actual    `json:"actual_state"`
-	Desired          Desired  `json:"desired_state"`
+	SchemaVersion    int                  `json:"schema_version"`
+	BootstrapVersion string               `json:"bootstrap_version,omitempty"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Profile          string               `json:"profile"`
+	Actual           Actual               `json:"actual_state"`
+	Desired          Desired              `json:"desired_state"`
 	Ownership        map[string]Ownership `json:"ownership"`
-	Capabilities     Capabilities `json:"capabilities"`
-	Constraints      []Constraint `json:"constraints"`
-	Diff             []DiffItem `json:"diff"`
-	Status            Status `json:"status"`
+	Capabilities     Capabilities         `json:"capabilities"`
+	Constraints      []Constraint         `json:"constraints"`
+	Diff             []DiffItem           `json:"diff"`
+	Status           Status               `json:"status"`
+	// Evidence carries durable ownership-evidence CLAIMS (v2 only). A
+	// record here is a historical assertion that the referenced transaction
+	// created/verified the referenced resource with the referenced spec on
+	// the referenced host. It is never proof, never ownership, and never
+	// authority: corroboration belongs to the ownership evidence layer
+	// (internal/ownership Corroborate, O5-D adapter), which no production
+	// path consumes yet. v1 documents carry no evidence by definition —
+	// parsing never synthesizes any.
+	Evidence []EvidenceRecord `json:"evidence,omitempty"`
 }
 
 type Actual struct {
@@ -65,24 +77,54 @@ type Actual struct {
 // discovery.Host): the stable OS-installation identity that approval
 // verification binds to. It is observed state only — desired config and
 // persisted state have no path to override it.
-type SystemActual struct { OS string `json:"os,omitempty"`; Kernel string `json:"kernel,omitempty"`; Architecture string `json:"architecture,omitempty"`; MachineID string `json:"machine_id,omitempty"`; MachineIDStatus string `json:"machine_id_status,omitempty"` }
-type NetworkActual struct { ExternalInterface string `json:"external_interface,omitempty"`; DefaultGateway string `json:"default_gateway,omitempty"`; IPv4 bool `json:"ipv4"`; IPv6 bool `json:"ipv6"` }
-type SecurityActual struct { SSHPorts []int `json:"ssh_ports,omitempty"`; SSHArchitecture string `json:"ssh_architecture,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
-type ContainersActual struct { DockerInstalled bool `json:"docker_installed"`; DockerActive bool `json:"docker_active"` }
-type ServiceActual struct { Name string `json:"name"`; Enabled bool `json:"enabled"`; Active bool `json:"active"`; SubState string `json:"substate,omitempty"` }
-type GatewayActual struct { MihomoInstalled bool `json:"mihomo_installed"`; MihomoActive bool `json:"mihomo_active"`; MieruInstalled bool `json:"mieru_installed"`; MieruActive bool `json:"mieru_active"`; WireGuardInstalled bool `json:"wireguard_installed"`; AmneziaInstalled bool `json:"amnezia_installed"` }
+type SystemActual struct {
+	OS              string `json:"os,omitempty"`
+	Kernel          string `json:"kernel,omitempty"`
+	Architecture    string `json:"architecture,omitempty"`
+	MachineID       string `json:"machine_id,omitempty"`
+	MachineIDStatus string `json:"machine_id_status,omitempty"`
+}
+type NetworkActual struct {
+	ExternalInterface string `json:"external_interface,omitempty"`
+	DefaultGateway    string `json:"default_gateway,omitempty"`
+	IPv4              bool   `json:"ipv4"`
+	IPv6              bool   `json:"ipv6"`
+}
+type SecurityActual struct {
+	SSHPorts               []int  `json:"ssh_ports,omitempty"`
+	SSHArchitecture        string `json:"ssh_architecture,omitempty"`
+	PasswordAuthentication *bool  `json:"password_authentication,omitempty"`
+}
+type ContainersActual struct {
+	DockerInstalled bool `json:"docker_installed"`
+	DockerActive    bool `json:"docker_active"`
+}
+type ServiceActual struct {
+	Name     string `json:"name"`
+	Enabled  bool   `json:"enabled"`
+	Active   bool   `json:"active"`
+	SubState string `json:"substate,omitempty"`
+}
+type GatewayActual struct {
+	MihomoInstalled    bool `json:"mihomo_installed"`
+	MihomoActive       bool `json:"mihomo_active"`
+	MieruInstalled     bool `json:"mieru_installed"`
+	MieruActive        bool `json:"mieru_active"`
+	WireGuardInstalled bool `json:"wireguard_installed"`
+	AmneziaInstalled   bool `json:"amnezia_installed"`
+}
 
 type Desired struct {
-	Profile string `json:"profile,omitempty"`
-	Forwarding *bool `json:"forwarding,omitempty"`
-	SwapPresent *bool `json:"swap_present,omitempty"`
-	BaselineSysctl *bool `json:"baseline_sysctl,omitempty"`
-	SSH *SSHDesired `json:"ssh,omitempty"`
-	Firewall *FirewallDesired `json:"firewall,omitempty"`
-	Mihomo *MihomoDesired `json:"mihomo,omitempty"`
-	Mieru *MieruDesired `json:"mieru,omitempty"`
-	Services []ServiceDesired `json:"services,omitempty"`
-	Files []FileDesired `json:"files,omitempty"`
+	Profile        string           `json:"profile,omitempty"`
+	Forwarding     *bool            `json:"forwarding,omitempty"`
+	SwapPresent    *bool            `json:"swap_present,omitempty"`
+	BaselineSysctl *bool            `json:"baseline_sysctl,omitempty"`
+	SSH            *SSHDesired      `json:"ssh,omitempty"`
+	Firewall       *FirewallDesired `json:"firewall,omitempty"`
+	Mihomo         *MihomoDesired   `json:"mihomo,omitempty"`
+	Mieru          *MieruDesired    `json:"mieru,omitempty"`
+	Services       []ServiceDesired `json:"services,omitempty"`
+	Files          []FileDesired    `json:"files,omitempty"`
 }
 
 // ServiceDesired expresses the desired runtime state of one systemd unit.
@@ -109,11 +151,41 @@ type FileActual struct {
 	SHA256 string `json:"sha256,omitempty"`
 	Mode   uint32 `json:"mode,omitempty"`
 }
-type SSHDesired struct { Port *int `json:"port,omitempty"`; KeyAuthentication *bool `json:"key_authentication,omitempty"`; PasswordAuthentication *bool `json:"password_authentication,omitempty"` }
-type FirewallDesired struct { Incoming string `json:"incoming,omitempty"`; Outgoing string `json:"outgoing,omitempty"` }
-type MihomoDesired struct { Integration *bool `json:"integration,omitempty"` }
-type MieruDesired struct { Enabled *bool `json:"enabled,omitempty"` }
+type SSHDesired struct {
+	Port                   *int  `json:"port,omitempty"`
+	KeyAuthentication      *bool `json:"key_authentication,omitempty"`
+	PasswordAuthentication *bool `json:"password_authentication,omitempty"`
+}
+type FirewallDesired struct {
+	Incoming string `json:"incoming,omitempty"`
+	Outgoing string `json:"outgoing,omitempty"`
+}
+type MihomoDesired struct {
+	Integration *bool `json:"integration,omitempty"`
+}
+type MieruDesired struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
 
-type Capabilities struct { Systemd bool `json:"systemd"`; Docker bool `json:"docker"`; NFTables bool `json:"nftables"`; IPTables bool `json:"iptables"`; UFW bool `json:"ufw"`; WireGuard bool `json:"wireguard"` }
-type Constraint struct { Code string `json:"code"`; Component string `json:"component"`; Message string `json:"message"`; Blocking bool `json:"blocking"` }
-type DiffItem struct { Resource string `json:"resource"`; Kind DiffKind `json:"kind"`; Ownership Ownership `json:"ownership"`; Current any `json:"current,omitempty"`; Desired any `json:"desired,omitempty"`; Reason string `json:"reason,omitempty"` }
+type Capabilities struct {
+	Systemd   bool `json:"systemd"`
+	Docker    bool `json:"docker"`
+	NFTables  bool `json:"nftables"`
+	IPTables  bool `json:"iptables"`
+	UFW       bool `json:"ufw"`
+	WireGuard bool `json:"wireguard"`
+}
+type Constraint struct {
+	Code      string `json:"code"`
+	Component string `json:"component"`
+	Message   string `json:"message"`
+	Blocking  bool   `json:"blocking"`
+}
+type DiffItem struct {
+	Resource  string    `json:"resource"`
+	Kind      DiffKind  `json:"kind"`
+	Ownership Ownership `json:"ownership"`
+	Current   any       `json:"current,omitempty"`
+	Desired   any       `json:"desired,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+}

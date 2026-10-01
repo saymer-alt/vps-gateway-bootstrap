@@ -32,7 +32,7 @@ func TestFromDiscoveryPreservesActualState(t *testing.T) {
 	}
 
 	m := FromDiscovery(r)
-	if m.SchemaVersion != 1 || m.Status != StatusOK { t.Fatalf("unexpected model metadata: %#v", m) }
+	if m.SchemaVersion != 2 || m.Status != StatusOK { t.Fatalf("unexpected model metadata: %#v", m) }
 	if m.Actual.System.MachineID != "1111222233334444aaaabbbbccccdddd" || m.Actual.System.MachineIDStatus != discovery.MachineIDPresent {
 		t.Fatalf("machine identity not preserved: %#v", m.Actual.System)
 	}

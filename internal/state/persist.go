@@ -36,11 +36,12 @@ const PersistedStatePath = "/etc/vps-gateway/state.json"
 // Before replacing an existing state file, SaveModel refuses to overwrite a
 // document whose schema version this binary does not support (in particular
 // a NEWER version written by a newer binary): silent downgrade-overwrites
-// would discard evidence without a trace (TASK-27). Malformed or
-// version-less existing files also refuse — corrupt evidence is not
-// evidence of absence. Replacement is durable: atomic write with file fsync
-// plus parent-directory fsync (fsatomic.WriteFileSyncDir), matching the
-// journal and backup persistence paths (TASK-28).
+// would discard evidence without a trace (TASK-27). On-disk v1 (the
+// pre-evidence schema) may be upgraded to v2 by a verified write — the
+// upgrade never synthesizes evidence claims (ZAI-20 §7). Replacement is
+// durable: atomic write with file fsync plus parent-directory fsync
+// (fsatomic.WriteFileSyncDir), matching the journal and backup persistence
+// paths (TASK-28).
 func SaveModel(path string, m Model) error {
 	if m.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("refusing to persist state with schema version %d (want %d)", m.SchemaVersion, SchemaVersion)
@@ -56,6 +57,9 @@ func SaveModel(path string, m Model) error {
 			return fmt.Errorf("refusing to persist state with blocking constraint %s: %s", c.Code, c.Message)
 		}
 	}
+	if err := ValidateEvidenceRecords(m); err != nil {
+		return fmt.Errorf("refusing to persist state with invalid evidence: %w", err)
+	}
 	version, exists, err := existingStateVersion(path)
 	if err != nil {
 		return err
@@ -64,8 +68,8 @@ func SaveModel(path string, m Model) error {
 		if version > SchemaVersion {
 			return fmt.Errorf("refusing to overwrite state %s: on-disk schema version %d is newer than the highest supported version %d; the file was left untouched (a newer binary is required to read it)", path, version, SchemaVersion)
 		}
-		if version != SchemaVersion {
-			return fmt.Errorf("refusing to overwrite state %s: unsupported on-disk schema version %d (supported: %d); the file was left untouched for manual review", path, version, SchemaVersion)
+		if version != SchemaV1 && version != SchemaV2 {
+			return fmt.Errorf("refusing to overwrite state %s: unsupported on-disk schema version %d (supported: %d, %d); the file was left untouched for manual review", path, version, SchemaV1, SchemaV2)
 		}
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -101,18 +105,16 @@ func existingStateVersion(path string) (version int, exists bool, err error) {
 	return *probe.SchemaVersion, true, nil
 }
 
-// LoadModel reads and validates a persisted state model.
+// LoadModel reads and validates a persisted state model. Parsing is strict
+// and version-aware (see ParseState): v1 documents remain readable but
+// carry no evidence, v2 documents are strictly validated, and unknown or
+// malformed versions fail closed.
 func LoadModel(path string) (Model, error) {
 	data, err := os.ReadFile(path)
-	if err != nil { return Model{}, err }
-	var m Model
-	if err := json.Unmarshal(data, &m); err != nil {
-		return Model{}, fmt.Errorf("state %s: %w", path, err)
+	if err != nil {
+		return Model{}, err
 	}
-	if m.SchemaVersion != SchemaVersion {
-		return Model{}, fmt.Errorf("state %s: unsupported schema version %d (want %d)", path, m.SchemaVersion, SchemaVersion)
-	}
-	return m, nil
+	return ParseState(data)
 }
 
 // LoadModelIfPresent loads persisted state without treating absence as an
@@ -120,7 +122,11 @@ func LoadModel(path string) (Model, error) {
 // previous state. Explicit state paths are handled by callers using LoadModel.
 func LoadModelIfPresent(path string) (*Model, error) {
 	m, err := LoadModel(path)
-	if err == nil { return &m, nil }
-	if os.IsNotExist(err) { return nil, nil }
+	if err == nil {
+		return &m, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	return nil, err
 }

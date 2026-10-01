@@ -147,7 +147,7 @@ func TestSaveModelOverwritesCurrentSchemaState(t *testing.T) {
 func TestSaveModelRefusesNewerSchemaOnDiskAndLeavesBytesUntouched(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
-	original := []byte(`{"schema_version": 2, "note": "written by a newer binary"}`)
+	original := []byte(`{"schema_version": 3, "note": "written by a newer binary"}`)
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -223,9 +223,16 @@ func TestSaveModelPropagatesWriteErrors(t *testing.T) {
 	}
 }
 
-func TestStateSchemaVersionRemainsUnchanged(t *testing.T) {
-	if SchemaVersion != 1 {
-		t.Fatalf("state SchemaVersion drifted: %d (this task must not introduce v2)", SchemaVersion)
+// Schema-version pin (updated by O5-C/ZAI-20, which the former v1-only
+// tripwire anticipated): this build writes v2 (the evidence-claim plane)
+// and still reads v1. A future bump is an operator-approved schema change
+// with its own strict reader, never a silent drift.
+func TestStateSchemaVersionContract(t *testing.T) {
+	if SchemaVersion != 2 {
+		t.Fatalf("state SchemaVersion drifted: %d, want 2 (v1 readable, v2 evidence plane)", SchemaVersion)
+	}
+	if SchemaV1 != 1 || SchemaV2 != 2 {
+		t.Fatalf("version vocabulary drifted: v1=%d v2=%d", SchemaV1, SchemaV2)
 	}
 }
 
