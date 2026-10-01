@@ -441,3 +441,57 @@ func TestSafeIsNeverAuthority(t *testing.T) {
 		t.Fatal("SAFE is always scoped to the IPv4 policy path")
 	}
 }
+
+// Heterogeneous-fleet regression (ZAI-19, INV-OP-5): two valid hosts with
+// different topologies are classified independently from their OWN
+// observed facts. Host A carries the full Mihomo/TUN policy-routing
+// integration; host B (a recorded Debian fleet member) has no TUN
+// diversion at all. The evaluator must never conclude from the difference
+// that host B is "drifted toward A", that A's topology applies to B, or
+// that B's absence of integration means anything other than what B's own
+// inventory shows.
+func TestHeterogeneousFleetTopologiesAreIndependentlyClassified(t *testing.T) {
+	// Host A: the integrated shape classifies from its own facts.
+	a, err := Evaluate(baseInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Status != StatusSafe || a.Scope != ScopeIPv4Path {
+		t.Fatalf("host A: status=%q scope=%q, want SAFE/ipv4-path", a.Status, a.Scope)
+	}
+	// Host B: the same intent, but B's own inventory has no selector
+	// diversion and no reserved table — only the main-table default.
+	inB := baseInput()
+	inB.Routing = discovery.Routing{
+		Rules: []discovery.Rule{
+			{Priority: 0, From: "all", Table: 255, TableRaw: "local", Status: identity.FieldStatusPresent},
+			{Priority: 32766, From: "all", Table: 254, TableRaw: "main", Status: identity.FieldStatusPresent},
+		},
+		RulesStatus:  identity.FieldStatusPresent,
+		Tables:       fixtureTables()[:1],
+		RoutesStatus: identity.FieldStatusPresent,
+	}
+	b, err := Evaluate(inB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Status != StatusUnsafe {
+		t.Fatalf("host B: status=%q (%v), want UNSAFE from its own facts", b.Status, b.Reasons)
+	}
+	if !containsReason(b, ReasonSelectorRuleMissing) || !containsReason(b, ReasonMainFallthrough) {
+		t.Fatalf("host B reasons must name its own condition: %v", b.Reasons)
+	}
+	if b.Scope != ScopeIPv4Path {
+		t.Fatalf("host B scope=%q", b.Scope)
+	}
+	// The classification of one host cannot leak into the other: A stays
+	// SAFE after B was evaluated (no shared state), and the results differ
+	// exactly because their inventories differ.
+	a2, err := Evaluate(baseInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a2.Status != StatusSafe {
+		t.Fatalf("host A re-evaluation changed: %q", a2.Status)
+	}
+}

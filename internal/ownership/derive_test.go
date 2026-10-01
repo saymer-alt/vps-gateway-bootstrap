@@ -12,21 +12,21 @@ import (
 // is never ownership.
 
 var (
-	fileIdentity       = ResourceIdentity{Class: ClassFile, Path: "/etc/vps-gateway/experiment-file-test.conf"}
-	dropInIdentity     = ResourceIdentity{Class: ClassSysctlDropIn, Path: "/etc/sysctl.d/99-vps-gateway.conf"}
-	routeRuleIdentity  = ResourceIdentity{Class: ClassRouteRule, Table: 100, Priority: 100, From: "172.29.172.0/24"}
-	plainPathIdentity  = ResourceIdentity{Class: ClassFile, Path: "/etc/other-service/config.conf"}
-	liveSpec           = SpecHash{0xaa}
-	foreignLiveSpec    = SpecHash{0xbb}
-	dropInLiveSpec     = SpecHash{0xcc}
+	fileIdentity         = ResourceIdentity{Class: ClassFile, Path: "/etc/vps-gateway/experiment-file-test.conf"}
+	dropInIdentity       = ResourceIdentity{Class: ClassSysctlDropIn, Path: "/etc/sysctl.d/99-vps-gateway.conf"}
+	routeRuleIdentity    = ResourceIdentity{Class: ClassRouteRule, Table: 100, Priority: 100, From: "172.29.172.0/24"}
+	plainPathIdentity    = ResourceIdentity{Class: ClassFile, Path: "/etc/other-service/config.conf"}
+	liveSpec             = SpecHash{0xaa}
+	foreignLiveSpec      = SpecHash{0xbb}
+	dropInLiveSpec       = SpecHash{0xcc}
 	foreignManagerUFW    = ExtUFW
 	foreignManagerDocker = ExtDocker
 )
 
-func present(hash *SpecHash) LiveFact   { return LiveFact{State: LivePresent, SpecHash: hash} }
-func changed() LiveFact                 { return LiveFact{State: LivePresent, SpecHash: &foreignLiveSpec} }
-func absentFact() LiveFact              { return LiveFact{State: LiveAbsent} }
-func unknownFact() LiveFact             { return LiveFact{State: LiveUnknown} }
+func present(hash *SpecHash) LiveFact { return LiveFact{State: LivePresent, SpecHash: hash} }
+func changed() LiveFact               { return LiveFact{State: LivePresent, SpecHash: &foreignLiveSpec} }
+func absentFact() LiveFact            { return LiveFact{State: LiveAbsent} }
+func unknownFact() LiveFact           { return LiveFact{State: LiveUnknown} }
 func presentExternal(c ExternalClass) LiveFact {
 	return LiveFact{State: LivePresent, SpecHash: &liveSpec, ExternalOwner: &c}
 }
@@ -457,3 +457,37 @@ func TestDeriveImplementationIsPure(t *testing.T) {
 // Compile-time guard: MintedAt claims remain timestamped but derivation
 // never consults a clock (the type keeps time only because O1 declares it).
 var _ = time.Time{}
+
+// Host-local evidence is not fleet-global truth (ZAI-19, INV-OP-6/§26):
+// evidence recorded on one machine can never corroborate ownership on
+// another. A claim whose transaction was recorded on a different host
+// fails O5-A's host leg, so a present resource with only foreign-host
+// evidence derives COLLISION (inside the reserved namespace), never
+// OWNED_VERIFIED — and the same holds with the live state UNKNOWN, which
+// stays UNDETERMINED.
+func TestDeriveForeignHostEvidenceCanNeverVerify(t *testing.T) {
+	in := deriveInput(fileIdentity, present(&liveSpec))
+	in.CurrentHost = otherHost
+	d, err := DeriveVerdict(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Verdict == OwnedVerified || d.Verdict == OwnedDrift {
+		t.Fatalf("foreign-host evidence must never yield an owned verdict: %s (%v)", d.Verdict, d.Reasons)
+	}
+	if d.Verdict != Collision {
+		t.Fatalf("verdict = %s (%v), want COLLISION (unproven occupant)", d.Verdict, d.Reasons)
+	}
+	if !contains(d.Reasons, "did not verify") {
+		t.Fatalf("reason must surface the failed host-leg verification: %v", d.Reasons)
+	}
+}
+
+func contains(reasons []string, sub string) bool {
+	for _, r := range reasons {
+		if strings.Contains(r, sub) {
+			return true
+		}
+	}
+	return false
+}

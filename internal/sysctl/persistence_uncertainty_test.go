@@ -65,8 +65,8 @@ func TestResolveDirErrorMakesWinnerUncertain(t *testing.T) {
 // behavior here, unlike key-scoped unsupported constructs.
 func TestResolveDirErrorAffectsEveryRepresentedKey(t *testing.T) {
 	read := readFrom(map[string]string{
-		"/etc/sysctl.d/99-vps-gateway.conf":  "net.ipv4.ip_forward = 1\n",
-		"/usr/lib/sysctl.d/40-ipv6.conf":     "net.ipv6.conf.all.disable_ipv6 = 0\n",
+		"/etc/sysctl.d/99-vps-gateway.conf": "net.ipv4.ip_forward = 1\n",
+		"/usr/lib/sysctl.d/40-ipv6.conf":    "net.ipv6.conf.all.disable_ipv6 = 0\n",
 	}, nil)
 	listDir := listFrom(map[string][]string{
 		"/etc/sysctl.d":     {"99-vps-gateway.conf"},
@@ -181,5 +181,37 @@ func TestRuntimePresenceDoesNotHidePersistenceUncertainty(t *testing.T) {
 	rk := res.Keys["net.ipv4.ip_forward"]
 	if !rk.SysctlConfUncertain {
 		t.Fatalf("runtime presence must not hide persistence uncertainty: %+v", rk)
+	}
+}
+
+// Live ≠ persistent provenance (ZAI-19, INV-OP-1): a runtime value observed
+// through /proc/sys never becomes a persistent resolution result. A key
+// with a PRESENT runtime value but no persistent source anywhere yields no
+// Winner at all — the resolver does not invent persistent configuration
+// from the kernel's live state.
+func TestLiveValueNeverBecomesPersistentWinner(t *testing.T) {
+	runtimeRead := readFrom(map[string]string{"/proc/sys/net/ipv4/ip_forward": "1\n"}, nil)
+	obs, err := ObserveRuntime(nil, runtimeRead)
+	if err != nil {
+		t.Fatalf("ObserveRuntime: %v", err)
+	}
+	var present bool
+	for _, o := range obs {
+		if o.Key == "net.ipv4.ip_forward" && o.Status == RuntimePresent {
+			present = true
+		}
+	}
+	if !present {
+		t.Fatal("setup: runtime value must be PRESENT")
+	}
+	// No persistence sources exist at all.
+	emptyRead := readFrom(map[string]string{}, nil)
+	emptyList := listFrom(map[string][]string{}, nil)
+	res := Resolve(ReadPersistenceSources(emptyRead, emptyList))
+	if rk, ok := res.Keys["net.ipv4.ip_forward"]; ok && rk.Winner != nil {
+		t.Fatalf("a live-only value must never produce a persistent winner: %+v", rk)
+	}
+	if _, ok := res.Keys["net.ipv4.ip_forward"]; ok {
+		t.Fatalf("a key with no persistent data must not enter the resolution as if observed: %+v", res.Keys)
 	}
 }
