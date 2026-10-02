@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/fsatomic"
@@ -215,6 +216,25 @@ func (j *Journal) loadAll() ([]Record, error) {
 		}
 		if !readableSchemaVersions[rec.SchemaVersion] {
 			return nil, fmt.Errorf("journal record %s: unsupported schema version %d (readable: 1, 2)", e.Name(), rec.SchemaVersion)
+		}
+		// Identity hardening (ZAI-33): every authoritative journal record
+		// must carry its transaction identity and plan fingerprint. The
+		// only sanctioned writer (orchestrate Execute) always sets both
+		// (NewTransactionID / Fingerprint(plan)), and the downstream
+		// contracts already require them (CorroborationFact, R4-B
+		// ClassifyTransaction) — but they validated AFTER loading, so a
+		// forged record with an empty TransactionID could previously enter
+		// consumers and, specifically, be SKIPPED by
+		// PersistenceBlockers' currentTxID exclusion under the recovery
+		// posture ("" == "") instead of blocking (ZAI-32 Low finding).
+		// Whitespace-only values are the same empty-identity class and are
+		// rejected without normalization; values are never synthesized
+		// from filenames or anywhere else.
+		if strings.TrimSpace(rec.TransactionID) == "" {
+			return nil, fmt.Errorf("journal record %s is corrupt: transaction id is empty (every journal record must carry its transaction identity)", e.Name())
+		}
+		if strings.TrimSpace(rec.PlanFingerprint) == "" {
+			return nil, fmt.Errorf("journal record %s is corrupt: plan fingerprint is empty (every journal record must carry its plan fingerprint)", e.Name())
 		}
 		out = append(out, rec)
 	}

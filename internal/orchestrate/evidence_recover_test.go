@@ -679,6 +679,61 @@ func TestRecoverNoReadOnlyConsumers(t *testing.T) {
 	}
 }
 
+// ZAI-33: the original ZAI-32 adversarial case, now fail-closed. A forged
+// latched record with an EMPTY transaction id previously loaded fine and
+// was SKIPPED by PersistenceBlockers' currentTxID exclusion under the
+// recovery posture ("" == "") — the recovery adapter would have persisted
+// over an ambiguous history. The loader now rejects it as corruption, so
+// the gate can never report "clear" for such a journal.
+func TestPersistenceBlockersFailClosedOnInvalidJournalIdentity(t *testing.T) {
+	good := reconRecord(t, "tx-good", t0, nil, reconAction("a1", evPath, "x\n", state.ActionCreateFile))
+	forged := reconRecord(t, "", t0.Add(time.Hour), nil, reconAction("a2", "/etc/vps-gateway/other.conf", "y\n", state.ActionUpdateFile))
+	forged.RecoveryRequired = true
+	forged.Outcome = journal.OutcomeRecoveryRequired
+	o, sp := recoverFixture(t, []*journal.Record{good, forged}, nil)
+	before := stateFileHash(t, sp)
+	// The loader itself refuses the journal:
+	if _, err := o.Journal.Records(); err == nil {
+		t.Fatal("the forged empty-identity journal must fail to load")
+	}
+	// The gate cannot produce a "clear" verdict for it:
+	if _, err := o.Journal.PersistenceBlockers("", false); err == nil {
+		t.Fatal("PersistenceBlockers must fail closed on invalid journal identity")
+	}
+	// And the adapter must not persist:
+	out, err := o.RecoverEvidence()
+	if err == nil {
+		t.Fatalf("recovery must fail closed on the forged journal, got %+v", out)
+	}
+	if stateFileHash(t, sp) != before {
+		t.Fatal("state was written despite the invalid journal")
+	}
+	// The legitimate record file is untouched (corruption stays visible,
+	// nothing is repaired or deleted).
+	if _, err := os.Stat(filepath.Join(o.Journal.Dir, "tx-good.json")); err != nil {
+		t.Fatal("journal files must remain untouched")
+	}
+}
+
+// ZAI-33 §17: RecoverEvidence fail-closed pins on an invalid journal —
+// no state save, journal unchanged, latch unchanged.
+func TestRecoverEvidenceDoesNotPersistFromInvalidJournal(t *testing.T) {
+	forged := reconRecord(t, "   ", t0, nil, reconAction("a1", evPath, "x\n", state.ActionCreateFile))
+	forged.PlanFingerprint = "fp-x"
+	o, sp := recoverFixture(t, []*journal.Record{forged}, nil)
+	before := stateFileHash(t, sp)
+	if _, err := o.RecoverEvidence(); err == nil {
+		t.Fatal("whitespace-identity journal must fail the adapter")
+	}
+	if stateFileHash(t, sp) != before {
+		t.Fatal("SaveModel was reached despite an invalid journal")
+	}
+	recPath := filepath.Join(o.Journal.Dir, "   .json")
+	if _, err := os.Stat(recPath); err != nil {
+		t.Fatal("journal record must remain untouched")
+	}
+}
+
 // §54: the result vocabulary is closed — four typed statuses, no
 // free-form authority-bearing strings.
 func TestRecoverResultVocabulary(t *testing.T) {

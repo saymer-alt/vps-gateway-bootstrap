@@ -175,6 +175,12 @@ cheap and boundary-independent. `BlockingRecords` (mutating runs) is NOT
 affected (no exclusion there). Natural records can never have empty IDs
 (`NewTransactionID` is always non-empty).
 
+*Status (ZAI-33, follow-up): CLOSED — the authoritative loader now rejects
+empty/whitespace `TransactionID` and `PlanFingerprint` as corruption
+(whole-load failure); see HANDOFF "Landed: ZAI-33 journal reader identity
+hardening" (landing commit d9344fc on main).
+The finding above is preserved as the record of why ZAI-33 existed.*
+
 ## 7. Integrity vs authenticity
 
 - **Journal integrity (accidental corruption):** fsatomic durability +
