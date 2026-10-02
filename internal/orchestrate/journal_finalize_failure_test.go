@@ -103,13 +103,16 @@ func restoreJournalRecord(t *testing.T, dir, txID string, stash []byte) {
 	}
 }
 
-// T1/T2 (ZAI-04): when the terminal journal update fails, the caller must
-// see the failure — a fully successful transaction (mutation, validation,
-// convergence, persistence all passed) must NOT be reported as a clean
-// COMPLETED result with no blockers. Before the named-return fix this test
-// failed: the finalization blocker was appended to a local Outcome copy the
-// caller never saw, and the run reported clean success while the durable
-// record stayed in progress.
+// T1/T2 (ZAI-04, re-contracted by O5-E1 / ZAI-29): when the durable
+// terminal COMPLETED journal write fails, the caller must see the failure —
+// and under journal-terminal-first ordering the failure lands BEFORE state
+// persistence, so the run is not reported as a clean COMPLETED result at
+// all: no state update, no evidence, and an explicit terminal blocker.
+// (Under the pre-O5-E1 ordering this scenario reported StageCompleted with
+// a deferred blocker while the durable record stayed in progress — a
+// reported success that left the next run fail-safe blocked as a suspected
+// crash.) The named-return property proven by the original T1 remains:
+// whatever the outcome stage, the finalization failure is caller-visible.
 func TestExecuteSurfacesJournalFinalizationFailure(t *testing.T) {
 	brk := &finalizeBreaker{}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
@@ -125,22 +128,30 @@ func TestExecuteSurfacesJournalFinalizationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Stage != StageCompleted || !out.Persisted {
-		t.Fatalf("transaction itself must complete and persist: stage=%s persisted=%v blockers=%v", out.Stage, out.Persisted, out.Blockers)
+	// O5-E1: the terminal write precedes persistence, so its failure means
+	// the run never persists and is not reported as COMPLETED.
+	if out.Stage != StageFailedPersist {
+		t.Fatalf("terminal-journal failure must fail the run at the persist stage: stage=%s blockers=%v", out.Stage, out.Blockers)
 	}
-	// T1: the finalization failure is caller-visible.
+	if out.Persisted {
+		t.Fatal("state must not be persisted when the durable terminal proof failed")
+	}
+	if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) {
+		t.Fatalf("state file must not exist after a failed terminal write, stat err=%v", err)
+	}
+	// T1: the terminal failure is caller-visible.
 	found := false
 	for _, b := range out.Blockers {
-		if strings.Contains(b, "journal:") {
+		if strings.Contains(b, "journal terminal:") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("journal finalization failure is invisible to the caller: %v", out.Blockers)
+		t.Fatalf("terminal journal failure is invisible to the caller: %v", out.Blockers)
 	}
 	// T2: no clean COMPLETED result.
 	if len(out.Blockers) == 0 {
-		t.Fatal("clean COMPLETED result reported despite failed journal finalization")
+		t.Fatal("clean COMPLETED result reported despite failed journal terminal write")
 	}
 
 	// T5: the durable journal remains truthful — no record falsely claims

@@ -396,6 +396,10 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	// after the confirmation boundary deliberately: a valid ordinary
 	// approval does not bypass recovery.
 	var rec *journal.Record
+	// terminalAttempted guards the deferred failure finalizer: set when the
+	// explicit terminal COMPLETED write is attempted on the success path
+	// (O5-E1 journal-terminal-first ordering).
+	var terminalAttempted bool
 	if o.planHasMutation(p.Plan) {
 		if o.Journal == nil {
 			out.Stage = StageBlocked
@@ -457,10 +461,20 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 			out.Blockers = append(out.Blockers, "journal: "+err.Error())
 			return out, nil
 		}
-		// Finalize the record on every exit past this point — the engine has
-		// been reached, so mutation is possible and the outcome must be
-		// durable whatever happens below.
+		// Terminal-first ordering guard (O5-E1): once the explicit terminal
+		// COMPLETED write has been attempted on the success path, the
+		// deferred failure finalizer must not run — it would either
+		// downgrade a truthful COMPLETED record to FAILED after a mere
+		// state-save failure, or pile a second write onto a journal that
+		// just failed. Failure paths before the terminal write (engine,
+		// rediscovery, validation, convergence) still finalize here.
+		// Finalize the record on every failure exit past this point — the
+		// engine has been reached, so mutation is possible and the outcome
+		// must be durable whatever happens below.
 		defer func() {
+			if terminalAttempted {
+				return
+			}
 			if berr := o.finalizeJournal(rec, &out); berr != nil {
 				out.Blockers = append(out.Blockers, berr.Error())
 			}
@@ -560,10 +574,35 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	// transaction, so a nil-Journal embedder fails closed here instead of
 	// persisting. Pure read-only validation remains usable up to this gate
 	// — it runs to completion, it simply never persists.
+	//
+	// Ordering (O5-E1, journal-terminal-first): the explicit terminal
+	// COMPLETED journal write below happens BEFORE any state persistence.
+	// The previous order — SaveModel first, terminal write in the deferred
+	// finalizer — left a crash window in which state.json already recorded
+	// the new last-known-good while the journal record stayed in progress,
+	// fail-safe blocking every later run as a suspected crash. With the
+	// terminal write first, the authoritative mutation proof is durable
+	// before any state (and any evidence claim derived from it) exists, and
+	// the remaining crash window [terminal write → state save] is benign:
+	// the next run sees COMPLETED (not a blocker) and a plain convergence
+	// run re-persists.
 	if o.Journal == nil {
 		out.Stage = StageFailedFinalValidation
 		out.Blockers = append(out.Blockers, "no transaction journal configured: persistence requires transaction-history evidence")
 		return out, nil
+	}
+	if rec != nil {
+		terminalAttempted = true
+		if err := o.finalizeJournalTerminal(rec, out.Transaction); err != nil {
+			// The durable success proof could not be established: no state
+			// update, no evidence claims, and the run is NOT reported as a
+			// clean success — the mutations are applied but unproven
+			// durably, and the in-progress record fail-safe blocks later
+			// runs until operator review (§11).
+			out.Stage = StageFailedPersist
+			out.Blockers = append(out.Blockers, "journal terminal: "+err.Error())
+			return out, nil
+		}
 	}
 	txID := ""
 	if rec != nil {
@@ -583,9 +622,24 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 
 	// Persist last-known-good state. SaveModel refuses anything that is not
 	// verified-good, so a failure here leaves the machine applied but the
-	// state file untouched — reported, never silently swallowed.
+	// state file untouched — reported, never silently swallowed. The
+	// evidence plane (O5-E1) is minted from the now-durable terminal
+	// journal record and merged with the prior claims; a minting failure
+	// blocks persistence rather than writing an unvalidated claim.
 	m := post.Model
 	m.UpdatedAt = o.now()
+	if p.opts.State != nil {
+		m.Evidence = append(m.Evidence, p.opts.State.Evidence...)
+	}
+	if rec != nil {
+		mint, err := MintTransactionEvidence(rec, p.Plan, m.Evidence)
+		if err != nil {
+			out.Stage = StageFailedFinalValidation
+			out.Blockers = append(out.Blockers, "evidence minting: "+err.Error())
+			return out, nil
+		}
+		m.Evidence = mint.Merged
+	}
 	if err := state.SaveModel(o.statePath(), m); err != nil {
 		out.Stage = StageFailedPersist
 		out.Blockers = append(out.Blockers, err.Error())
@@ -698,23 +752,15 @@ func (o Orchestrator) progressSink(rec *journal.Record) func(apply.ProgressEvent
 	}
 }
 
-// finalizeJournal records the transaction outcome after the engine has run
-// (mutation possible). Recovery latches on rollback failure — ALWAYS — and
-// on any failure when the plan contains a no-autonomous-retry action. A
-// COMPLETED outcome is written only when the caller reached it after the
-// full lifecycle including persistence succeeded. Journal update failures
-// are returned (the record stays in progress and fail-safe blocks later
-// runs); they never mask the transaction outcome itself.
-func (o Orchestrator) finalizeJournal(rec *journal.Record, out *Outcome) error {
-	if rec == nil || o.Journal == nil {
-		return nil
-	}
+// copyActionStatuses copies the engine's per-action outcomes into the
+// journal record's action entries and reports whether any rollback failed.
+func copyActionStatuses(rec *journal.Record, tr apply.Transaction) bool {
 	rollbackFailed := false
 	byID := map[string]*journal.ActionRecord{}
 	for i := range rec.Actions {
 		byID[rec.Actions[i].ID] = &rec.Actions[i]
 	}
-	for _, ar := range out.Transaction.Actions {
+	for _, ar := range tr.Actions {
 		jr := byID[ar.ActionID]
 		if jr == nil {
 			continue
@@ -725,6 +771,44 @@ func (o Orchestrator) finalizeJournal(rec *journal.Record, out *Outcome) error {
 			rollbackFailed = true
 		}
 	}
+	return rollbackFailed
+}
+
+// finalizeJournalTerminal durably writes the terminal COMPLETED record for
+// a transaction whose mutations were applied, re-discovered, validated and
+// converged (O5-E1 journal-terminal-first): the authoritative success proof
+// is established BEFORE any state (or evidence derived from it) is
+// persisted. Failure to write it must be treated as the transaction's
+// durable-proof failure, not a warning.
+func (o Orchestrator) finalizeJournalTerminal(rec *journal.Record, tr apply.Transaction) error {
+	if rec == nil || o.Journal == nil {
+		return nil
+	}
+	copyActionStatuses(rec, tr)
+	rec.Stage = StageCompleted
+	rec.Outcome = journal.OutcomeCompleted
+	rec.RecoveryRequired = false
+	return o.Journal.Update(rec)
+}
+
+// finalizeJournal records the transaction outcome after the engine has run
+// (mutation possible). Recovery latches on rollback failure — ALWAYS — and
+// on any failure when the plan contains a no-autonomous-retry action. A
+// COMPLETED outcome is written only when the caller reached it after the
+// full lifecycle including persistence succeeded. Journal update failures
+// are returned (the record stays in progress and fail-safe blocks later
+// runs); they never mask the transaction outcome itself.
+//
+// Since O5-E1 the mutating success path finalizes terminally BEFORE state
+// persistence (finalizeJournalTerminal) and the deferred call below is
+// skipped for it; this function therefore finalizes the FAILURE paths
+// (engine, rediscovery, validation, convergence, anti-laundering gate) —
+// where no COMPLETED outcome may exist because nothing was persisted.
+func (o Orchestrator) finalizeJournal(rec *journal.Record, out *Outcome) error {
+	if rec == nil || o.Journal == nil {
+		return nil
+	}
+	rollbackFailed := copyActionStatuses(rec, out.Transaction)
 	if rollbackFailed {
 		rec.RollbackAttempted = true
 		rec.RollbackResult = "ROLLBACK_FAILED"
