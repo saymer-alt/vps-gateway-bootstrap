@@ -207,7 +207,7 @@ func parseRouteInventory(data []byte) ([]RouteTable, []Route, error) {
 		}
 		idx, ok := index[tableToken]
 		if !ok {
-			id, _ := resolveTableToken(tableToken)
+			id, _ := ResolveTableToken(tableToken)
 			name := routeTableName(id)
 			if name == "" || (id == 0 && routeTableName(0) == name) {
 				name = tableToken
@@ -360,10 +360,13 @@ var builtinTableIDs = map[string]int{
 	"default": 253,
 }
 
-// resolveTableToken resolves one routing-table token: a numeric string or a
-// builtin symbolic name. Custom symbolic names resolve to (0, false) — the
-// raw token is preserved by the caller and never guessed from rt_tables.
-func resolveTableToken(token string) (int, bool) {
+// ResolveTableToken resolves one routing-table token: a numeric string or a
+// builtin symbolic name (local/main/default — stable kernel ABI). Custom
+// symbolic names resolve to (0, false) — the raw token is preserved by the
+// caller and never guessed from rt_tables. Exported so downstream PURE
+// consumers of the routing inventories (routespec) share one resolution
+// contract instead of duplicating kernel ABI knowledge.
+func ResolveTableToken(token string) (int, bool) {
 	if id, err := strconv.Atoi(token); err == nil {
 		return id, true
 	}
@@ -393,7 +396,7 @@ func parseTableToken(e map[string]any, key string) (id int, raw string, present 
 	}
 	switch t := v.(type) {
 	case string:
-		id, _ = resolveTableToken(t)
+		id, _ = ResolveTableToken(t)
 		return id, t, true, nil
 	case float64:
 		if t != float64(int(t)) || t < 0 {
