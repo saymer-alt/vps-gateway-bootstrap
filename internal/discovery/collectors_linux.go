@@ -145,13 +145,13 @@ func parseDF(s string) Filesystem {
 
 func (c *Collector) collectNetwork(ctx context.Context, r *Result) {
 	var links []struct {
-		Ifindex    int      `json:"ifindex"`
-		Ifname     string   `json:"ifname"`
-		MTU        int      `json:"mtu"`
-		OperState  string   `json:"operstate"`
-		Address    string   `json:"address"`
-		LinkType   string   `json:"link_type"`
-		Altnames   []string `json:"altnames"`
+		Ifindex   int      `json:"ifindex"`
+		Ifname    string   `json:"ifname"`
+		MTU       int      `json:"mtu"`
+		OperState string   `json:"operstate"`
+		Address   string   `json:"address"`
+		LinkType  string   `json:"link_type"`
+		Altnames  []string `json:"altnames"`
 	}
 	if err := jsonOut(c, ctx, &links, "ip", "-j", "link"); err == nil {
 		for _, l := range links {
@@ -289,6 +289,7 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 		out, e := output(c, ctx, p, "list", "ruleset")
 		if e != nil {
 			addObservation(&r.Unknowns, "FIREWALL_NFTABLES_UNKNOWN", "firewall", e.Error())
+			r.Firewall.NFTTablesRules.Status = routingCommandErrorStatus(e)
 		} else {
 			r.Firewall.NFTables.Active = true
 			policies, ambiguous := parseNftPolicies(string(out))
@@ -299,6 +300,21 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 				addObservation(&r.Unknowns, "FIREWALL_NFTABLES_UNKNOWN", "firewall",
 					"multiple base chains for hook "+hook+" disagree ("+strings.Join(toks, ", ")+"); the effective policy is not a single value")
 			}
+			// Structural retention from the SAME ruleset dump: tables/
+			// chains/order/rules verbatim; rule semantics are explicitly
+			// unsupported this slice (ZAI-37 Path B). A structural parse
+			// failure marks the inventory incomplete (never a trusted
+			// subset).
+			tables, serr := parseNFTRuleStructure(string(out))
+			if serr != nil {
+				addObservation(&r.Unknowns, "FIREWALL_NFTABLES_UNKNOWN", "firewall", "rule structure: "+serr.Error())
+				r.Firewall.NFTTablesRules.Status = identity.FieldStatusUnknownParse
+			} else {
+				r.Firewall.NFTTablesRules = NFTTablesRuleInventory{
+					Status: identity.FieldStatusPresent,
+					Tables: tables,
+				}
+			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "nftables")
 	}
@@ -307,6 +323,9 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 		out, e := output(c, ctx, p, "-S")
 		if e != nil {
 			addObservation(&r.Unknowns, "FIREWALL_IPTABLES_UNKNOWN", "firewall", e.Error())
+			// A failed collection is never a complete empty ruleset: the
+			// rule inventory stays empty and its status records why.
+			r.Firewall.IPTablesRules.Status = routingCommandErrorStatus(e)
 		} else {
 			r.Firewall.IPTables.Active = true
 			policies, perr := parseIptablesPolicies(string(out))
@@ -316,6 +335,15 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 				for hook, policy := range policies {
 					setEffectivePolicy(r, "iptables", hook, policy)
 				}
+			}
+			// Rule-level inventory from the SAME invocation (no new
+			// command path, ZAI-37 §5). Parse failures of the policy
+			// subset above do not invalidate the rule enumeration; the
+			// rule parser itself is all-or-nothing per line and retains
+			// unsupported lines fail-closed.
+			r.Firewall.IPTablesRules = IPTablesRuleInventory{
+				Status: identity.FieldStatusPresent,
+				Chains: parseIPTablesRules(string(out)),
 			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "iptables")

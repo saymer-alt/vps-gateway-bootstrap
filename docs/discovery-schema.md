@@ -312,6 +312,22 @@ A custom table or unusual rule is not an error by itself.
 
 The firewall model must support multiple simultaneous layers:
 
+Rule-level inventories (ZAI-37, additive): `firewall.iptables_rules`
+carries the ordered parsed rule model of the `iptables -S` filter-table
+dump (`status` PRESENT/UNKNOWN_*, per-chain policies/user-chain flags,
+rules in execution order with per-rule `supported` plus a typed `spec`
+for the modeled envelope — protocol/address/interface/single-port/ctstate/
+mark/comment/verdict/REJECT-with/jump/goto — and retained `raw` text with
+an `unsupported_reason` for everything outside the envelope: NAT/MSS/
+MARK-mangling targets, multiport/limit/recent modules, negation, port
+ranges, unknown modules/options). `firewall.nftables_rules` carries
+STRUCTURAL retention of `nft list ruleset` only (families/tables/chains
+incl. base-chain hook/policy metadata and rules VERBATIM in order; rule
+semantics are explicitly unsupported this slice). Collection failure is
+never a complete empty inventory (`status` UNKNOWN_* with no rules);
+multiplicity, ordering and table/chain context are preserved; comments
+are diagnostics, never ownership proof.
+
 ```yaml
 firewall:
   ufw:
