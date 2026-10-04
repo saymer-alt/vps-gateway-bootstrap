@@ -18,8 +18,7 @@ import (
 
 // writeForged writes a record file whose identity fields deviate from the
 // sanctioned writer contract.
-func writeForged(t *testing.T, dir, file string, mutate func(*Record)) {
-	t.Helper()
+func writeForged(t *testing.T, dir string, mutate func(*Record)) {
 	rec := Record{
 		SchemaVersion:    SchemaVersion,
 		TransactionID:    "tx-real",
@@ -44,7 +43,10 @@ func writeForged(t *testing.T, dir, file string, mutate func(*Record)) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, file), append(b, '\n'), 0o600); err != nil {
+	// Name the file after the body's transaction id (the writer's own
+	// invariant) so these tests exercise their declared subject — the
+	// filename/body check has its own dedicated tests.
+	if err := os.WriteFile(filepath.Join(dir, rec.TransactionID+".json"), append(b, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,8 +80,8 @@ func TestLoaderRejectsEmptyTransactionIdentity(t *testing.T) {
 			dir := t.TempDir()
 			// A legitimate record must not be readable while the forged
 			// one exists: the whole load fails (§15).
-			writeForged(t, dir, "tx-good.json", nil)
-			writeForged(t, dir, "forged.json", func(r *Record) {
+			writeForged(t, dir, nil)
+			writeForged(t, dir, func(r *Record) {
 				r.TransactionID = tc.txID
 				if tc.mutate != nil {
 					tc.mutate(r)
@@ -99,13 +101,15 @@ func TestLoaderRejectsEmptyTransactionIdentity(t *testing.T) {
 	}
 }
 
-// §29: the filename never rescues a body without identity — the forged
-// file may be named exactly like a real transaction would be.
+// §29: the filename never rescues a body without identity — even a file
+// carrying a real-looking transaction record with an empty body id is
+// rejected (the empty-identity corruption check fires regardless of what
+// the file is named).
 func TestLoaderFilenameDoesNotRescueIdentity(t *testing.T) {
 	dir := t.TempDir()
-	writeForged(t, dir, "tx-1759000000000000000-deadbeef.json", func(r *Record) { r.TransactionID = "" })
+	writeForged(t, dir, func(r *Record) { r.TransactionID = "" })
 	if _, err := loadDir(t, dir); err == nil {
-		t.Fatal("a real-looking filename must not validate a record with an empty body identity")
+		t.Fatal("an empty body identity must be rejected regardless of file name")
 	}
 }
 
@@ -121,7 +125,7 @@ func TestLoaderRejectsMissingRequiredPlanFingerprint(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeForged(t, dir, "forged.json", func(r *Record) { r.PlanFingerprint = tc.fp })
+			writeForged(t, dir, func(r *Record) { r.PlanFingerprint = tc.fp })
 			_, err := loadDir(t, dir)
 			if err == nil {
 				t.Fatal("missing required plan fingerprint must fail the load")
@@ -134,7 +138,7 @@ func TestLoaderRejectsMissingRequiredPlanFingerprint(t *testing.T) {
 	// A present (even minimal) fingerprint is accepted — presence is the
 	// contract; format policing is not.
 	dir := t.TempDir()
-	writeForged(t, dir, "tx-ok.json", nil)
+	writeForged(t, dir, nil)
 	if _, err := loadDir(t, dir); err != nil {
 		t.Fatalf("valid identity must load: %v", err)
 	}
@@ -181,7 +185,7 @@ func TestLoaderAcceptsSanctionedWriterOutput(t *testing.T) {
 // supported legacy history into corruption.
 func TestLoaderPreservesLegacyRecordsWithIdentity(t *testing.T) {
 	dir := t.TempDir()
-	writeForged(t, dir, "tx-legacy.json", func(r *Record) {
+	writeForged(t, dir, func(r *Record) {
 		r.SchemaVersion = 1
 		r.HostIdentity = "" // v1 records legitimately predate host binding
 	})

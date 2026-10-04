@@ -236,6 +236,20 @@ func (j *Journal) loadAll() ([]Record, error) {
 		if strings.TrimSpace(rec.PlanFingerprint) == "" {
 			return nil, fmt.Errorf("journal record %s is corrupt: plan fingerprint is empty (every journal record must carry its plan fingerprint)", e.Name())
 		}
+		// Filename↔body identity integrity (ZAI-J1): the transaction id
+		// encoded in the file name is the file's authoritative address;
+		// the body's TransactionID is the record's identity. They are one
+		// and the same by writer construction (Begin/Update write to
+		// path(rec.TransactionID)), and the comparison here keeps external
+		// mutation (renames, incorrect copies, manual edits) from silently
+		// redirecting a reader: a mismatch fails the WHOLE load — the
+		// record is trusted as neither A nor B, never repaired, never
+		// renamed, never rewritten. Exact comparison of the canonical
+		// forms (no case folding, no trimming, no synthesis from the
+		// filename).
+		if expected := strings.TrimSuffix(e.Name(), ".json"); rec.TransactionID != expected {
+			return nil, fmt.Errorf("journal record %s is corrupt: body transaction id %q does not match the file name identity %q", e.Name(), rec.TransactionID, expected)
+		}
 		out = append(out, rec)
 	}
 	return out, nil
