@@ -276,3 +276,60 @@ actual listener after service creation.
 The pair must be tracked as two distinct owned allocations (`AWG31_UDP_PORT`
 and `TUIC_UDP_PORT`) so later repair/uninstall logic cannot confuse them with
 Mieru, AWG 2.0 or unrelated Xray/Mihomo UDP sockets.
+
+### 21. Small-VPS maintenance needs explicit disk and log headroom
+
+A live Ubuntu 24.04 maintenance session on 2026-10-05 started with a roughly
+9 GiB root filesystem at 76–77% usage. `/var/log` consumed about 1.5 GiB, while
+journald, Docker and APT were comparatively small. A single rotated syslog was
+about 1.36 GiB because a noisy service could write for long periods while the
+distro logrotate timer ran only daily and the rsyslog policy rotated weekly.
+
+Requirement: Bootstrap discovery/production validation must treat free root
+space and logging policy as first-class resources. At minimum it should expose
+root filesystem headroom, journal usage, active/rotated syslog size, logrotate
+health/cadence and failed high-frequency services/timers. A small-VPS profile
+must support both a size-triggered syslog rotation policy and a sufficiently
+frequent evaluator; thresholds must be configurable rather than hardcoded as a
+universal value.
+
+Repair order matters: identify and reduce the noisy producer first, then bound
+storage. Rotation must not be used to hide an application restart/error loop.
+The maintenance evidence and tested example policy are documented in
+`docs/small-vps-maintenance-runbook.md`.
+
+### 22. Resource-limit warnings must not drive resource-limit increases
+
+The same maintenance session found Telemt repeatedly logging per-user
+connection-limit rejections. The limit itself was doing useful admission
+control on a multi-service VPS; raising it merely to stop WARN spam would have
+granted more host resources to a widely shared credential.
+
+Requirement: Bootstrap/doctor logic must distinguish a resource-policy event
+from a resource-policy defect. When a limit is intentional and the service is
+healthy, repetitive expected rejections may be handled through bounded,
+service-specific logging policy rather than by silently increasing the limit.
+Any log filter must preserve unrelated WARN/ERROR visibility and remain an
+explicit owned setting.
+
+### 23. Maintenance diagnostics must be bounded, secret-aware and ownership-aware
+
+The 2026-10-05 session exposed three additional maintenance hazards:
+
+- `mita describe config` can flood an interactive terminal when a server has a
+  very large Mieru port set; routine diagnostics should summarize/filter large
+  configurations instead of dumping them unbounded;
+- Telemt startup logs can contain complete `tg://proxy` links with credentials,
+  so journals/support bundles must be treated as potentially secret-bearing
+  and redacted before storage or publication;
+- old units, package residue and large files are not safe deletion targets
+  merely because they look stale or consume space.
+
+Requirement: maintenance discovery must bound output volume, redact known
+credential-bearing forms, and classify cleanup candidates without mutating
+them. Deletion requires proof that an artefact is obsolete/regenerable and,
+where project-managed state is involved, ownership evidence. A packaged Mita
+upgrade should preserve effective state before replacement, verify the
+upstream package checksum, validate the post-upgrade runtime state and remove
+only temporary download artefacts afterwards. Ubuntu phased package updates
+should not be forced merely to make the pending-updates list empty.
