@@ -1,9 +1,15 @@
 # Small VPS Maintenance and Update Runbook
 
-This runbook records a successful maintenance session on a real Ubuntu 24.04
-production VPS on 2026-10-05. It is operational evidence for
+This is the reusable maintenance runbook for small production VPS hosts. It was
+initially derived from the 2026-10-05 `Saymer` maintenance session and then
+checked against the other live fleet sessions. The host-specific `Saymer`
+evidence is preserved separately in
+`docs/live-maintenance-saymer-2026-10-05.md`; all dated host evidence is indexed
+in `docs/live-maintenance-index.md`.
+
+The values and examples below are operational evidence for
 `vps-gateway-bootstrap`, especially for hosts with roughly 1 GiB RAM, about
-1.5 GiB swap and a 9–10 GiB root filesystem.
+1.5 GiB swap and a 9–10 GiB root filesystem. They are not universal constants.
 
 It is not permission for an agent to mutate a live host. The repository safety
 contract in `AGENTS.md` still applies: discovery first, explicit ownership and
@@ -21,9 +27,9 @@ Use this as a maintenance/bootstrap design reference for:
 - removing package/configuration residue only after proving it is unused;
 - defining a compact post-maintenance validation gate.
 
-The observed host started at 76–77% root usage with about 2.1 GiB free. After
-log cleanup, package cleanup and removal of proven legacy residue it was at
-61% with about 3.5 GiB free.
+The originating `Saymer` host started at 76–77% root usage with about 2.1 GiB
+free. After log cleanup, package cleanup and removal of proven legacy residue
+it was at 61% with about 3.5 GiB free.
 
 ## 1. Diagnose disk pressure before deleting anything
 
@@ -65,7 +71,7 @@ tail -n 300000 /var/log/syslog.1 \
 tail -n 80 /var/log/syslog
 ```
 
-In the 2026-10-05 case Telemt was the real producer. Repeating WARNs included:
+In the 2026-10-05 originating case Telemt was the real producer. Repeating WARNs included:
 
 ```text
 User <name> exceeded connection limit
@@ -305,8 +311,8 @@ an optional service policy, not required merely to solve log growth.
 
 ## 9. Suggested discovery fields for Bootstrap
 
-The 2026-10-05 maintenance session suggests adding/keeping read-only discovery
-for the following host facts before future automated maintenance:
+The fleet maintenance sessions suggest adding/keeping read-only discovery for
+the following host facts before future automated maintenance:
 
 - root filesystem size, used bytes, free bytes and percentage;
 - largest top-level consumers under `/var`, `/root` and `/opt`;
@@ -349,9 +355,9 @@ sleep 300
 du -b /var/log/syslog
 ```
 
-The observed host finished with zero failed units, all named services active,
-Mita 3.38.0, an hourly logrotate timer, roughly 3.5 GiB free on the root
-filesystem and no rapid syslog growth.
+The originating `Saymer` host finished with zero failed units, all named
+services active, Mita 3.38.0, an hourly logrotate timer, roughly 3.5 GiB free
+on the root filesystem and no rapid syslog growth.
 
 ## Bootstrap design summary
 
@@ -371,3 +377,5 @@ cleaner:
 9. Treat logs/support output as potentially secret-bearing.
 10. Finish every maintenance transaction with service, disk, memory and failed-
     unit validation.
+
+See `docs/live-maintenance-index.md` for the current host-specific evidence set.
