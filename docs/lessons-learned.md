@@ -471,3 +471,41 @@ sysctls, addresses and routes and must perform independent real `-4`/`-6`
 connectivity tests. Neither a global sysctl value nor the presence of an IPv6
 address/default route proves usable IPv6. For intermittent domain-based
 failures, test address families separately before changing the application.
+
+## 30. Admission control and log control are separate policies
+
+A live maintenance session on `Saymer` on 2026-10-05 found a 1.36 GiB rotated
+`syslog` on a roughly 9 GiB root filesystem. Telemt was already running with
+`--silent`; the dominant noise was WARN-level admission/handshake activity,
+including users hitting intentional per-user connection limits. Raising a
+shared/public user's limit would have reduced the warnings only by granting
+that credential more of a multi-service VPS.
+
+The successful repair kept the admission limits unchanged and instead applied
+a narrow Rust log filter to the known noisy Telemt modules while preserving
+global WARN visibility. Measured syslog growth afterwards was only 9,092 bytes
+in five minutes. Storage was then bounded separately: `/var/log/syslog` gained
+a daily `maxsize 50M` policy with seven rotations, while the systemd logrotate
+timer was overridden from daily evaluation to hourly evaluation. The numeric
+threshold is host-profile evidence, not a universal constant.
+
+The same session also showed why maintenance diagnostics need output and secret
+budgets: an unfiltered `mita describe config` can print thousands of lines for
+a large port range, while Telemt startup journals can contain complete proxy
+links with credentials.
+
+**Rules:**
+- Do not raise a valid resource/admission limit merely to silence expected
+  rejection logs.
+- Fix or selectively rate/filter a noisy producer first, then put a separate
+  size/retention/cadence budget around log storage.
+- A logrotate `maxsize` rule is only as responsive as the timer that evaluates
+  it; discover both policy and cadence.
+- Keep diagnostic output bounded and treat service journals as potentially
+  secret-bearing before storing or publishing them.
+- Cleanup after maintenance is evidence-based: inactive/disabled legacy units,
+  package `rc` residue and regenerable caches may be removable; large active
+  Docker/service/project data is not garbage merely because it consumes space.
+
+See `docs/small-vps-maintenance-runbook.md` for the full observed workflow and
+validation sequence.
