@@ -333,3 +333,62 @@ upgrade should preserve effective state before replacement, verify the
 upstream package checksum, validate the post-upgrade runtime state and remove
 only temporary download artefacts afterwards. Ubuntu phased package updates
 should not be forced merely to make the pending-updates list empty.
+
+### 24. Dependency restart storms must be diagnosed across service boundaries
+
+A second live Ubuntu 24.04 maintenance session on `hungry-boyd` on 2026-10-05
+found Canonical Livepatch restarting roughly every twelve seconds. The service
+restart counter had exceeded 34,000 even though broad point-in-time health
+checks could still catch the unit in `active (running)` state. The root cause
+was outside Livepatch itself: both `snapd.service` and `snapd.socket` were
+masked to `/dev/null`, while the snap-packaged Livepatch service remained
+enabled and kept retrying.
+
+Requirement: discovery/doctor must expose restart counters and recent restart
+frequency, not only `is-active`. For snap-packaged services it must also expose
+`snapd.service`, `snapd.socket`, pending snap changes and snap command health.
+When an application is looping because a dependency is masked, the dependency
+mismatch is the primary defect; log cleanup or rotation is not the repair.
+
+After snapd was restored and the pending Livepatch refresh completed, the host
+validated `NRestarts=0` across an observation interval and successful server
+check-in. The full evidence is recorded in
+`docs/live-maintenance-hungry-boyd-2026-10-05.md`.
+
+### 25. Health-check semantics and health-check cadence are separate requirements
+
+The same host had a WARP routing watchdog scheduled every minute. Inspection
+showed that the watchdog itself was semantically correct: it accepted either
+numeric `lookup 100` or named `lookup mihomo` rendering and correctly validated
+the live route table. Later checks exited cleanly without repair. The logic was
+therefore retained, while the cadence was reduced to five minutes to lower
+routine systemd/log churn.
+
+Requirement: Bootstrap must evaluate watchdog correctness and watchdog
+frequency independently. Health checks must compare effective semantics rather
+than fragile textual rendering, but a correct check must also have a justified
+cadence. Successful steady-state checks should be cheap and quiet; a one-minute
+schedule is not a universal default.
+
+### 26. Maintenance actions must be validated by before/after measurements
+
+The second 2026-10-05 host provided quantitative evidence for two maintenance
+rules. After the Livepatch restart storm was repaired, remaining syslog growth
+was measured at 45,547 bytes in five minutes and traced mainly to
+`telemt::maestro::listeners::accept`. A narrower Telemt filter than the one used
+on the first host reduced growth to 5,057 bytes in five minutes while
+preserving WARN visibility for unrelated modules. The filter was selected from
+that host's evidence rather than copied wholesale from another VPS.
+
+The same session also showed that APT cache usage rose again after successful
+package updates, so final cleanup and free-space measurement must occur after
+updates as well as before them. Mita state was represented by both
+`server_config.json` and `server.conf.pb`; both were backed up and hash-compared
+before and after the 3.36.0 -> 3.38.0 package upgrade.
+
+Requirement: maintenance plans and validators should include measurable
+before/after evidence for disk usage, log growth, service restart state and
+application-state preservation. Service-specific filters must be as narrow as
+the observed producer permits; package/cache cleanup must be re-evaluated after
+upgrades; and all known representations of effective application state should
+be preserved when an upgrade can affect them.
