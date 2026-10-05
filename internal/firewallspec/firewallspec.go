@@ -50,8 +50,11 @@ package firewallspec
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 )
 
@@ -248,4 +251,265 @@ func ChainIdentity(chain string) (ownership.ResourceIdentity, error) {
 func RuleIdentityForDesired(chain, tag string) (ownership.ResourceIdentity, error) {
 	id := ownership.ResourceIdentity{Class: ownership.ClassFirewallRule, Chain: chain, Tag: tag}
 	return id, id.Validate()
+}
+
+// Typed desired-rule validation failures (machine-distinguishable):
+//   - ErrDesiredIdentityWrongClass: the supplied identity is not a
+//     ClassFirewallRule identity (chains/mss/route/file classes are
+//     refused, never reinterpreted);
+//   - ErrDesiredSpecIdentityMismatch: the expected spec claims a
+//     different chain than the desired identity (incoherent desired
+//     rule; neither side is rewritten);
+//   - ErrDesiredBackendUnsupported: the expected spec names a backend
+//     outside the project iptables mutation plane.
+//
+// Desired↔observed semantic matching (ZAI-39): the PURE layer answering
+//
+//	given a project-known desired firewall logical resource, its
+//	expected semantic spec, and the typed observed projections —
+//	what can be PROVEN about matching observations?
+//
+// It answers nothing about ownership, authorization, evidence or absence:
+// a semantic match means only "observed RuleSpec == desired ExpectedSpec
+// within the relevant context" — it never proves OWNED/FOREIGN/ADOPTABLE,
+// and an observed candidate never derives the desired Tag (identity stays
+// authored on the desired side, ZAI-38).
+//
+// Completeness (§45) reuses the authoritative TASK-46 inventory contract:
+// IPTablesRuleInventory.Status == PRESENT means the collector fully
+// enumerated the filter table, so zero candidates is a definitive
+// NO_MATCH; any other status means nothing was collected — zero
+// candidates is UNKNOWN (never a definitive mismatch). An unsupported
+// rule inside the desired chain is fail-closed: it could be the desired
+// rule in unmodelable form → UNKNOWN, never NO_MATCH. Unsupported rules
+// in other chains are irrelevant by the chain boundary (identity carries
+// the chain) and do not poison matching.
+//
+// The backend is scoped by the project mutation plane: the compiled
+// firewall capability operates on iptables chains, so matching consumes
+// only the iptables inventory; nftables rules (structurally retained,
+// semantics unsupported) cannot shadow an iptables-scoped desired rule
+// and are deliberately not consulted. Cross-backend equivalence is never
+// claimed.
+//
+// Same-spec/multiple-tags limitation (§36/§37/§69): one observed semantic
+// rule cannot by semantics alone prove provenance between two desired
+// identities with identical expected specs. Matching is PER DESIRED rule;
+// DetectDesiredSpecCollisions exposes the ambiguity when a desired set is
+// supplied. No provenance is invented.
+type DesiredRule struct {
+	Identity ownership.ResourceIdentity
+	Spec     RuleSpec
+}
+
+// NewDesiredRule constructs a coherent desired firewall rule: the
+// identity is built from the compiled ClassFirewallRule contract
+// (chain+tag) and must agree with the expected spec's own context — a
+// spec claiming a different chain or backend is a malformed desired rule
+// and fails closed (never silently rewritten).
+func NewDesiredRule(chain, tag string, spec RuleSpec) (DesiredRule, error) {
+	id, err := RuleIdentityForDesired(chain, tag)
+	if err != nil {
+		return DesiredRule{}, fmt.Errorf("desired rule identity: %v", err)
+	}
+	if spec.Chain != chain {
+		return DesiredRule{}, fmt.Errorf("%w: identity chain %q != spec chain %q", ErrDesiredSpecIdentityMismatch, chain, spec.Chain)
+	}
+	if spec.Backend != BackendIPTables {
+		return DesiredRule{}, fmt.Errorf("%w: desired backend %q", ErrDesiredBackendUnsupported, spec.Backend)
+	}
+	return DesiredRule{Identity: id, Spec: spec}, nil
+}
+
+// Typed desired-rule validation failures (§33/§32).
+var (
+	ErrDesiredSpecIdentityMismatch = errors.New("desired spec chain does not match the desired identity chain")
+	ErrDesiredBackendUnsupported   = errors.New("desired spec backend is outside the project iptables mutation plane")
+	ErrDesiredIdentityWrongClass   = errors.New("desired identity is not a firewall-rule identity")
+)
+
+// MatchStatus is the closed matching-result vocabulary. Names are
+// deliberately matching-specific: they never claim ownership observation
+// states (PRESENT/ABSENT belong to a later LiveFact layer).
+type MatchStatus string
+
+const (
+	// MatchUnique: exactly one semantic candidate in a complete usable
+	// inventory.
+	MatchUnique MatchStatus = "UNIQUE_MATCH"
+	// MatchNone: the complete inventory positively contains no semantic
+	// candidate. This is a MATCHING-level result — never an ownership
+	// ABSENT claim.
+	MatchNone MatchStatus = "NO_MATCH"
+	// MatchMultiple: two or more semantic candidates exist; multiplicity
+	// is behaviorally meaningful and none is selected (§12).
+	MatchMultiple MatchStatus = "MULTIPLE_MATCHES"
+	// MatchUnknown: the inventory was incomplete, the desired rule was
+	// malformed for matching, or relevant unsupported rules could conceal
+	// the desired semantics (§11: UNKNOWN != NO_MATCH).
+	MatchUnknown MatchStatus = "UNKNOWN"
+)
+
+// MatchReason is the closed machine-readable reason vocabulary.
+type MatchReason string
+
+const (
+	ReasonUniqueSemanticMatch     MatchReason = "UNIQUE_SEMANTIC_MATCH"
+	ReasonNoSemanticMatch         MatchReason = "NO_SEMANTIC_MATCH"
+	ReasonMultipleSemanticMatches MatchReason = "MULTIPLE_SEMANTIC_MATCHES"
+	ReasonInventoryIncomplete     MatchReason = "INVENTORY_INCOMPLETE"
+	ReasonRelevantUnsupportedRule MatchReason = "RELEVANT_UNSUPPORTED_RULE"
+)
+
+// MatchedObservation is one semantic candidate with its stable observation
+// coordinates (value semantics — no pointers into mutable slices).
+type MatchedObservation struct {
+	Context ObservationContext
+	Spec    RuleSpec
+}
+
+// MatchResult is the deterministic matching outcome.
+type MatchResult struct {
+	Status  MatchStatus
+	Reason  MatchReason
+	Matches []MatchedObservation
+}
+
+// MatchDesiredRule matches one desired firewall rule against the typed
+// firewall discovery inventory. PURE: typed in, typed out; no I/O, no
+// clock; deterministic; inputs never mutated; candidate order preserves
+// execution order.
+//
+// Boundaries: matching is scoped to the desired chain (a semantically
+// identical rule in another chain is not a candidate) and to the iptables
+// mutation plane (nft structural rules are not consulted; cross-backend
+// equivalence is never claimed).
+func MatchDesiredRule(d DesiredRule, fw discovery.Firewall) (MatchResult, error) {
+	// Class check precedes full validation so a wrong-class identity gets
+	// the typed wrong-class refusal rather than a field-applicability error.
+	if d.Identity.Class != ownership.ClassFirewallRule {
+		return MatchResult{}, fmt.Errorf("%w: class %q", ErrDesiredIdentityWrongClass, d.Identity.Class)
+	}
+	if err := d.Identity.Validate(); err != nil {
+		return MatchResult{}, fmt.Errorf("desired identity: %v", err)
+	}
+	if d.Spec.Chain != d.Identity.Chain {
+		return MatchResult{}, fmt.Errorf("%w: identity chain %q != spec chain %q", ErrDesiredSpecIdentityMismatch, d.Identity.Chain, d.Spec.Chain)
+	}
+	if d.Spec.Backend != BackendIPTables {
+		return MatchResult{}, fmt.Errorf("%w: desired backend %q", ErrDesiredBackendUnsupported, d.Spec.Backend)
+	}
+	// Completeness gate (TASK-46 contract, same as the routing observer).
+	if fw.IPTablesRules.Status != identity.FieldStatusPresent {
+		return MatchResult{
+			Status:  MatchUnknown,
+			Reason:  ReasonInventoryIncomplete,
+			Matches: []MatchedObservation{},
+		}, nil
+	}
+	// The desired chain must be positively enumerated: a missing chain
+	// entry means the chain itself does not exist, so no rule inside it
+	// can exist either (proven absence by the complete enumeration).
+	var chain *discovery.IPTablesChain
+	for i := range fw.IPTablesRules.Chains {
+		if fw.IPTablesRules.Chains[i].Name == d.Spec.Chain {
+			chain = &fw.IPTablesRules.Chains[i]
+			break
+		}
+	}
+	if chain == nil {
+		return MatchResult{
+			Status:  MatchNone,
+			Reason:  ReasonNoSemanticMatch,
+			Matches: []MatchedObservation{},
+		}, nil
+	}
+	var matches []MatchedObservation
+	unsupported := 0
+	for i, r := range chain.Rules {
+		ctx := ObservationContext{Backend: BackendIPTables, Chain: d.Spec.Chain, Position: i + 1}
+		if !r.Supported {
+			// Fail-closed (§15): an unmodelable rule at this coordinate
+			// could be the desired rule in unrepresentable form.
+			unsupported++
+			continue
+		}
+		p := ProjectRule(d.Spec.Chain, i+1, r)
+		if p.Spec.Equal(d.Spec) {
+			matches = append(matches, MatchedObservation{Context: ctx, Spec: *p.Spec})
+		}
+	}
+	switch {
+	case len(matches) == 0 && unsupported == 0:
+		return MatchResult{Status: MatchNone, Reason: ReasonNoSemanticMatch, Matches: []MatchedObservation{}}, nil
+	case len(matches) == 0 && unsupported > 0:
+		// Fail-closed: an unmodelable rule in the desired chain could be
+		// the desired rule in unrepresentable form.
+		return MatchResult{
+			Status:  MatchUnknown,
+			Reason:  ReasonRelevantUnsupportedRule,
+			Matches: []MatchedObservation{},
+		}, nil
+	case len(matches) == 1 && unsupported == 0:
+		return MatchResult{Status: MatchUnique, Reason: ReasonUniqueSemanticMatch, Matches: matches}, nil
+	default:
+		// Multiple candidates, or a candidate coexisting with an
+		// unrepresentable rule (the combination is ambiguous).
+		reason := ReasonMultipleSemanticMatches
+		status := MatchMultiple
+		if unsupported > 0 {
+			reason = ReasonRelevantUnsupportedRule
+			status = MatchUnknown
+		}
+		return MatchResult{Status: status, Reason: reason, Matches: matches}, nil
+	}
+}
+
+// DetectDesiredSpecCollisions reports groups of desired rules that share
+// the same chain and the same expected semantic spec under different
+// logical identities (tags). Such groups are a logical matching
+// ambiguity: no observation-level semantic matcher can distinguish their
+// provenance. Pure; singletons are not reported; inputs never mutated;
+// group order follows first-appearance order.
+func DetectDesiredSpecCollisions(rules []DesiredRule) [][]DesiredRule {
+	specGroups := make(map[string][]int)
+	order := []string{}
+	for i, r := range rules {
+		k := r.Spec.Chain + "\x00" + specFingerprintFields(r.Spec)
+		if _, ok := specGroups[k]; !ok {
+			order = append(order, k)
+		}
+		specGroups[k] = append(specGroups[k], i)
+	}
+	var out [][]DesiredRule
+	for _, k := range order {
+		idx := specGroups[k]
+		tags := map[string]bool{}
+		for _, i := range idx {
+			tags[rules[i].Identity.Tag] = true
+		}
+		if len(tags) < 2 {
+			continue
+		}
+		group := make([]DesiredRule, 0, len(idx))
+		for _, i := range idx {
+			group = append(group, rules[i])
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+// specFingerprintFields renders the semantic fields of one spec for
+// collision grouping (diagnostic grouping only, never an authority
+// comparison; ct-state membership order is normalized because the set,
+// not its order, is semantic).
+func specFingerprintFields(s RuleSpec) string {
+	states := append([]string(nil), s.CtStates...)
+	sort.Strings(states)
+	parts := []string{string(s.Backend), s.Protocol, s.Source, s.Destination,
+		s.InInterface, s.OutInterface, s.SourcePort, s.DestinationPort,
+		s.MarkValue, s.MarkMask, s.Verdict, s.RejectWith, s.Jump, s.Goto}
+	parts = append(parts, states...)
+	return strings.Join(parts, "\x1f")
 }

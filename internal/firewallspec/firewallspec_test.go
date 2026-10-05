@@ -360,7 +360,7 @@ func TestProjectionImplementationIsPure(t *testing.T) {
 		"internal/journal", "internal/state", "internal/apply",
 		"internal/orchestrate", "internal/approval", "Admit(",
 		"Corroborate(", "DeriveVerdict(", "StateEvidence",
-		"LiveFact", "OwnedVerified",
+		"ownership.LiveFact", "OwnedVerified",
 	} {
 		if strings.Contains(string(src), banned) {
 			t.Fatalf("firewallspec.go must not reference %q: PURE projection of typed discovery facts", banned)
