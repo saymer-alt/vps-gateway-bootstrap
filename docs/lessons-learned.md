@@ -545,3 +545,61 @@ up using the files actually present on this Debian host (`server.json` and
   disk pressure does not justify removing the recovery option.
 
 See `docs/live-maintenance-saymer2-2026-10-05.md` for the full Debian evidence.
+
+## 32. Application-managed Mihomo updates can preserve PID while invalidating dependent routing
+
+During the 2026-10-05 `Saymer3` maintenance session the operator manually
+started a Mihomo 1.19.31 -> 1.19.32 update from MetaCubeXD. The journal showed
+Mihomo shutting down and immediately reinitializing at 15:34:46, but systemd
+kept the same `MainPID=750`, the old service start timestamp and
+`NRestarts=0`. The on-disk binary and `/proc/750/exe` then matched the new
+1.19.32 image, and the configuration test remained successful.
+
+About 38 seconds later, the semantic WARP routing watchdog reported that it had
+successfully restored the routing contract. Earlier and later checks were
+clean, and a forced final watchdog check performed no repair. This is strong
+operational evidence that an application-managed Mihomo update/re-exec can
+recreate or reinitialize `tun-mihomo` and leave dependent host routing needing
+re-assertion even though systemd never records a service restart. The exact
+failed routing predicate was not logged, so the evidence does not identify
+which individual rule/route/firewall object disappeared.
+
+**Rules:**
+- Do not use PID continuity, service start timestamp or `NRestarts=0` as proof
+  that a network daemon's runtime objects remained unchanged across an
+  application-managed update.
+- Treat Mihomo TUN lifecycle as a dependency boundary: after update/re-exec,
+  validate the TUN, dependent policy rules/routes and owned firewall/routing
+  state.
+- Polling watchdogs should log the exact failed predicate before repair; where
+  possible, add immediate post-update/post-reinit validation so correctness
+  does not depend solely on the polling interval.
+
+See `docs/live-maintenance-saymer3-2026-10-05.md` for the full evidence.
+
+## 33. A valid maintenance block on the wrong host is still an unsafe mutation
+
+During the same maintenance window, a command block prepared for `Saymer3` was
+accidentally pasted into an SSH session connected to `Saymer2`. Most operations
+were harmless or idempotent, but the block created an inert foreign WARP timer
+drop-in for a unit that did not exist and temporarily changed the secondary
+rsyslog rotation cadence away from the policy already chosen for that host.
+The package-upgrade step made no package changes because Debian was already up
+to date. The stray drop-in was removed and the previous `Saymer2` logrotate
+policy was restored; final service and failed-unit checks were clean.
+
+This incident validates a distinction already present in the security model:
+transport access and syntactically valid commands are not target authority.
+The same change shape can be safe on one machine and wrong on another.
+
+**Rules:**
+- Bind production mutation approval to the exact host identity and verify that
+  identity again at execution time before the first change.
+- Do not infer target identity from a shell prompt, remembered IP, terminal
+  title or the host for which a command block was originally drafted.
+- If a wrong-host mutation is detected, stop unrelated work, inventory the
+  exact effects, restore only proven changed resources, and finish with the
+  normal health gate.
+
+See `docs/live-maintenance-wrong-host-incident-2026-10-05.md` for the full
+evidence.
