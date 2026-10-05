@@ -196,7 +196,7 @@ resources proven OWNED; generator output is desired-state input, never ownership
 A live Ubuntu 24.04 AWG -> Mihomo gateway showed a subtle validation failure. Mihomo DNS
 was healthy on the host and answered via the Docker bridge address, but the AWG container
 timed out because UFW's incoming policy blocked container -> host port 53. Adding narrow
-UDP and TCP allowances from the actual Docker bridge/subnet restored both DNS and HTTPS.
+UDP and TCP allowances for the actual Docker bridge/subnet restored both DNS and HTTPS.
 
 This is distinct from the earlier SE2 uninstall-residue case: here the gateway was still
 active and the host service itself was healthy. The missing contract was firewall
@@ -576,3 +576,30 @@ which individual rule/route/firewall object disappeared.
   does not depend solely on the polling interval.
 
 See `docs/live-maintenance-saymer3-2026-10-05.md` for the full evidence.
+
+## 33. A valid maintenance block on the wrong host is still an unsafe mutation
+
+During the same maintenance window, a command block prepared for `Saymer3` was
+accidentally pasted into an SSH session connected to `Saymer2`. Most operations
+were harmless or idempotent, but the block created an inert foreign WARP timer
+drop-in for a unit that did not exist and temporarily changed the secondary
+rsyslog rotation cadence away from the policy already chosen for that host.
+The package-upgrade step made no package changes because Debian was already up
+to date. The stray drop-in was removed and the previous `Saymer2` logrotate
+policy was restored; final service and failed-unit checks were clean.
+
+This incident validates a distinction already present in the security model:
+transport access and syntactically valid commands are not target authority.
+The same change shape can be safe on one machine and wrong on another.
+
+**Rules:**
+- Bind production mutation approval to the exact host identity and verify that
+  identity again at execution time before the first change.
+- Do not infer target identity from a shell prompt, remembered IP, terminal
+  title or the host for which a command block was originally drafted.
+- If a wrong-host mutation is detected, stop unrelated work, inventory the
+  exact effects, restore only proven changed resources, and finish with the
+  normal health gate.
+
+See `docs/live-maintenance-wrong-host-incident-2026-10-05.md` for the full
+evidence.
