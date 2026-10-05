@@ -43,11 +43,23 @@ unknown ownership are blocked by design.
 
 `state.json` (default `/etc/vps-gateway/state.json`) records the last known
 managed state: schema version, profile, actual/desired state, ownership,
-constraints and diff. It is written atomically with mode 0600 and must only
-be persisted from verified post-change state. Ownership precedence in the
+constraints and diff. It is written atomically with mode 0600 and must only be
+persisted from verified post-change state. Ownership precedence in the
 pipeline: explicit config > persisted state > nothing (unknown ownership
 blocks mutations). install --dry-run reads it via `--state FILE` (or the
 default path when present) and reports the source in the summary.
+
+## Production evidence and maintenance docs
+
+Real-host maintenance evidence is indexed in
+[`docs/live-maintenance-index.md`](docs/live-maintenance-index.md). Each current
+VPS has its own dated `live-maintenance-<host>-YYYY-MM-DD.md` evidence file.
+
+Reusable maintenance procedure belongs in
+[`docs/small-vps-maintenance-runbook.md`](docs/small-vps-maintenance-runbook.md),
+while cross-host conclusions belong in `docs/lessons-learned.md` and
+`docs/requirements-from-real-vps.md`. Host evidence must not be silently treated
+as a universal template.
 
 ## Layout
 
@@ -76,8 +88,7 @@ internal/capability  PURE capability vocabulary and typed derivation (C1/C2; unw
 internal/ownership   PURE ownership-verdict foundation (O1; unwired)
 internal/leak        PURE direct-leak safety evaluator (D1/D2; unwired)
 internal/sysctl      PURE sysctl observation/resolution foundation (S1-S4; unwired)
-docs/                design documents and handoffs (see docs/HANDOFF-2026-09-28.md
-                     for the current checkpoint)
+docs/                design documents, live evidence and handoffs
 ```
 
 ## Development
