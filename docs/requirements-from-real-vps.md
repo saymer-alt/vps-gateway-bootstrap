@@ -392,3 +392,40 @@ application-state preservation. Service-specific filters must be as narrow as
 the observed producer permits; package/cache cleanup must be re-evaluated after
 upgrades; and all known representations of effective application state should
 be preserved when an upgrade can affect them.
+
+### 27. Maintenance policy must be derived from the current host, not copied from fleet peers
+
+A Debian 12 maintenance session on `Saymer2` on 2026-10-05 showed three cases
+where copying the previous Ubuntu repair would have been wrong or needlessly
+broad.
+
+First, `snapd.service` and `snapd.socket` were masked, but the `snapd` package
+was not installed, no snap-backed Livepatch consumer existed and no restart
+loop was present. The mask was therefore not a live dependency defect.
+
+Second, Telemt's proven repetitive WARN producers were only
+`telemt::proxy::middle_relay::idle::read` and
+`telemt::maestro::listeners::accept`. Filtering exactly those modules reduced
+measured syslog growth to 725 bytes in five minutes while preserving unrelated
+WARN visibility. A fleet-wide static Telemt filter would have hidden more than
+the evidence justified.
+
+Third, the host's Mita state layout used `/etc/mita/server.json` and
+`/etc/mita/server.conf.pb`, rather than the `server_config.json` name observed
+on an Ubuntu peer. Both actual files were backed up and hash-compared across a
+successful 3.36.0 -> 3.38.0 upgrade.
+
+The same maintenance window updated Docker 29.8.1 -> 29.8.2 only after
+inspecting the active AmneziaWG container and its `restart=always` policy; the
+container returned to `running` after the Docker restart. One prior kernel was
+kept as a fallback while only residual configs for older removed kernels were
+purged.
+
+Requirement: maintenance/doctor logic must model observations as host-scoped
+evidence. It must prove dependency consumers before repairing masked units,
+derive log filters from current-host producers, discover application state
+paths instead of hardcoding distro-specific filenames, and validate real
+container recovery after runtime upgrades. Cleanup policy should preserve a
+reasonable fallback kernel when disk pressure does not justify reducing the
+recovery margin. Full evidence is in
+`docs/live-maintenance-saymer2-2026-10-05.md`.

@@ -509,3 +509,39 @@ links with credentials.
 
 See `docs/small-vps-maintenance-runbook.md` for the full observed workflow and
 validation sequence.
+
+## 31. Fleet maintenance policy must be evidence-driven per host
+
+A Debian 12 maintenance session on `Saymer2` on 2026-10-05 provided a useful
+counterexample to copying fixes from one VPS to another. `snapd.service` and
+`snapd.socket` were masked, just as on the earlier Ubuntu `hungry-boyd` host,
+but `snapd` was not installed, no snap-backed Livepatch consumer existed and
+there was no restart loop. The same visible unit state therefore did not
+represent the same defect.
+
+Telemt also needed a different filter. On this host the proven repetitive WARN
+producers were only `telemt::proxy::middle_relay::idle::read` and
+`telemt::maestro::listeners::accept`. Filtering those two modules while keeping
+other WARN classes visible reduced measured syslog growth to 725 bytes in five
+minutes. The broader filters used on other VPS hosts were deliberately not
+copied.
+
+The same session updated Docker 29.8.1 -> 29.8.2 only after discovering the
+active AmneziaWG container and its `restart=always` policy; post-upgrade checks
+confirmed the container returned to `running`. Mita 3.36.0 -> 3.38.0 was backed
+up using the files actually present on this Debian host (`server.json` and
+`server.conf.pb`), not filenames assumed from Ubuntu.
+
+**Rules:**
+- Treat identical-looking system state as evidence, not diagnosis; prove the
+  dependency/consumer relationship before repairing a masked or inactive unit.
+- Derive service log filters from measured producers on the current host and
+  keep the filter as narrow as the evidence allows.
+- Before upgrading a container runtime, discover active consumers and restart
+  policy; afterwards validate the real containers, not only the daemon.
+- Discover application state-file layout before backup/upgrade; filenames may
+  vary across distro/install history.
+- Preserve one known-good fallback kernel on small production VPS hosts when
+  disk pressure does not justify removing the recovery option.
+
+See `docs/live-maintenance-saymer2-2026-10-05.md` for the full Debian evidence.
