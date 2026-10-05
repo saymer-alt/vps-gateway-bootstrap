@@ -196,7 +196,7 @@ resources proven OWNED; generator output is desired-state input, never ownership
 A live Ubuntu 24.04 AWG -> Mihomo gateway showed a subtle validation failure. Mihomo DNS
 was healthy on the host and answered via the Docker bridge address, but the AWG container
 timed out because UFW's incoming policy blocked container -> host port 53. Adding narrow
-UDP and TCP allowances for the actual Docker bridge/subnet restored both DNS and HTTPS.
+UDP and TCP allowances from the actual Docker bridge/subnet restored both DNS and HTTPS.
 
 This is distinct from the earlier SE2 uninstall-residue case: here the gateway was still
 active and the host service itself was healthy. The missing contract was firewall
@@ -545,3 +545,34 @@ up using the files actually present on this Debian host (`server.json` and
   disk pressure does not justify removing the recovery option.
 
 See `docs/live-maintenance-saymer2-2026-10-05.md` for the full Debian evidence.
+
+## 32. Application-managed Mihomo updates can preserve PID while invalidating dependent routing
+
+During the 2026-10-05 `Saymer3` maintenance session the operator manually
+started a Mihomo 1.19.31 -> 1.19.32 update from MetaCubeXD. The journal showed
+Mihomo shutting down and immediately reinitializing at 15:34:46, but systemd
+kept the same `MainPID=750`, the old service start timestamp and
+`NRestarts=0`. The on-disk binary and `/proc/750/exe` then matched the new
+1.19.32 image, and the configuration test remained successful.
+
+About 38 seconds later, the semantic WARP routing watchdog reported that it had
+successfully restored the routing contract. Earlier and later checks were
+clean, and a forced final watchdog check performed no repair. This is strong
+operational evidence that an application-managed Mihomo update/re-exec can
+recreate or reinitialize `tun-mihomo` and leave dependent host routing needing
+re-assertion even though systemd never records a service restart. The exact
+failed routing predicate was not logged, so the evidence does not identify
+which individual rule/route/firewall object disappeared.
+
+**Rules:**
+- Do not use PID continuity, service start timestamp or `NRestarts=0` as proof
+  that a network daemon's runtime objects remained unchanged across an
+  application-managed update.
+- Treat Mihomo TUN lifecycle as a dependency boundary: after update/re-exec,
+  validate the TUN, dependent policy rules/routes and owned firewall/routing
+  state.
+- Polling watchdogs should log the exact failed predicate before repair; where
+  possible, add immediate post-update/post-reinit validation so correctness
+  does not depend solely on the polling interval.
+
+See `docs/live-maintenance-saymer3-2026-10-05.md` for the full evidence.
