@@ -463,3 +463,12 @@ func parseNFTChainDeclaration(c *NFTChain, line string) {
 		c.Policy = "accept"
 	}
 }
+
+// ParseIPTablesRules is the exported entry to the authoritative iptables
+// rule grammar (ZAI-37) for downstream semantic-plane round-trip tests
+// (ZAI-52): the MSS command builder pins that its derived argv, rendered
+// through this grammar, reproduces the planned semantic spec exactly.
+// It is the same parser — no second grammar exists.
+func ParseIPTablesRules(out string) []IPTablesChain {
+	return parseIPTablesRules(out)
+}

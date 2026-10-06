@@ -79,6 +79,13 @@ func BuildMSSAction(rule DesiredMSSRule) (MSSActionSpec, error) {
 	if err := rule.Spec.Validate(); err != nil {
 		return MSSActionSpec{}, fmt.Errorf("%w: %v", ErrMSSActionSpecInvalid, err)
 	}
+	// The frozen ZAI-50 contract fixes the table to mangle — Validate
+	// (the observation envelope) accepts verbatim table values, but a
+	// MUTATION intent outside the fixed contract is refused here, before
+	// any command derivation could hardcode "-t mangle" against it.
+	if rule.Spec.Table != "mangle" {
+		return MSSActionSpec{}, fmt.Errorf("%w: table %q is outside the frozen MSS contract (fixed: mangle)", ErrMSSActionSpecInvalid, rule.Spec.Table)
+	}
 	if rule.Identity.Chain != rule.Spec.Chain {
 		return MSSActionSpec{}, fmt.Errorf("%w: identity chain %q disagrees with spec chain %q", ErrMSSActionIdentityInvalid, rule.Identity.Chain, rule.Spec.Chain)
 	}
