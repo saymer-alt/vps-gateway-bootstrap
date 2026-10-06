@@ -458,6 +458,7 @@ func TestMSSSpecPurityPins(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/saymer-alt/vps-gateway-bootstrap/internal/capability": true,
 		"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery":  true,
+		"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity":   true,
 		"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership":  true,
 	}
 	entries, err := os.ReadDir(".")
