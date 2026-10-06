@@ -17,6 +17,22 @@ import (
 // gate sequence over injected boundaries, with every negative path
 // proving that nothing executes and nothing is proven.
 
+const (
+	testHostA = "machine-id:" + "0123456789abcdef0123456789abcdef"
+	testHostB = "machine-id:" + "fedcba9876543210fedcba9876543210"
+	testRawID = "0123456789ABCDEF0123456789abcdef\n" // raw file form of testHostA
+)
+
+// hostEnsurer builds an Ensurer whose host gate approves testHostA.
+func hostEnsurer(runner CommandRunner, snap *snapshotSource) Ensurer {
+	return Ensurer{
+		Run:          runner,
+		Snapshot:     snap.Snapshot,
+		CurrentHost:  func(context.Context) (string, error) { return testRawID, nil },
+		ExpectedHost: testHostA,
+	}
+}
+
 // fakeRunner records issued commands; err is returned per invocation.
 type fakeRunner struct {
 	invoked int
@@ -108,7 +124,7 @@ func TestEnsureHappyPathProven(t *testing.T) {
 		mangleWith(),         // pre: proven absence
 		mangleWith(inserted), // post: rule present with planned semantics
 	}}
-	res, err := Ensurer{Run: runner, Snapshot: snap.Snapshot}.Ensure(context.Background(), a)
+	res, err := hostEnsurer(runner, snap).Ensure(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +158,7 @@ func TestEnsurePreObservationGateBlocksCommand(t *testing.T) {
 	conflict := clampRule("203.0.113.0/24", "muvg443")
 	runner := &fakeRunner{}
 	snap := &snapshotSource{queue: []discovery.Firewall{mangleWith(conflict)}}
-	res, err := Ensurer{Run: runner, Snapshot: snap.Snapshot}.Ensure(context.Background(), a)
+	res, err := hostEnsurer(runner, snap).Ensure(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +173,14 @@ func TestEnsurePreObservationGateBlocksCommand(t *testing.T) {
 	snap2 := &snapshotSource{queue: []discovery.Firewall{discovery.Firewall{
 		IPTablesMangleRules: discovery.IPTablesRuleInventory{Status: identity.FieldStatusUnknownParse, Table: "mangle"},
 	}}}
-	res2, err := Ensurer{Run: runner2, Snapshot: snap2.Snapshot}.Ensure(context.Background(), a)
+	res2, err := hostEnsurer(runner2, snap2).Ensure(context.Background(), a)
 	if err != nil || res2.Proven || res2.PlannerOutcome != mssspec.PlannerUnknown || runner2.invoked != 0 {
 		t.Fatalf("unknown inventory must block with no execution: %+v err=%v invoked=%d", res2, err, runner2.invoked)
 	}
 	// Snapshot source failure also blocks before any command.
 	runner3 := &fakeRunner{}
 	snap3 := &snapshotSource{err: errors.New("collector down")}
-	res3, err := Ensurer{Run: runner3, Snapshot: snap3.Snapshot}.Ensure(context.Background(), a)
+	res3, err := hostEnsurer(runner3, snap3).Ensure(context.Background(), a)
 	if err != nil || res3.Proven || res3.Stage != StagePreObservation || runner3.invoked != 0 {
 		t.Fatalf("snapshot failure must block with no execution: %+v err=%v", res3, err)
 	}
@@ -182,7 +198,7 @@ func TestEnsurePostConditionVerification(t *testing.T) {
 		mangleWith(),
 		mangleWith(other),
 	}}
-	res, err := Ensurer{Run: runner, Snapshot: snap.Snapshot}.Ensure(context.Background(), a)
+	res, err := hostEnsurer(runner, snap).Ensure(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,14 +211,14 @@ func TestEnsurePostConditionVerification(t *testing.T) {
 	// Post state: rule absent despite exit 0 (e.g. raced away).
 	runner2 := &fakeRunner{}
 	snap2 := &snapshotSource{queue: []discovery.Firewall{mangleWith(), mangleWith()}}
-	res2, err := Ensurer{Run: runner2, Snapshot: snap2.Snapshot}.Ensure(context.Background(), a)
+	res2, err := hostEnsurer(runner2, snap2).Ensure(context.Background(), a)
 	if err != nil || res2.Proven || res2.Stage != StagePostObservation {
 		t.Fatalf("absent post-state must not be proven: %+v err=%v", res2, err)
 	}
 	// Post-observation source failure → not proven.
 	runner3 := &fakeRunner{}
 	snap3 := &snapshotSource{queue: []discovery.Firewall{mangleWith()}, err: errors.New("post snapshot down")}
-	res3, err := Ensurer{Run: runner3, Snapshot: snap3.Snapshot}.Ensure(context.Background(), a)
+	res3, err := hostEnsurer(runner3, snap3).Ensure(context.Background(), a)
 	if err != nil || res3.Proven || res3.Stage != StagePostObservation || runner3.invoked != 1 {
 		t.Fatalf("post-observation failure must not be proven: %+v err=%v", res3, err)
 	}
@@ -213,7 +229,7 @@ func TestEnsureCommandFailureNotProven(t *testing.T) {
 	a := mssAction(t)
 	runner := &fakeRunner{err: errors.New("exit status 2")}
 	snap := &snapshotSource{queue: []discovery.Firewall{mangleWith()}}
-	res, err := Ensurer{Run: runner, Snapshot: snap.Snapshot}.Ensure(context.Background(), a)
+	res, err := hostEnsurer(runner, snap).Ensure(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +245,7 @@ func TestEnsureRevalidatesAction(t *testing.T) {
 	forged.Spec.Source = "203.0.113.0/24" // stale hash
 	runner := &fakeRunner{}
 	snap := &snapshotSource{queue: []discovery.Firewall{mangleWith()}}
-	bad := Ensurer{Run: runner, Snapshot: snap.Snapshot}
+	bad := hostEnsurer(runner, snap)
 	if _, err := bad.Ensure(context.Background(), forged); err == nil {
 		t.Fatal("forged action must fail revalidation")
 	}
@@ -237,11 +253,11 @@ func TestEnsureRevalidatesAction(t *testing.T) {
 		t.Fatal("no command may be issued for a forged action")
 	}
 	// Missing boundaries fail closed.
-	noRunner := Ensurer{Snapshot: snap.Snapshot}
+	noRunner := hostEnsurer(nil, snap)
 	if _, err := noRunner.Ensure(context.Background(), a); err == nil {
 		t.Fatal("no runner must fail closed")
 	}
-	noSnap := Ensurer{Run: runner}
+	noSnap := Ensurer{Run: runner, CurrentHost: func(context.Context) (string, error) { return testRawID, nil }, ExpectedHost: testHostA}
 	if _, err := noSnap.Ensure(context.Background(), a); err == nil {
 		t.Fatal("no snapshot source must fail closed")
 	}

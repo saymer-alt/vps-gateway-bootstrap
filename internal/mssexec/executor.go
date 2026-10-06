@@ -1,5 +1,6 @@
 // Package mssexec is the bounded CREATE-only execution foundation for the
-// project MSS clamp rule (ZAI-52, PATH B — foundation only).
+// project MSS clamp rule (ZAI-52, PATH B — foundation only; ZAI-53 adds
+// the host-bound authorization gate).
 //
 //	PRODUCTION AUTHORITY REMAINS DISABLED: nothing in this package is
 //	constructed with a real command runner anywhere in production code,
@@ -12,18 +13,25 @@
 // with every dependency injected:
 //
 //  1. revalidate the action in full (never trust the caller);
-//  2. PRE-EXECUTION RE-OBSERVATION (TOCTOU gate): observe fresh state,
+//  2. HOST GATE (ZAI-53): derive the CURRENT canonical host identity from
+//     the injected collector and compare it against the approved binding —
+//     a mismatch, a missing side, or a malformed identity DENIES before
+//     any observation or command (the wrong-host lesson: correct
+//     resource identity, spec hash and capability do NOT imply the
+//     correct host, and VPS B may coincidentally look identical — host
+//     mismatch alone is sufficient, independent of firewall state);
+//  3. PRE-EXECUTION RE-OBSERVATION (TOCTOU gate): observe fresh state,
 //     re-plan, and proceed ONLY if the outcome is CREATE_MSS_RULE —
 //     a state that became NO_ACTION / BLOCKED_COLLISION / UNKNOWN is
 //     not mutated and the command is never issued;
-//  3. run the canonical INSERT argv through the injected runner
+//  4. run the canonical INSERT argv through the injected runner
 //     (INSERT ONLY: -A fixed; DELETE/REPLACE/FLUSH/ADOPT structurally
 //     impossible — see mssspec.InsertCommand);
-//  4. POST-MUTATION VERIFICATION: re-observe and require LivePresent
+//  5. POST-MUTATION VERIFICATION: re-observe and require LivePresent
 //     with the observed semantic hash equal to the planned hash and a
 //     NO_ACTION re-plan — an iptables exit code of 0 alone is never
 //     proof of the result;
-//  5. report a local execution fact and NOTHING else: no StateEvidence
+//  6. report a local execution fact and NOTHING else: no StateEvidence
 //     is minted, no provenance is synthesized, no ownership is inferred.
 //
 // The four statements §15 distinguishes are different things, and this
@@ -31,6 +39,12 @@
 // the command" and "this process observed the resulting state". "This
 // transaction created it" (durable provenance) and "the project owns it"
 // require the ZAI-49 evidence legs and stay out of scope.
+//
+// Host binding planes (ZAI-53 §5): the HostIdentity is neither the
+// ResourceIdentity, nor a semantic SpecHash, nor a capability, nor
+// ownership evidence — it never enters any fingerprint domain, and the
+// comparison is PURE: canonicalization via internal/machineid, collection
+// stays an injected I/O boundary.
 //
 // Purity of intent, honesty of result: a Result with Proven=false means
 // the operation is NOT proven successful — never laundered into success,
@@ -40,8 +54,10 @@ package mssexec
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/mssspec"
 )
 
@@ -57,11 +73,22 @@ type CommandRunner interface {
 // be the discovery collector; nothing wires it here.
 type SnapshotFunc func(ctx context.Context) (discovery.Firewall, error)
 
+// CurrentHostFunc is the injected CURRENT-host identity boundary
+// (collection is I/O): it returns the raw /etc/machine-id content — or an
+// already-canonical "machine-id:<hex>" form — of the machine the executor
+// is running on. In production this would read the discovery
+// Host.MachineID fact; nothing wires it here.
+type CurrentHostFunc func(ctx context.Context) (string, error)
+
 // ExecutionStage is the closed vocabulary of where an Ensure attempt
 // stopped.
 type ExecutionStage string
 
 const (
+	// StageHostGate: the wrong-host gate stopped the attempt before any
+	// observation or command (ZAI-53: host mismatch alone is sufficient,
+	// independent of firewall state).
+	StageHostGate ExecutionStage = "HOST_GATE"
 	// StagePreObservation: the TOCTOU gate stopped the attempt before any
 	// command was issued (state was not proven-absent).
 	StagePreObservation ExecutionStage = "PRE_OBSERVATION"
@@ -88,9 +115,51 @@ type Result struct {
 // Ensurer is the bounded executor foundation. Construct it only in tests
 // or in the future owner-authorized mutation task — never in production
 // wiring (enforced by the production-reachability tripwire).
+//
+// HostIdentity (ZAI-53) is the approved binding — the canonical
+// "machine-id:<hex>" of the machine this action is authorized for; in the
+// future mutation task it is sourced from the VERIFIED approval artifact.
+// CurrentHost is the collection boundary; the comparison itself is PURE.
 type Ensurer struct {
-	Run      CommandRunner
-	Snapshot SnapshotFunc
+	Run          CommandRunner
+	Snapshot     SnapshotFunc
+	CurrentHost  CurrentHostFunc
+	ExpectedHost string
+}
+
+// VerifyHostBinding is the PURE host-binding comparison (ZAI-53 §17):
+// both sides are canonicalized through internal/machineid (the expected
+// side arrives namespaced from the approval plane; the collected side may
+// be raw /etc/machine-id content or already namespaced) and must be equal.
+// Deterministic; no I/O; no clock; fail-closed on every malformed,
+// missing or mismatching input — a host check can never be "skipped".
+func VerifyHostBinding(expected, current string) error {
+	canonical := func(side, value string) (string, error) {
+		if strings.HasPrefix(value, machineid.HostIdentityPrefix) {
+			id, err := machineid.Normalize(strings.TrimPrefix(value, machineid.HostIdentityPrefix))
+			if err != nil {
+				return "", fmt.Errorf("%s host identity %q is malformed: %w", side, value, err)
+			}
+			return machineid.HostIdentityPrefix + id, nil
+		}
+		id, err := machineid.HostIdentity(value)
+		if err != nil {
+			return "", fmt.Errorf("%s host identity is malformed: %w", side, err)
+		}
+		return id, nil
+	}
+	want, err := canonical("approved", expected)
+	if err != nil {
+		return err
+	}
+	got, err := canonical("current", current)
+	if err != nil {
+		return err
+	}
+	if want != got {
+		return fmt.Errorf("host mismatch: action is authorized for %s, running on %s", want, got)
+	}
+	return nil
 }
 
 // Ensure executes the full gate sequence for one MSS action. PURE logic
@@ -109,7 +178,28 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 		return Result{}, fmt.Errorf("mssexec: action revalidation failed: %w", err)
 	}
 
-	// Leg 2 — TOCTOU gate: re-observe and re-plan; only a positively
+	// Leg 2 — HOST GATE (ZAI-53): the approved host must equal the current
+	// host, before any observation and long before any command. Fail-closed
+	// on every unavailable/malformed/mismatching state; a deny never
+	// depends on firewall state (the wrong-host target may look identical).
+	deny := func(reason string) Result {
+		return Result{Proven: false, Stage: StageHostGate, Reasons: []string{reason}}
+	}
+	if e.CurrentHost == nil {
+		return deny("current host identity is unavailable: no collector configured"), nil
+	}
+	if strings.TrimSpace(e.ExpectedHost) == "" {
+		return deny("approved host identity is absent: an action without a host binding is never executable"), nil
+	}
+	current, err := e.CurrentHost(ctx)
+	if err != nil {
+		return deny("current host identity read failed: " + err.Error()), nil
+	}
+	if err := VerifyHostBinding(e.ExpectedHost, current); err != nil {
+		return deny(err.Error()), nil
+	}
+
+	// Leg 3 — TOCTOU gate: re-observe and re-plan; only a positively
 	// proven absence may proceed to a command.
 	snapshot, err := e.Snapshot(ctx)
 	if err != nil {
@@ -135,7 +225,7 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			Reasons:        append([]string{"pre-execution re-plan did not prove absence; nothing was executed"}, decision.Reasons...)}, nil
 	}
 
-	// Leg 3 — the INSERT command (the only argv this package can ever
+	// Leg 4 — the INSERT command (the only argv this package can ever
 	// produce is the canonical INSERT form).
 	argv, err := mssspec.InsertCommand(action)
 	if err != nil {
@@ -149,7 +239,7 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			Reasons:        []string{"command failed: " + err.Error()}}, nil
 	}
 
-	// Leg 4 — post-mutation verification: the exit code alone is never
+	// Leg 5 — post-mutation verification: the exit code alone is never
 	// proof. Re-observe and require the planned semantic state.
 	post, err := e.Snapshot(ctx)
 	if err != nil {
@@ -191,7 +281,7 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			Reasons:        []string{"post-mutation re-plan is " + string(rePlan.Outcome) + ", want NO_ACTION"}}, nil
 	}
 
-	// Leg 5 — a LOCAL execution fact. No evidence, no provenance, no
+	// Leg 6 — a LOCAL execution fact. No evidence, no provenance, no
 	// ownership is minted or implied (ZAI-52 §15 hard stop).
 	return Result{Proven: true, Stage: StageDone,
 		PlannerOutcome: decision.Outcome,
