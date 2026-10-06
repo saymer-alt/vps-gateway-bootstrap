@@ -52,6 +52,7 @@ package mssspec
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/capability"
@@ -142,9 +143,13 @@ func (s Spec) Validate() error {
 }
 
 // Equal reports semantic equality: every behavior-affecting field must
-// match. CtStates compare as set membership (the firewall precedent);
-// comment, tag, position and raw do not exist on the struct and cannot
-// influence the result.
+// match. CtStates compare as set membership (the firewall precedent):
+// duplicates carry no semantic weight and member order is irrelevant —
+// the comparison runs on the canonical sorted, deduplicated form so the
+// predicate is exact for every input (ZAI-47: the fingerprint shares
+// this canonical form, keeping Equal↔hash alignment universal). Comment,
+// tag, position and raw do not exist on the struct and cannot influence
+// the result.
 func (a Spec) Equal(b Spec) bool {
 	if a.Backend != b.Backend || a.Table != b.Table || a.Chain != b.Chain ||
 		a.Protocol != b.Protocol || a.Source != b.Source ||
@@ -154,22 +159,34 @@ func (a Spec) Equal(b Spec) bool {
 		a.TCPFlagsComp != b.TCPFlagsComp || a.Action != b.Action {
 		return false
 	}
-	if len(a.CtStates) != len(b.CtStates) {
+	ca, cb := canonicalCtStates(a.CtStates), canonicalCtStates(b.CtStates)
+	if len(ca) != len(cb) {
 		return false
 	}
-	for _, s := range a.CtStates {
-		found := false
-		for _, t := range b.CtStates {
-			if s == t {
-				found = true
-				break
-			}
-		}
-		if !found {
+	for i := range ca {
+		if ca[i] != cb[i] {
 			return false
 		}
 	}
 	return true
+}
+
+// canonicalCtStates returns a sorted, deduplicated copy of the given
+// ct-state list: the canonical form of the field's set-membership
+// semantics. The input slice is never mutated.
+func canonicalCtStates(states []string) []string {
+	if len(states) == 0 {
+		return nil
+	}
+	out := append([]string(nil), states...)
+	sort.Strings(out)
+	deduped := out[:0]
+	for i, s := range out {
+		if i == 0 || s != deduped[len(deduped)-1] {
+			deduped = append(deduped, s)
+		}
+	}
+	return deduped
 }
 
 // ProjectRule projects one observed typed rule into its canonical MSS
