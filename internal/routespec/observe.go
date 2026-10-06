@@ -37,11 +37,14 @@
 //     downstream comparison cannot mistake the coordinate for the
 //     configuration.
 //   - LiveFact translation mirrors the file adapter's honest downgrade:
-//     PRESENT/PRESENT_UNSUPPORTED → LivePresent (SpecHash nil — no
-//     action-spec hash domain exists for routing classes; downstream
-//     derivation fails closed to UNDETERMINED on spec fidelity rather
-//     than guessing), ABSENT → LiveAbsent, UNKNOWN → LiveUnknown.
-//     ExternalOwner is never set.
+//     PRESENT → LivePresent carrying the semantic fingerprint of the
+//     observed spec (ZAI-43: routing-rule-spec/v1 and route-spec/v1
+//     domains — derived from the OBSERVED spec only, never from any
+//     desired side), PRESENT_UNSUPPORTED → LivePresent with a nil
+//     SpecHash (occupied coordinate, honestly unrepresentable spec —
+//     downstream derivation fails closed to UNDETERMINED on spec
+//     fidelity rather than guessing), ABSENT → LiveAbsent, UNKNOWN →
+//     LiveUnknown. ExternalOwner is never set.
 package routespec
 
 import (
@@ -85,12 +88,44 @@ type RuleObservation struct {
 }
 
 // LiveFact translates the observation into the downstream ownership input
-// type without reparsing (the file adapter's downgrade table).
+// type without reparsing. A PRESENT observation carries the semantic
+// fingerprint of ITS OWN observed spec (ZAI-43) — never a desired-side
+// hash, never a fabricated one. PRESENT_UNSUPPORTED stays hash-free: the
+// coordinate is provably occupied but its spec is honestly
+// unrepresentable, so there is nothing to fingerprint (UNKNOWN never
+// becomes positive evidence, and absence receives no hash either).
 func (o RuleObservation) LiveFact() (ownership.LiveFact, error) {
 	if !o.Status.Valid() {
 		return ownership.LiveFact{}, fmt.Errorf("observation status %q is not in the closed vocabulary", o.Status)
 	}
-	return observationLiveFact(o.Status)
+	fact := ownership.LiveFact{}
+	switch o.Status {
+	case StatusPresent:
+		if o.Spec == nil {
+			return ownership.LiveFact{}, fmt.Errorf("PRESENT observation without an observed spec: no honest hash exists")
+		}
+		h, err := RuleSpecFingerprint(*o.Spec)
+		if err != nil {
+			// Cannot happen for adapter-produced specs (the projection
+			// envelope guarantees fingerprintability); fail closed rather
+			// than emitting PRESENT without a hash.
+			return ownership.LiveFact{}, fmt.Errorf("observed rule spec fingerprint: %v", err)
+		}
+		fact.State = ownership.LivePresent
+		fact.SpecHash = &h
+	case StatusPresentUnsupported:
+		fact.State = ownership.LivePresent
+	case StatusAbsent:
+		fact.State = ownership.LiveAbsent
+	case StatusUnknown:
+		fact.State = ownership.LiveUnknown
+	default:
+		return ownership.LiveFact{}, fmt.Errorf("unhandled observation status %q", o.Status)
+	}
+	if err := fact.Validate(); err != nil {
+		return ownership.LiveFact{}, fmt.Errorf("translated live fact fails validation: %v", err)
+	}
+	return fact, nil
 }
 
 // RouteObservation is the observed fact for one ClassRoute identity.
@@ -102,29 +137,33 @@ type RouteObservation struct {
 }
 
 // LiveFact translates the observation into the downstream ownership input
-// type without reparsing.
+// type without reparsing, under the same contract as RuleObservation:
+// PRESENT carries the fingerprint of its own observed spec;
+// PRESENT_UNSUPPORTED, ABSENT and UNKNOWN stay hash-free.
 func (o RouteObservation) LiveFact() (ownership.LiveFact, error) {
 	if !o.Status.Valid() {
 		return ownership.LiveFact{}, fmt.Errorf("observation status %q is not in the closed vocabulary", o.Status)
 	}
-	return observationLiveFact(o.Status)
-}
-
-// observationLiveFact is the shared honest downgrade table.
-func observationLiveFact(s ObservationStatus) (ownership.LiveFact, error) {
 	fact := ownership.LiveFact{}
-	switch s {
-	case StatusPresent, StatusPresentUnsupported:
-		// SpecHash stays nil: routing classes have no action-spec hash
-		// domain today, and a fabricated one would let downstream
-		// derivation guess spec fidelity it cannot prove.
+	switch o.Status {
+	case StatusPresent:
+		if o.Spec == nil {
+			return ownership.LiveFact{}, fmt.Errorf("PRESENT observation without an observed spec: no honest hash exists")
+		}
+		h, err := RouteSpecFingerprint(*o.Spec)
+		if err != nil {
+			return ownership.LiveFact{}, fmt.Errorf("observed route spec fingerprint: %v", err)
+		}
+		fact.State = ownership.LivePresent
+		fact.SpecHash = &h
+	case StatusPresentUnsupported:
 		fact.State = ownership.LivePresent
 	case StatusAbsent:
 		fact.State = ownership.LiveAbsent
 	case StatusUnknown:
 		fact.State = ownership.LiveUnknown
 	default:
-		return ownership.LiveFact{}, fmt.Errorf("unhandled observation status %q", s)
+		return ownership.LiveFact{}, fmt.Errorf("unhandled observation status %q", o.Status)
 	}
 	if err := fact.Validate(); err != nil {
 		return ownership.LiveFact{}, fmt.Errorf("translated live fact fails validation: %v", err)

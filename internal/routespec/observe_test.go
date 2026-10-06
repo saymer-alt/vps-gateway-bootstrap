@@ -258,21 +258,35 @@ func TestObserveRuleImmutableAndDeterministic(t *testing.T) {
 }
 
 // LiveFact translation table (honest downgrade, file-adapter mirror).
+// Since ZAI-43 a PRESENT observation carries the fingerprint of its own
+// observed spec; PRESENT_UNSUPPORTED stays hash-free (unrepresentable
+// spec), and ABSENT/UNKNOWN never carry a hash.
 func TestObservationLiveFactTranslation(t *testing.T) {
+	presentSpec := RuleSpec{Priority: 100, From: "all", Table: 100, TableRaw: "100"}
 	for _, tc := range []struct {
-		status ObservationStatus
-		want   ownership.LiveState
+		status   ObservationStatus
+		spec     *RuleSpec
+		want     ownership.LiveState
+		wantHash bool
 	}{
-		{StatusPresent, ownership.LivePresent},
-		{StatusPresentUnsupported, ownership.LivePresent},
-		{StatusAbsent, ownership.LiveAbsent},
-		{StatusUnknown, ownership.LiveUnknown},
+		{StatusPresent, &presentSpec, ownership.LivePresent, true},
+		{StatusPresentUnsupported, nil, ownership.LivePresent, false},
+		{StatusAbsent, nil, ownership.LiveAbsent, false},
+		{StatusUnknown, nil, ownership.LiveUnknown, false},
 	} {
-		o := RuleObservation{Identity: ruleIdentity100(1, "all"), Status: tc.status}
+		o := RuleObservation{Identity: ruleIdentity100(1, "all"), Status: tc.status, Spec: tc.spec}
 		fact, err := o.LiveFact()
-		if err != nil || fact.State != tc.want || fact.SpecHash != nil || fact.ExternalOwner != nil {
+		if err != nil || fact.State != tc.want || (fact.SpecHash != nil) != tc.wantHash || fact.ExternalOwner != nil {
 			t.Fatalf("%s: fact=%+v err=%v", tc.status, fact, err)
 		}
+	}
+	// PRESENT without an observed spec fails closed — a hash is never
+	// fabricated and PRESENT is never silently downgraded.
+	if _, err := (RuleObservation{Identity: ruleIdentity100(1, "all"), Status: StatusPresent}).LiveFact(); err == nil {
+		t.Fatal("PRESENT without a spec must fail the translation")
+	}
+	if _, err := (RouteObservation{Identity: routeIdentity100("10.0.0.0/24"), Status: StatusPresent}).LiveFact(); err == nil {
+		t.Fatal("PRESENT route without a spec must fail the translation")
 	}
 	if _, err := (RuleObservation{Status: "MADE UP"}).LiveFact(); err == nil {
 		t.Fatal("invalid status must fail the translation")
