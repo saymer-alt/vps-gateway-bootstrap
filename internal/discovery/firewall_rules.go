@@ -8,9 +8,14 @@ package discovery
 // listing: -P policies, -N user chains, -A rules in execution order).
 // Every token after -A must be consumed by the known grammar; an
 // unrecognized/unmodeled behavior-affecting token (negation, ranges,
-// multiport/limit/recent modules, NAT/MARK/TCPMSS targets, ...) makes the
-// WHOLE rule unsupported — retained verbatim, never simplified
-// (semantic-laundering prohibition).
+// multiport/limit/recent modules, NAT/MARK targets, fixed-MSS --set-mss,
+// other tcp-flags shapes, ...) makes the WHOLE rule unsupported —
+// retained verbatim, never simplified (semantic-laundering prohibition).
+// ZAI-45 (owner-authorized read-only mangle observation) extends the
+// envelope with the bounded MSS grammar: `-j TCPMSS --clamp-mss-to-pmtu`
+// as a typed clamp action and the exact `--tcp-flags SYN,RST SYN` match
+// form; the parser is shared verbatim between the filter and mangle dumps
+// — no second parser exists.
 //
 // nftables: STRUCTURAL retention only (Path B) — tables/chains/rules with
 // family, order and base-chain metadata preserved from `nft list
@@ -198,6 +203,26 @@ func parseIPTablesRuleSpec(raw string, f []string) IPTablesRule {
 			default:
 				return unsupported(fmt.Sprintf("match module %q outside the supported envelope", f[i]))
 			}
+		case "--tcp-flags":
+			// ZAI-45 bounded envelope: only the exact SYN,RST/SYN form —
+			// the shape production MSS clamping uses. Any other mask or
+			// compare token changes which packets the rule matches, so it
+			// is unsupported rather than normalized (never silently
+			// equated to the modeled form).
+			if !need(i) {
+				return unsupported("tcp-flags without mask")
+			}
+			i++
+			mask := f[i]
+			if !need(i) {
+				return unsupported("tcp-flags without compare list")
+			}
+			i++
+			comp := f[i]
+			if mask != "SYN,RST" || comp != "SYN" {
+				return unsupported(fmt.Sprintf("tcp-flags %q %q outside the supported envelope (only SYN,RST/SYN is modeled)", mask, comp))
+			}
+			spec.TCPFlagsMask, spec.TCPFlagsComp = mask, comp
 		case "--ctstate":
 			if !need(i) {
 				return unsupported("ctstate without value")
@@ -237,7 +262,21 @@ func parseIPTablesRuleSpec(raw string, f []string) IPTablesRule {
 				spec.Verdict = f[i]
 			case "REJECT":
 				spec.Verdict = "REJECT"
-			case "MASQUERADE", "SNAT", "DNAT", "REDIRECT", "MARK", "TCPMSS", "LOG":
+			case "TCPMSS":
+				// ZAI-45 bounded MSS observation grammar: ONLY the
+				// clamp-to-pmtu mode is modeled, as a typed action (never
+				// a stringified target). --set-mss and every other MSS
+				// option stay unsupported and can never collapse into
+				// clamp; the reason names the offending option.
+				if !need(i) {
+					return unsupported("TCPMSS target outside the supported envelope (no MSS option; only --clamp-mss-to-pmtu is modeled)")
+				}
+				if f[i+1] != "--clamp-mss-to-pmtu" {
+					return unsupported(fmt.Sprintf("TCPMSS option %q outside the supported envelope (fixed-MSS mode unmodeled; only --clamp-mss-to-pmtu is modeled)", f[i+1]))
+				}
+				i++
+				spec.MSSClampToPMTU = true
+			case "MASQUERADE", "SNAT", "DNAT", "REDIRECT", "MARK", "LOG":
 				return unsupported(fmt.Sprintf("target %q outside the supported envelope (NAT/mangling/LOG unmodeled)", f[i]))
 			default:
 				spec.Jump = f[i] // user chain — preserved distinctly, never a verdict
@@ -256,8 +295,10 @@ func parseIPTablesRuleSpec(raw string, f []string) IPTablesRule {
 			spec.Goto = f[i]
 		case "!":
 			return unsupported("negation outside the supported envelope")
-		case "--tcp-flags":
-			return unsupported("TCP flags outside the supported envelope")
+		case "--set-mss":
+			// Distinct MSS action (fixed-MSS clamping): modeled NEVER as
+			// clamp — unsupported, with a reason naming the mode.
+			return unsupported("--set-mss outside the supported envelope (fixed-MSS mode unmodeled; only clamp-to-pmtu is modeled)")
 		case "--set-xmark", "--set-mark":
 			return unsupported("MARK target mangling outside the supported envelope")
 		default:

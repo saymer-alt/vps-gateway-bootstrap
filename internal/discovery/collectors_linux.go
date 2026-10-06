@@ -343,7 +343,30 @@ func (c *Collector) collectFirewall(ctx context.Context, r *Result) {
 			// unsupported lines fail-closed.
 			r.Firewall.IPTablesRules = IPTablesRuleInventory{
 				Status: identity.FieldStatusPresent,
+				Table:  "filter",
 				Chains: parseIPTablesRules(string(out)),
+			}
+		}
+		// Mangle-table inventory (ZAI-45, owner-authorized READ-ONLY
+		// observation command `iptables -t mangle -S`). Completeness is
+		// INDEPENDENT of the filter dump: a filter success never proves
+		// mangle success, so a mangle failure is recorded as an explicit
+		// UNKNOWN status and observation — never as an empty (absent)
+		// inventory, and never collapsed into the filter result. The same
+		// authoritative parser runs verbatim (no second parser); the
+		// effective-policy view stays filter-based (parseIptablesPolicies
+		// is not re-run for mangle).
+		mout, me := output(c, ctx, p, "-t", "mangle", "-S")
+		if me != nil {
+			addObservation(&r.Unknowns, "FIREWALL_IPTABLES_MANGLE_UNKNOWN", "firewall", me.Error())
+			// A failed collection is never a complete empty ruleset: the
+			// mangle inventory stays empty and its status records why.
+			r.Firewall.IPTablesMangleRules.Status = routingCommandErrorStatus(me)
+		} else {
+			r.Firewall.IPTablesMangleRules = IPTablesRuleInventory{
+				Status: identity.FieldStatusPresent,
+				Table:  "mangle",
+				Chains: parseIPTablesRules(string(mout)),
 			}
 		}
 		r.Firewall.Layers = append(r.Firewall.Layers, "iptables")

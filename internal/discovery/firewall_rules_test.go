@@ -92,8 +92,10 @@ func TestParseIPTablesRulesUnsupportedFailClosed(t *testing.T) {
 		{"negation", "-A INPUT -s ! 192.0.2.1 -j DROP"},
 		{"port range", "-A INPUT -p tcp -m tcp --dport 1000:2000 -j ACCEPT"},
 		{"nat target", "-A POSTROUTING -o wan0 -j MASQUERADE"},
-		{"mangling target", "-A FORWARD -p tcp -j TCPMSS --clamp-mss-to-pmtu"},
-		{"tcp flags", "-A INPUT -p tcp -m tcp --tcp-flags SYN,RST SYN -j DROP"},
+		{"mangling target", "-A FORWARD -j MARK --set-xmark 0x88"},
+		{"other tcp flags form", "-A INPUT -p tcp -m tcp --tcp-flags FIN,SYN SYN -j DROP"},
+		{"fixed mss", "-A FORWARD -p tcp -j TCPMSS --set-mss 1360"},
+		{"mss without option", "-A FORWARD -p tcp -j TCPMSS"},
 		{"unknown option", "-A INPUT --frobnicate -j ACCEPT"},
 		{"unclassifiable line", "Warning: kernel bores me"},
 	}
@@ -228,24 +230,49 @@ func TestIPTablesPortEnvelope(t *testing.T) {
 	}
 }
 
-// §28/§27: NAT and MSS rule semantics are explicitly unsupported this
-// slice (retained, never modeled).
-func TestIPTablesNATAndMSSUnsupported(t *testing.T) {
-	for _, line := range []string{
-		"-A POSTROUTING -s 192.0.2.0/24 -o wan0 -j MASQUERADE",
-		"-A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
-	} {
-		chains := parseIPTablesRules(line)
-		var unsupported bool
-		for _, c := range chains {
-			for _, r := range c.Rules {
-				if !r.Supported {
-					unsupported = true
-				}
+// ZAI-45 honest MSS boundary (transformed from the ZAI-37 NAT/MSS
+// unsupported regression): NAT stays unsupported; the production-shaped
+// clamp form IS now supported with a typed clamp action; every other MSS
+// shape (fixed --set-mss, other tcp-flags forms, optionless TCPMSS)
+// remains unsupported — never collapsed into clamp, never dropped.
+func TestIPTablesNATUnsupportedAndMSSBoundary(t *testing.T) {
+	// NAT: unchanged, unsupported.
+	nat := parseIPTablesRules("-A POSTROUTING -s 192.0.2.0/24 -o wan0 -j MASQUERADE")
+	for _, c := range nat {
+		for _, r := range c.Rules {
+			if r.Supported {
+				t.Fatal("NAT rule must stay unsupported")
 			}
 		}
-		if !unsupported {
-			t.Fatalf("NAT/MSS rule must be unsupported: %q", line)
+	}
+	// The production-shaped clamp form: supported, typed, with the flags
+	// match preserved.
+	prod := parseIPTablesRules("-A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu")
+	var clamp *IPTablesRule
+	for _, c := range prod {
+		for i := range c.Rules {
+			clamp = &c.Rules[i]
+		}
+	}
+	if clamp == nil || !clamp.Supported || clamp.Spec == nil ||
+		!clamp.Spec.MSSClampToPMTU || clamp.Spec.TCPFlagsMask != "SYN,RST" || clamp.Spec.TCPFlagsComp != "SYN" {
+		t.Fatalf("production clamp rule must be supported with a typed clamp action: %+v", clamp)
+	}
+	// Still-unsupported MSS variants: retained verbatim, never clamp.
+	for _, line := range []string{
+		"-A FORWARD -p tcp -j TCPMSS --set-mss 1360",
+		"-A FORWARD -p tcp -m tcp --tcp-flags FIN,SYN SYN -j TCPMSS --clamp-mss-to-pmtu",
+		"-A FORWARD -p tcp -j TCPMSS",
+	} {
+		chains := parseIPTablesRules(line)
+		var found *IPTablesRule
+		for _, c := range chains {
+			for i := range c.Rules {
+				found = &c.Rules[i]
+			}
+		}
+		if found == nil || found.Supported || found.Spec != nil || found.UnsupportedReason == "" {
+			t.Fatalf("MSS variant must stay unsupported (retained with reason): %q -> %+v", line, found)
 		}
 	}
 }

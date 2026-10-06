@@ -121,6 +121,7 @@ func TestCollectFirewallSuccessPopulatesEffective(t *testing.T) {
 			"\tchain forward {\n\t\ttype filter hook forward priority 0; policy drop;\n\t}\n" +
 			"}\n"),
 		"iptables -S": []byte("-P INPUT ACCEPT\n-P FORWARD ACCEPT\n-P OUTPUT ACCEPT\n-A INPUT -p tcp -j ACCEPT\n"),
+		"iptables -t mangle -S": []byte("-P PREROUTING ACCEPT\n-P INPUT ACCEPT\n-P FORWARD ACCEPT\n-P OUTPUT ACCEPT\n-P POSTROUTING ACCEPT\n"),
 	}}}
 	r := Result{Status: "OK"}
 	c.collectFirewall(context.Background(), &r)

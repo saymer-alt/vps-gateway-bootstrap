@@ -201,20 +201,29 @@ type Firewall struct {
 	Layers    []string          `json:"layers"`
 	Effective map[string]string `json:"effective"`
 	// Rule-level inventories (ZAI-37, additive). IPTables carries the
-	// ordered parsed rule model; NFTables carries STRUCTURAL retention
-	// only (rules verbatim, semantics explicitly unsupported this slice).
-	IPTablesRules  IPTablesRuleInventory  `json:"iptables_rules"`
-	NFTTablesRules NFTTablesRuleInventory `json:"nftables_rules"`
+	// ordered parsed rule model of the FILTER table; IPTablesMangleRules
+	// (ZAI-45, owner-authorized read-only `iptables -t mangle -S`) the
+	// MANGLE table. The two tables have INDEPENDENT completeness: one
+	// succeeding never proves anything about the other, so a failed
+	// mangle enumeration can never be read as "no MSS rules". NFTables
+	// carries STRUCTURAL retention only (rules verbatim, semantics
+	// explicitly unsupported this slice) and is never merged with the
+	// iptables inventories.
+	IPTablesRules      IPTablesRuleInventory  `json:"iptables_rules"`
+	IPTablesMangleRules IPTablesRuleInventory `json:"iptables_mangle_rules"`
+	NFTTablesRules     NFTTablesRuleInventory `json:"nftables_rules"`
 }
 
-// IPTablesRuleInventory is the ordered rule-level inventory of the
-// iptables filter table. Status follows the shared FieldStatus contract:
-// PRESENT = complete successful enumeration and parse; UNKNOWN_* =
-// collector failure (no rules are retained then — a failed collection is
-// never a complete empty ruleset). Backend unavailable is expressed by
-// the field being zero together with ToolState.Installed=false.
+// IPTablesRuleInventory is the ordered rule-level inventory of ONE
+// iptables table, named by Table ("filter", "mangle"). Status follows the
+// shared FieldStatus contract: PRESENT = complete successful enumeration
+// and parse; UNKNOWN_* = collector failure (no rules are retained then —
+// a failed collection is never a complete empty ruleset). Backend
+// unavailable is expressed by the field being zero together with
+// ToolState.Installed=false.
 type IPTablesRuleInventory struct {
 	Status identity.FieldStatus `json:"status,omitempty"`
+	Table  string               `json:"table,omitempty"`
 	Chains []IPTablesChain      `json:"chains,omitempty"`
 }
 
@@ -243,9 +252,13 @@ type IPTablesRule struct {
 // IPTablesRuleSpec is the understood semantic subset of one iptables rule
 // (ZAI-37 bounded envelope): protocol/address/interface single-value
 // matches, single numeric ports, conntrack states, mark match value[/mask],
-// comment diagnostics, and the verdict/jump/goto space. NAT targets,
-// MARK/TCPMSS mangling targets, multiport, limit/recent modules, negation,
-// ranges and every unrecognized token make the whole rule unsupported.
+// comment diagnostics, and the verdict/jump/goto space. NAT targets, MARK
+// mangling, multiport, limit/recent modules, negation, ranges and every
+// unrecognized token make the whole rule unsupported. ZAI-45 extends the
+// envelope with the bounded MSS observation grammar: the TCPMSS target in
+// clamp-to-PMTU mode, and the exact --tcp-flags SYN,RST SYN match form
+// that production MSS clamping uses — --set-mss and every other TCPMSS /
+// tcp-flags shape remain unsupported and never collapse into clamp.
 type IPTablesRuleSpec struct {
 	Protocol        string   `json:"protocol,omitempty"`
 	Source          string   `json:"source,omitempty"`      // verbatim addr[/mask] as iptables -S emitted it
@@ -262,6 +275,16 @@ type IPTablesRuleSpec struct {
 	RejectWith      string   `json:"reject_with,omitempty"`      // REJECT --reject-with (semantics preserved)
 	Jump            string   `json:"jump,omitempty"`             // -j <user chain>
 	Goto            string   `json:"goto,omitempty"`             // -g <user chain>
+	// MSS observation grammar (ZAI-45): MSSClampToPMTU is the typed
+	// clamp-to-PMTU action (never a stringified target). TCPFlagsMask /
+	// TCPFlagsComp preserve the matched --tcp-flags pair verbatim; the
+	// parser only accepts the exact "SYN,RST"/"SYN" form — any other
+	// flags shape is unsupported, so a clamp rule without the SYN match
+	// is structurally distinct from the production-shaped one and can
+	// never be silently equated to it.
+	MSSClampToPMTU bool   `json:"mss_clamp_to_pmtu,omitempty"`
+	TCPFlagsMask   string `json:"tcp_flags_mask,omitempty"` // --tcp-flags MASK COMP: verbatim mask token
+	TCPFlagsComp   string `json:"tcp_flags_comp,omitempty"` // --tcp-flags MASK COMP: verbatim compare token
 }
 
 // NFTTablesRuleInventory is the STRUCTURAL retention of the nftables
