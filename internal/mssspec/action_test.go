@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
-	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
 // MSS typed mutation action + planner tests (ZAI-51 §17): the action
@@ -136,22 +135,6 @@ func TestMSSActionIdentityAndHashDimensions(t *testing.T) {
 	}
 	if tagged.Identity == base.Identity {
 		t.Fatal("tag change must change the identity")
-	}
-}
-
-// §5/§17.11: the MSS semantic fingerprint domain and the action-spec hash
-// domain answer different questions and never coincide — pinned by
-// computing both for analogous content (test-only state import).
-func TestMSSSemanticHashAndActionSpecHashDomainsSeparated(t *testing.T) {
-	a := mustAction(t, desiredRule())
-	fileAction := state.Action{ID: "a1", Kind: state.ActionCreateFile}
-	fileAction.Spec = &state.ActionSpec{File: &state.FileActionSpec{Path: "/etc/vps-gateway/x.conf", Mode: 0o644, Content: "k: v\n"}}
-	actHash, err := state.ActionSpecHash(fileAction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if actHash == a.SpecHash {
-		t.Fatal("the MSS semantic hash and the action-spec hash domains must never coincide")
 	}
 }
 

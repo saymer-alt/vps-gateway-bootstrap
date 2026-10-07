@@ -13,6 +13,7 @@ const (
 	SpecFile    SpecField = "file"    // ActionSpec.File
 	SpecService SpecField = "service" // ActionSpec.Service
 	SpecSSH     SpecField = "ssh"     // ActionSpec.SSH
+	SpecMSS     SpecField = "mss"     // ActionSpec.MSS (ZAI-56, reserved kind)
 )
 
 // ActionContract is the single authoritative relationship between an action
@@ -44,7 +45,15 @@ var actionContracts = map[ActionKind]ActionContract{
 	ActionRouting:         {Mutating: true, SpecField: SpecNone, Defined: false},
 	ActionInstaller:       {Mutating: true, SpecField: SpecNone, Defined: false},
 	ActionReboot:          {Mutating: true, SpecField: SpecNone, Defined: false},
-	ActionValidate:        {Mutating: false, SpecField: SpecNone, Defined: true},
+	// ActionMSSRule is the reserved, inert kind for the future project MSS
+	// clamp mutation (ZAI-56): the typed spec exists (SpecMSS), but the
+	// kind stays Defined:false — plans containing it remain invalid until
+	// an owner-authorized activation flips this one flag. The MSS integrity
+	// validation lives in ValidateMSSActionSpec (mss_action.go) and is
+	// exercised from the moment the kind is activated; it is deliberately
+	// NOT reachable through ValidateActionTypedSpec while Defined:false.
+	ActionMSSRule:  {Mutating: true, SpecField: SpecMSS, Defined: false},
+	ActionValidate: {Mutating: false, SpecField: SpecNone, Defined: true},
 }
 
 func contractForKind(k ActionKind) (ActionContract, bool) {
@@ -63,6 +72,8 @@ func specPresent(a Action, f SpecField) bool {
 		return a.Spec.Service != nil
 	case SpecSSH:
 		return a.Spec.SSH != nil
+	case SpecMSS:
+		return a.Spec.MSS != nil
 	}
 	return false
 }
@@ -79,6 +90,9 @@ func multipleSpecs(a Action) bool {
 		n++
 	}
 	if a.Spec.SSH != nil {
+		n++
+	}
+	if a.Spec.MSS != nil {
 		n++
 	}
 	return n > 1

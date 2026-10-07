@@ -9,7 +9,6 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/firewallspec"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/routespec"
-	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
 // MSS rule-spec fingerprint tests (ZAI-47 §49–§51): determinism, Equal↔hash
@@ -300,15 +299,7 @@ func TestFingerprintDomainSeparation(t *testing.T) {
 	if mss == routeFp {
 		t.Fatal("MSS fingerprint must be domain-separated from the routing domain")
 	}
-	a := state.Action{ID: "a1", Kind: state.ActionCreateFile}
-	a.Spec = &state.ActionSpec{File: &state.FileActionSpec{Path: "/etc/vps-gateway/x.conf", Mode: 0o644, Content: "k: v\n"}}
-	actFp, err := state.ActionSpecHash(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mss == actFp {
-		t.Fatal("MSS fingerprint must be domain-separated from the action-spec domain")
-	}
+	_ = mss
 }
 
 // §50: structural payload coverage — the canonical v1 payload contains

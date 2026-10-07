@@ -33,15 +33,20 @@ const (
 type Plan struct {
 	SchemaVersion int      `json:"schema_version"`
 	Profile       string   `json:"profile"`
-	Actions      []Action `json:"actions"`
-	Blocked      bool     `json:"blocked"`
-	BlockReasons []string `json:"block_reasons,omitempty"`
+	Actions       []Action `json:"actions"`
+	Blocked       bool     `json:"blocked"`
+	BlockReasons  []string `json:"block_reasons,omitempty"`
 }
 
 type ActionSpec struct {
 	File    *FileActionSpec    `json:"file,omitempty"`
 	Service *ServiceActionSpec `json:"service,omitempty"`
 	SSH     *SSHActionSpec     `json:"ssh,omitempty"`
+	// MSS carries the typed intent of the reserved ActionMSSRule kind
+	// (ZAI-56). omitempty: every pre-existing action's canonical bytes —
+	// and therefore its ActionSpecHash and journal assumptions — are
+	// unchanged by this field's existence.
+	MSS *MSSActionSpec `json:"mss,omitempty"`
 }
 
 type FileActionSpec struct {
@@ -76,16 +81,16 @@ type SSHActionSpec struct {
 }
 
 type Action struct {
-	ID           string       `json:"id"`
-	Resource     string       `json:"resource"`
-	Kind         ActionKind   `json:"kind"`
+	ID           string      `json:"id"`
+	Resource     string      `json:"resource"`
+	Kind         ActionKind  `json:"kind"`
 	Ownership    Ownership   `json:"ownership"`
-	Why          string       `json:"why"`
-	Dependencies []string     `json:"dependencies,omitempty"`
-	Risk         Risk         `json:"risk"`
-	Validation   string       `json:"validation"`
-	Rollback     string       `json:"rollback"`
-	Spec         *ActionSpec  `json:"spec,omitempty"`
+	Why          string      `json:"why"`
+	Dependencies []string    `json:"dependencies,omitempty"`
+	Risk         Risk        `json:"risk"`
+	Validation   string      `json:"validation"`
+	Rollback     string      `json:"rollback"`
+	Spec         *ActionSpec `json:"spec,omitempty"`
 }
 
 func BuildPlan(m Model) Plan {
@@ -199,8 +204,12 @@ func actionForResource(resource string, diff DiffKind) ActionKind {
 	case resource == "ssh.password_authentication":
 		return ActionUpdateFile
 	case strings.HasPrefix(resource, "file."):
-		if diff == Create { return ActionCreateFile }
-		if diff == Remove { return ActionDeleteOwnedFile }
+		if diff == Create {
+			return ActionCreateFile
+		}
+		if diff == Remove {
+			return ActionDeleteOwnedFile
+		}
 		return ActionUpdateFile
 	case strings.HasPrefix(resource, "service."):
 		return ActionService
@@ -262,7 +271,9 @@ func MissingExecutors(p Plan, registered map[ActionKind]bool) []ActionKind {
 	seen := map[ActionKind]bool{}
 	var missing []ActionKind
 	for _, a := range p.Actions {
-		if registered[a.Kind] || seen[a.Kind] { continue }
+		if registered[a.Kind] || seen[a.Kind] {
+			continue
+		}
 		seen[a.Kind] = true
 		missing = append(missing, a.Kind)
 	}

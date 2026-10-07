@@ -493,12 +493,12 @@ func TestMSSSpecPurityPins(t *testing.T) {
 	}
 }
 
-// §58/§4: the ONLY sanctioned production consumer of mssspec is
-// internal/mssexec (the ZAI-52 bounded executor foundation — itself
-// unreachable from production wiring by its own tripwire); any other
-// consumer fails this test. The package deliberately does not import
-// firewallspec — the ZAI-40 fingerprint domain stays untouched by
-// construction.
+// §58/§4: sanctioned production consumers of mssspec are internal/mssexec
+// (ZAI-52 bounded executor foundation — unreachable from production wiring
+// by its own tripwire) and internal/state (ZAI-56 inert typed MSS action
+// representation, Defined:false); any other consumer fails this test. The
+// package deliberately does not import firewallspec — the ZAI-40
+// fingerprint domain stays untouched by construction.
 func TestMSSSpecNoProductionConsumersAndNoFirewallspecImport(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -537,11 +537,16 @@ func TestMSSSpecNoProductionConsumersAndNoFirewallspecImport(t *testing.T) {
 		if strings.Contains(filepath.ToSlash(path), "/internal/mssspec/") {
 			return nil
 		}
-		// internal/mssexec is the ONE sanctioned production consumer
-		// (ZAI-52 bounded executor foundation, itself unreachable from
-		// production wiring by its own tripwire).
-		if strings.Contains(filepath.ToSlash(path), "/internal/mssexec/") {
-			return nil
+		// Sanctioned production consumers (each unreachable from
+		// production mutation wiring by its own tripwires):
+		//   - internal/mssexec — ZAI-52 bounded executor foundation;
+		//   - internal/state — ZAI-56 inert typed MSS action
+		//     representation (ActionMSSRule Defined:false).
+		sanctioned := []string{"/internal/mssexec/", "/internal/state/"}
+		for _, ok := range sanctioned {
+			if strings.Contains(filepath.ToSlash(path), ok) {
+				return nil
+			}
 		}
 		src, err := os.ReadFile(path)
 		if err != nil {
