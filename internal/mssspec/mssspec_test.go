@@ -541,8 +541,10 @@ func TestMSSSpecNoProductionConsumersAndNoFirewallspecImport(t *testing.T) {
 		// production mutation wiring by its own tripwires):
 		//   - internal/mssexec — ZAI-52 bounded executor foundation;
 		//   - internal/state — ZAI-56 inert typed MSS action
-		//     representation (ActionMSSRule Defined:false).
-		sanctioned := []string{"/internal/mssexec/", "/internal/state/"}
+		//     representation (ActionMSSRule Defined:false);
+		//   - internal/mssadapter — ZAI-60 typed Engine↔mssexec
+		//     integration contract (inert, zero production importers).
+		sanctioned := []string{"/internal/mssexec/", "/internal/state/", "/internal/mssadapter/"}
 		for _, ok := range sanctioned {
 			if strings.Contains(filepath.ToSlash(path), ok) {
 				return nil

@@ -300,6 +300,13 @@ func TestMSSEXecProductionUnreachable(t *testing.T) {
 		if strings.Contains(filepath.ToSlash(path), "/internal/mssexec/") {
 			return nil
 		}
+		// Sanctioned consumer (ZAI-60): internal/mssadapter — the typed
+		// integration contract between the Engine and this package. It is
+		// itself unreachable from production wiring (zero production
+		// importers, its own tripwire) and registers no executor.
+		if strings.Contains(filepath.ToSlash(path), "/internal/mssadapter/") {
+			return nil
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
