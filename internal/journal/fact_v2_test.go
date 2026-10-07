@@ -359,15 +359,16 @@ func TestJournalV2ReaderVersionMatrix(t *testing.T) {
 }
 
 // Unknown future versions fail closed at the reader and the adapter.
+// (Schema v3 is readable since ZAI-59; the future sentinel moved to v4.)
 func TestJournalV2ReaderRejectsFutureVersion(t *testing.T) {
 	dir := t.TempDir()
-	future := Record{SchemaVersion: 3, TransactionID: "tx-v3", PlanFingerprint: strings.Repeat("a", 64)}
+	future := Record{SchemaVersion: 4, TransactionID: "tx-v4", PlanFingerprint: strings.Repeat("a", 64)}
 	if _, err := future.CorroborationFact(); err == nil {
 		t.Fatal("future schema version must not translate")
 	}
-	// The durable representation: a raw v3 document fails the reader.
+	// The durable representation: a raw v4 document fails the reader.
 	j := &Journal{Dir: dir}
-	if err := os.WriteFile(filepath.Join(dir, "tx-v3.json"), []byte(`{"schema_version":3,"transaction_id":"tx-v3","plan_fingerprint":"`+strings.Repeat("a", 64)+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tx-v4.json"), []byte(`{"schema_version":4,"transaction_id":"tx-v4","plan_fingerprint":"`+strings.Repeat("a", 64)+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := j.Records(); err == nil {

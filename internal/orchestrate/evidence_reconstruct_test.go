@@ -472,6 +472,24 @@ func TestReconstructLegacySchema(t *testing.T) {
 	}
 }
 
+// ZAI-59: journal schema v3 adds the observed postcondition hash without
+// changing the minting-eligible evidence legs. A durable v2 record —
+// written by an earlier build — must stay reconstructable after the bump
+// (regression: gating eligibility on `!= journal.SchemaVersion` would
+// skip every previously eligible record the moment the version advanced).
+func TestReconstructV2RecordSurvivesSchemaBump(t *testing.T) {
+	a := reconAction("a1", evPath, "x\n", state.ActionCreateFile)
+	rec := reconRecord(t, "tx-1", t0, nil, a)
+	rec.SchemaVersion = 2
+	res, err := ReconstructEvidence([]journal.Record{*rec}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Claims) != 1 {
+		t.Fatalf("v2 record must stay reconstructable after the v3 bump: %+v", res.Records)
+	}
+}
+
 // §63: a terminal COMPLETED record carrying rollback metadata is
 // contradictory and reconstructs nothing.
 func TestReconstructRollbackMetadataRefused(t *testing.T) {

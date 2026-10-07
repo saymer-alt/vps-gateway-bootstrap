@@ -197,7 +197,13 @@ func ReconstructEvidence(records []journal.Record, prior []state.EvidenceRecord)
 			diag.Status, diag.Reason = RecordSkipped, SkipRollbackMetadata
 		case rec.SchemaVersion == 1:
 			diag.Status, diag.Reason = RecordSkipped, SkipLegacySchema
-		case rec.SchemaVersion != journal.SchemaVersion:
+		case !journal.IsReadableSchemaVersion(rec.SchemaVersion):
+			// Unknown FUTURE versions are unreadable and must not be
+			// interpreted optimistically. Currently readable versions
+			// (v2/v3) share the same minting-eligible evidence legs —
+			// the intended SpecHash at Begin, terminal state and host
+			// binding; v3's observed postcondition hash is additional
+			// durable fact that the mint does not consume (ZAI-59).
 			diag.Status, diag.Reason = RecordSkipped, SkipUnknownSchema
 		case rec.HostIdentity == "":
 			// G4 is unresolved: records without the canonical host

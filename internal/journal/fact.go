@@ -61,7 +61,7 @@ import (
 // record can never become a favorable fact.
 func (r Record) CorroborationFact() (ownership.TransactionFact, error) {
 	if !readableSchemaVersions[r.SchemaVersion] {
-		return ownership.TransactionFact{}, fmt.Errorf("journal record %s: unsupported schema version %d (this build translates versions 1 and 2 only); refusing optimistic interpretation", r.TransactionID, r.SchemaVersion)
+		return ownership.TransactionFact{}, fmt.Errorf("journal record %s: unsupported schema version %d (this build translates versions 1, 2 and 3 only); refusing optimistic interpretation", r.TransactionID, r.SchemaVersion)
 	}
 	if r.TransactionID == "" {
 		return ownership.TransactionFact{}, fmt.Errorf("journal record carries no transaction id; it cannot be corroborated")

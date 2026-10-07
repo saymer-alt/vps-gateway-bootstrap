@@ -26,17 +26,27 @@ import (
 	"time"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/fsatomic"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
 // SchemaVersion is the transaction-record schema version this build
-// writes. v2 adds per-action durable evidence (SpecHash, R5-A); v1
-// documents remain readable but carry no spec hashes (the O5-D adapter
-// and corroboration treat them as INCOMPLETE — never upgraded).
-const SchemaVersion = 2
+// writes. v2 adds per-action durable evidence of intent (SpecHash, R5-A);
+// v3 adds the per-action observed postcondition SpecHash
+// (ActionRecord.ObservedSpecHash, ZAI-59/J4) — recorded only by the
+// explicit RecordObservedSpecHash write API, never at Begin. v1/v2
+// documents remain readable and are never upgraded: their observed-hash
+// absence is explicit absence, never filled from live state or elsewhere.
+const SchemaVersion = 3
 
 // Schema versions this build reads. Unknown future versions fail closed.
-var readableSchemaVersions = map[int]bool{1: true, 2: true}
+var readableSchemaVersions = map[int]bool{1: true, 2: true, 3: true}
+
+// IsReadableSchemaVersion reports whether this build can read a journal
+// record of the given schema version. Exported so downstream version
+// gates (reconstruction eligibility) share the one authoritative version
+// set instead of pinning their own copy.
+func IsReadableSchemaVersion(v int) bool { return readableSchemaVersions[v] }
 
 // DefaultDir is the production journal location. Pinned like the trust
 // anchor and the state file: not configurable.
@@ -110,6 +120,19 @@ type ActionRecord struct {
 	// intended specification, never that the mutation occurred. Absent in
 	// v1 records (corroboration caps those at INCOMPLETE).
 	SpecHash string `json:"spec_hash,omitempty"`
+	// ObservedSpecHash is the independently observed postcondition
+	// specification hash (64-char lowercase hex, the shared
+	// ownership.SpecHash codec) of the live resource AFTER the action's
+	// mutation/validation leg (ZAI-59/J4). It is recorded only by
+	// RecordObservedSpecHash — never at Begin, never derived from the
+	// intended SpecHash — and is write-once: the same value replays
+	// idempotently, a different value is refused as a conflict. Absent
+	// in v1/v2 records and in v3 actions whose postcondition was never
+	// (or not yet) observed: absence is explicit absence — never a
+	// match, never proof, never filled from live state. It may
+	// legitimately differ from SpecHash: the journal records the fact;
+	// the validation layer decides success.
+	ObservedSpecHash string `json:"observed_spec_hash,omitempty"`
 }
 
 // Record is the durable transaction record.
@@ -215,7 +238,7 @@ func (j *Journal) loadAll() ([]Record, error) {
 			return nil, fmt.Errorf("journal record %s is corrupt: %w", e.Name(), err)
 		}
 		if !readableSchemaVersions[rec.SchemaVersion] {
-			return nil, fmt.Errorf("journal record %s: unsupported schema version %d (readable: 1, 2)", e.Name(), rec.SchemaVersion)
+			return nil, fmt.Errorf("journal record %s: unsupported schema version %d (readable: 1, 2, 3)", e.Name(), rec.SchemaVersion)
 		}
 		// Identity hardening (ZAI-33): every authoritative journal record
 		// must carry its transaction identity and plan fingerprint. The
@@ -249,6 +272,25 @@ func (j *Journal) loadAll() ([]Record, error) {
 		// filename).
 		if expected := strings.TrimSuffix(e.Name(), ".json"); rec.TransactionID != expected {
 			return nil, fmt.Errorf("journal record %s is corrupt: body transaction id %q does not match the file name identity %q", e.Name(), rec.TransactionID, expected)
+		}
+		// Observed postcondition hash integrity (ZAI-59): the field is a
+		// v3 field. A non-empty value must be the canonical hash form,
+		// and an older-schema record carrying it at all is corruption —
+		// the sanctioned v1/v2 writers never emitted it, so the value can
+		// only be a hand edit or a mixed-writer artifact. Either way the
+		// record fails the WHOLE load: a corrupted proof-bearing record
+		// must never become usable provenance (never ignored, dropped,
+		// zeroed or repaired).
+		for _, a := range rec.Actions {
+			if a.ObservedSpecHash == "" {
+				continue
+			}
+			if rec.SchemaVersion < 3 {
+				return nil, fmt.Errorf("journal record %s is corrupt: observed spec hash present in a schema version %d record (the field exists since v3)", e.Name(), rec.SchemaVersion)
+			}
+			if _, err := ownership.ParseSpecHashHex(a.ObservedSpecHash); err != nil {
+				return nil, fmt.Errorf("journal record %s is corrupt: observed spec hash: %v", e.Name(), err)
+			}
 		}
 		out = append(out, rec)
 	}

@@ -59,6 +59,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/mssspec"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 )
 
 // CommandRunner is the injected command execution boundary (structurally
@@ -110,6 +111,20 @@ type Result struct {
 	Stage          ExecutionStage
 	PlannerOutcome mssspec.MSSPlannerOutcome
 	Reasons        []string
+	// ObservedSpecHash is the independently observed postcondition
+	// semantic hash (mssspec.SpecFingerprint of the post-mutation
+	// observation), whenever post-observation produced a usable spec:
+	// set on DONE (equal to the planned hash — that equality is exactly
+	// what Proven proves, locally) and on the post-observation
+	// hash-mismatch refusal (differing from the planned hash — the
+	// mismatch fact, useful recovery evidence). Zero means no
+	// postcondition hash was observed (every earlier stage, and
+	// post-observation failures that produced no usable spec). Local
+	// execution fact only: never evidence, never provenance, never
+	// ownership; making it durable is the caller's separate decision
+	// (journal.RecordObservedSpecHash, ZAI-59) — this package never
+	// writes the journal.
+	ObservedSpecHash ownership.SpecHash
 }
 
 // Ensurer is the bounded executor foundation. Construct it only in tests
@@ -265,9 +280,12 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			Reasons:        []string{"post-mutation fingerprint failed: " + err.Error()}}, nil
 	}
 	if postHash != action.SpecHash {
+		// The mismatch fact carries the OBSERVED hash — derived from the
+		// post-state spec, never a copy of the planned hash.
 		return Result{Proven: false, Stage: StagePostObservation,
-			PlannerOutcome: decision.Outcome,
-			Reasons:        []string{"post-mutation semantic hash does not match the planned spec"}}, nil
+			PlannerOutcome:   decision.Outcome,
+			ObservedSpecHash: postHash,
+			Reasons:          []string{"post-mutation semantic hash does not match the planned spec"}}, nil
 	}
 	rePlan, err := mssspec.PlanMSSAction(rule, postObs)
 	if err != nil {
@@ -282,8 +300,11 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 	}
 
 	// Leg 6 — a LOCAL execution fact. No evidence, no provenance, no
-	// ownership is minted or implied (ZAI-52 §15 hard stop).
+	// ownership is minted or implied (ZAI-52 §15 hard stop). The observed
+	// hash travels with the local fact only; the journal decision belongs
+	// to the caller (ZAI-59).
 	return Result{Proven: true, Stage: StageDone,
-		PlannerOutcome: decision.Outcome,
-		Reasons:        []string{"command issued and the resulting state verified against the planned semantic contract (local execution fact only)"}}, nil
+		PlannerOutcome:   decision.Outcome,
+		ObservedSpecHash: postHash,
+		Reasons:          []string{"command issued and the resulting state verified against the planned semantic contract (local execution fact only)"}}, nil
 }
