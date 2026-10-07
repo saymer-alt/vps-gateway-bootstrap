@@ -73,3 +73,62 @@ func ValidateMSSActionSpec(a Action) error {
 	}
 	return nil
 }
+
+// StateActionFromMSSDecision is the narrow PURE bridge from an MSS planner
+// decision to the inert typed state action (ZAI-57). Binding rules:
+//
+//   - ONLY PlannerCreateMSSRule yields an action (hasAction = true);
+//     NO_ACTION, BLOCKED_COLLISION and UNKNOWN yield none — a matching
+//     existing rule is never asserted or adopted, a conflicting rule is
+//     never replaced, and uncertainty never becomes a mutation (the
+//     global UNKNOWN != ABSENT invariant);
+//   - the decision's action is REVALIDATED through the authoritative
+//     mssspec contract before anything is produced — planner output is
+//     typed input, never magical authority (a fabricated decision with a
+//     bad identity/namespace/spec/hash is rejected);
+//   - the emitted action carries ONLY the typed representation (kind,
+//     resource coordinate from the ZAI-50 journal design, MSS spec): no
+//     raw commands, argv, shell, HostIdentity, approval, journal or
+//     ownership data — the Plan describes intent, not execution;
+//   - no rollback is represented: an MSS CREATE has no authorized
+//     semantic rollback (ZAI-55); a failed/uncertain CREATE remains
+//     RECOVERY_REQUIRED, operator-reviewed.
+//
+// The result always passes ValidateMSSActionSpec. PURE; deterministic;
+// fail-closed.
+func StateActionFromMSSDecision(dec mssspec.MSSPlanDecision) (a Action, hasAction bool, err error) {
+	if dec.Outcome != mssspec.PlannerCreateMSSRule {
+		// NO_ACTION / BLOCKED_COLLISION / UNKNOWN: zero state mutation
+		// actions — structurally nothing to convert (anti-adoption).
+		return Action{}, false, nil
+	}
+	if dec.Action == nil {
+		return Action{}, false, fmt.Errorf("CREATE decision carries no typed MSS action")
+	}
+	// Authoritative revalidation of the decision's action (identity,
+	// namespace, envelope, recomputed hash).
+	validated, err := mssspec.BuildMSSAction(mssspec.DesiredMSSRule{
+		Identity: dec.Action.Identity,
+		Spec:     dec.Action.Spec,
+		SpecHash: dec.Action.SpecHash,
+	})
+	if err != nil {
+		return Action{}, false, fmt.Errorf("MSS decision action failed revalidation: %w", err)
+	}
+	resource, err := mssspec.JournalResource(validated.Identity)
+	if err != nil {
+		return Action{}, false, fmt.Errorf("MSS decision resource coordinate: %w", err)
+	}
+	out := Action{
+		ID:       "mss-" + validated.Identity.Chain + "-" + validated.Identity.Tag,
+		Resource: resource,
+		Kind:     ActionMSSRule,
+		Spec: &ActionSpec{
+			MSS: &MSSActionSpec{Identity: validated.Identity, Spec: validated.Spec, SpecHash: validated.SpecHash},
+		},
+	}
+	if err := ValidateMSSActionSpec(out); err != nil {
+		return Action{}, false, err
+	}
+	return out, true, nil
+}

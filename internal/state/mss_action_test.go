@@ -314,3 +314,152 @@ func TestMSSNoActionProducesNoStateAction(t *testing.T) {
 		t.Fatalf("NO_ACTION must produce no action: %+v", noAction)
 	}
 }
+
+// ZAI-57 bridge tests (§33): the planner decision → inert state action
+// conversion. CREATE yields exactly one valid inert action; every other
+// outcome and every fabricated decision yields nothing.
+
+func decisionFor(t *testing.T, a mssspec.MSSActionSpec) mssspec.MSSPlanDecision {
+	t.Helper()
+	rule := mssspec.DesiredMSSRule{Identity: a.Identity, Spec: a.Spec, SpecHash: a.SpecHash}
+	// A proven-absent observation produces the CREATE decision through
+	// the real planner — the bridge input is planner-shaped, not
+	// hand-built.
+	absent := mssspec.MSSObservation{Status: mssspec.MSSAbsent, Identity: a.Identity}
+	dec, err := mssspec.PlanMSSAction(rule, absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dec
+}
+
+func TestBridgeCreateYieldsOneValidInertAction(t *testing.T) {
+	a := mssActionForPlanner(t)
+	dec := decisionFor(t, a)
+	out, hasAction, err := StateActionFromMSSDecision(dec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasAction {
+		t.Fatal("CREATE must yield an action")
+	}
+	if out.Kind != ActionMSSRule || out.Spec == nil || out.Spec.MSS == nil {
+		t.Fatalf("emitted action: %+v", out)
+	}
+	if out.ID != "mss-vpsgw_in-muvg443" || out.Resource != "mss-rule.vpsgw_in/muvg443" {
+		t.Fatalf("ID/Resource must be deterministic: %q %q", out.ID, out.Resource)
+	}
+	if out.Spec.MSS.Identity != a.Identity || !out.Spec.MSS.Spec.Equal(a.Spec) || out.Spec.MSS.SpecHash != a.SpecHash {
+		t.Fatal("emitted action must carry the exact typed intent")
+	}
+	// The emitted action passes state validation and hashes
+	// deterministically.
+	if err := ValidateMSSActionSpec(out); err != nil {
+		t.Fatalf("emitted action validation: %v", err)
+	}
+	h1, err := ActionSpecHash(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := ActionSpecHash(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatal("emitted action hash must be deterministic")
+	}
+}
+
+func TestBridgeNonCreateOutcomesYieldNothing(t *testing.T) {
+	a := mssActionForPlanner(t)
+	id := a.Identity
+	// NO_ACTION: matching live rule.
+	matchSpec := a.Spec
+	match := mssspec.MSSObservation{Status: mssspec.MSSPresent, Identity: id, Spec: &matchSpec}
+	// BLOCKED_COLLISION: conflicting live rule.
+	conflictSpec := a.Spec
+	conflictSpec.Source = "203.0.113.0/24"
+	conflict := mssspec.MSSObservation{Status: mssspec.MSSPresent, Identity: id, Spec: &conflictSpec}
+	// UNKNOWN: unsupported occupancy.
+	unknown := mssspec.MSSObservation{Status: mssspec.MSSUnknown, Identity: id}
+	for _, tc := range []struct {
+		name string
+		obs  mssspec.MSSObservation
+		want mssspec.MSSPlannerOutcome
+	}{
+		{"NO_ACTION", match, mssspec.PlannerNoAction},
+		{"BLOCKED_COLLISION", conflict, mssspec.PlannerBlockedCollision},
+		{"UNKNOWN", unknown, mssspec.PlannerUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dec, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), tc.obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dec.Outcome != tc.want {
+				t.Fatalf("planner outcome: %+v", dec)
+			}
+			out, hasAction, err := StateActionFromMSSDecision(dec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hasAction || out.Kind != "" || out.Spec != nil {
+				t.Fatalf("%s must yield ZERO state actions: %+v hasAction=%v", tc.name, out, hasAction)
+			}
+		})
+	}
+}
+
+func TestBridgeRevalidatesFabricatedDecisions(t *testing.T) {
+	// A hand-fabricated "CREATE" decision whose action carries a stale
+	// hash must be rejected by the bridge's authoritative revalidation.
+	a := mssActionForPlanner(t)
+	forged := mssspec.MSSActionSpec{Identity: a.Identity, Spec: a.Spec, SpecHash: ownership.SpecHash{0xaa}}
+	dec := mssspec.MSSPlanDecision{
+		Outcome: mssspec.PlannerCreateMSSRule,
+		Action:  &forged,
+		Reasons: []string{"fabricated"},
+	}
+	if _, hasAction, err := StateActionFromMSSDecision(dec); err == nil || hasAction {
+		t.Fatalf("fabricated decision must be rejected: %+v err=%v", hasAction, err)
+	}
+	// A CREATE decision with a nil action is rejected too.
+	nilDec := mssspec.MSSPlanDecision{Outcome: mssspec.PlannerCreateMSSRule}
+	if _, hasAction, err := StateActionFromMSSDecision(nilDec); err == nil || hasAction {
+		t.Fatalf("nil-action CREATE must be rejected: %+v err=%v", hasAction, err)
+	}
+}
+
+func TestBridgeIdentityChangeChangesActionHash(t *testing.T) {
+	build := func(tag string) Action {
+		r, err := mssspec.BuildDesiredMSSRule(mssspec.DesiredMSSInput{
+			Chain: mssChain, Tag: tag, Source: "172.29.172.0/24", EgressInterface: "tun-mihomo",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := mssspec.BuildMSSAction(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := mssspec.MSSPlanDecision{Outcome: mssspec.PlannerCreateMSSRule, Action: &a}
+		out, hasAction, err := StateActionFromMSSDecision(dec)
+		if err != nil || !hasAction {
+			t.Fatalf("bridge: %+v hasAction=%v err=%v", out, hasAction, err)
+		}
+		return out
+	}
+	x := build("muvgaaa1")
+	y := build("muvgbbb2")
+	hx, err := ActionSpecHash(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hy, err := ActionSpecHash(y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hx == hy {
+		t.Fatal("identity change must change the action-spec hash")
+	}
+}

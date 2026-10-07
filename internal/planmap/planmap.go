@@ -1,7 +1,10 @@
 // Package planmap implements the C3-A bridge (ZAI-10 §33 /
 // HANDOFF-2026-09-28 §J): a PURE, deterministic, fail-closed mapper from the
 // existing state.Plan model to the closed capability vocabulary, supporting
-// ONLY qualified project-file CREATE/UPDATE actions.
+// qualified project-file CREATE/UPDATE actions and — since ZAI-57, PURE
+// understanding only — typed reserved ActionMSSRule actions (the inert MSS
+// representation maps to the exact muvg.firewall.mssclamp.v1 grant; the
+// kind itself remains Defined:false and production-unreachable).
 //
 // Deriving a capability requirement answers exactly one question: what
 // would this Plan require? It does NOT authorize the Plan — not plan
@@ -16,6 +19,11 @@
 //
 //   - ActionKind CREATE_FILE or UPDATE_FILE (deletion is explicitly
 //     rejected: decommission is a later, separate authority problem);
+//   - ActionKind MSS_RULE (ZAI-57, PURE understanding only): the typed
+//     MSS intent must pass the full authoritative integrity contract
+//     (state.ValidateMSSActionSpec), and the derived requirement is the
+//     exact muvg.firewall.mssclamp.v1 grant bound to the action's egress
+//     interface — nothing broader;
 //   - exactly one File spec (re-validated through the existing
 //     state.ValidateActionTypedSpec invariant);
 //   - target path absolute, canonical (path.Clean-stable), strictly inside
@@ -131,14 +139,38 @@ func DerivePlanCapabilities(p state.Plan) (capability.CapabilitySet, error) {
 }
 
 // deriveActionCapabilities derives the requirement of one action, or the
-// empty capability for the one closed zero-requirement category (none
-// today: VALIDATE actions are outside the C3-A envelope and fail closed —
-// the mapper supports only the smallest safe subset).
+// empty capability for the one closed zero-requirement category (VALIDATE
+// actions are outside the C3-A envelope and fail closed — the mapper
+// supports only the smallest safe subset).
+//
+// ZAI-57 adds the MSS branch: a typed ActionMSSRule action maps to the
+// exact muvg.firewall.mssclamp.v1 capability bound to its egress
+// interface — through state.ValidateMSSActionSpec (the authoritative
+// mssspec integrity contract: class, namespace, chain agreement, envelope,
+// recomputed semantic hash) and capability.DeriveFirewallMSSClamp (the
+// single authoritative derivation primitive). The branch is PURE
+// understanding, NOT production representability: while ActionMSSRule is
+// Defined:false, ValidateActionTypedSpec still refuses the kind and no
+// production path can carry it in a Plan. Fail-closed: any integrity leg
+// failure yields no capability at all.
 func deriveActionCapabilities(a state.Action) (capability.CapabilityID, error) {
+	if a.Kind == state.ActionMSSRule {
+		// Full MSS integrity revalidation (never derive from partially
+		// validated data): class, namespace, chain agreement, envelope,
+		// recomputed semantic hash.
+		if err := state.ValidateMSSActionSpec(a); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalidAction, err)
+		}
+		if a.Spec == nil || a.Spec.MSS == nil {
+			// Defensive: ValidateMSSActionSpec already rejects this.
+			return "", fmt.Errorf("%w: no MSS spec", ErrInvalidAction)
+		}
+		return capability.DeriveFirewallMSSClamp([]string{a.Spec.MSS.Spec.OutInterface})
+	}
 	switch a.Kind {
 	case state.ActionCreateFile, state.ActionUpdateFile:
 	default:
-		return "", fmt.Errorf("%w: %s (only qualified CREATE_FILE/UPDATE_FILE actions are supported)", ErrUnsupportedAction, a.Kind)
+		return "", fmt.Errorf("%w: %s (only qualified CREATE_FILE/UPDATE_FILE and MSS_RULE actions are supported)", ErrUnsupportedAction, a.Kind)
 	}
 	if a.Spec != nil && a.Spec.File != nil && a.Spec.File.Delete {
 		return "", fmt.Errorf("%w: DELETE_OWNED semantics are outside the project-file envelope (deletion is a separate authority)", ErrUnsupportedAction)
