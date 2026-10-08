@@ -104,13 +104,22 @@ func clampRule(source, comment string) discovery.IPTablesRule {
 	}
 }
 
-// mangleWith renders a complete mangle inventory whose vpsgw_in chain
-// contains the given rules.
+// mangleWith renders a complete mangle inventory whose structurally
+// suitable environment contains the given rules: the built-in FORWARD
+// chain jumps into the user-defined vpsgw_in chain (ZAI-63 structural
+// prerequisites), and vpsgw_in holds the given rules.
 func mangleWith(rules ...discovery.IPTablesRule) discovery.Firewall {
 	return discovery.Firewall{IPTablesMangleRules: discovery.IPTablesRuleInventory{
 		Status: identity.FieldStatusPresent,
 		Table:  "mangle",
-		Chains: []discovery.IPTablesChain{{Name: "vpsgw_in", Rules: rules}},
+		Chains: []discovery.IPTablesChain{
+			{Name: "FORWARD", Policy: "ACCEPT", Rules: []discovery.IPTablesRule{{
+				Raw:       "-A FORWARD -j vpsgw_in",
+				Supported: true,
+				Spec:      &discovery.IPTablesRuleSpec{Jump: "vpsgw_in"},
+			}}},
+			{Name: "vpsgw_in", UserDefined: true, Rules: rules},
+		},
 	}}
 }
 

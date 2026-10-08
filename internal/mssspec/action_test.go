@@ -138,6 +138,13 @@ func TestMSSActionIdentityAndHashDimensions(t *testing.T) {
 	}
 }
 
+// provenChain is a value-level PROVEN chain observation for planner tests
+// that exercise the coordinate-level decision matrix (the structural
+// assessment itself has its own matrix in chain_test.go).
+func provenChain() ChainObservation {
+	return ChainObservation{Status: SuitabilityProven}
+}
+
 // §17.13–§17.23 + §17.26–§17.28: the planner decision matrix.
 func TestMSSPlannerDecisionMatrix(t *testing.T) {
 	rule := desiredRule()
@@ -146,7 +153,7 @@ func TestMSSPlannerDecisionMatrix(t *testing.T) {
 
 	// Proven ABSENT → CREATE candidate carrying the exact typed intent.
 	absent := MSSObservation{Status: MSSAbsent, Identity: id}
-	d, err := PlanMSSAction(rule, absent)
+	d, err := PlanMSSAction(rule, absent, provenChain())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +169,7 @@ func TestMSSPlannerDecisionMatrix(t *testing.T) {
 	}
 
 	// PRESENT matching spec → NO_ACTION (§17.15).
-	d, err = PlanMSSAction(rule, matchObs)
+	d, err = PlanMSSAction(rule, matchObs, provenChain())
 	if err != nil || d.Outcome != PlannerNoAction || d.Action != nil {
 		t.Fatalf("matching occupancy must be NO_ACTION: %+v err=%v", d, err)
 	}
@@ -171,7 +178,7 @@ func TestMSSPlannerDecisionMatrix(t *testing.T) {
 	// (§17.18/§17.23).
 	other := otherSpec(t, rule)
 	conflict := MSSObservation{Status: MSSPresent, Identity: id, Spec: &other}
-	d, err = PlanMSSAction(rule, conflict)
+	d, err = PlanMSSAction(rule, conflict, provenChain())
 	if err != nil || d.Outcome != PlannerBlockedCollision || d.Action != nil {
 		t.Fatalf("conflicting occupancy must be BLOCKED_COLLISION without an action: %+v err=%v", d, err)
 	}
@@ -179,7 +186,7 @@ func TestMSSPlannerDecisionMatrix(t *testing.T) {
 	// UNKNOWN / PRESENT_UNSUPPORTED → UNKNOWN, no CREATE
 	// (§17.19/§17.20).
 	for _, st := range []MSSObservationStatus{MSSUnknown, MSSPresentUnsupported} {
-		d, err = PlanMSSAction(rule, MSSObservation{Status: st, Identity: id})
+		d, err = PlanMSSAction(rule, MSSObservation{Status: st, Identity: id}, provenChain())
 		if err != nil || d.Outcome != PlannerUnknown || d.Action != nil {
 			t.Fatalf("%s must be UNKNOWN without CREATE: %+v err=%v", st, d, err)
 		}
@@ -207,7 +214,7 @@ func TestMSSPlannerAbsenceGateByConstruction(t *testing.T) {
 	// upstream, classifies AMBIGUOUS, and yields UNKNOWN — never CREATE.
 	foreign := MSSObservation{Status: MSSUnknown, Identity: id,
 		Reasons: []string{"mangle inventory carries table \"filter\""}}
-	d, err := PlanMSSAction(rule, foreign)
+	d, err := PlanMSSAction(rule, foreign, provenChain())
 	if err != nil || d.Outcome != PlannerUnknown || d.Action != nil {
 		t.Fatalf("foreign-table snapshot must never plan CREATE: %+v err=%v", d, err)
 	}
@@ -221,7 +228,7 @@ func TestMSSPlannerAbsenceGateByConstruction(t *testing.T) {
 func TestMSSMatchingRuleGainsNothing(t *testing.T) {
 	rule := desiredRule()
 	id := rule.Identity
-	d, err := PlanMSSAction(rule, MSSObservation{Status: MSSPresent, Identity: id, Spec: &rule.Spec})
+	d, err := PlanMSSAction(rule, MSSObservation{Status: MSSPresent, Identity: id, Spec: &rule.Spec}, provenChain())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +251,7 @@ func TestMSSPlannerCoordinateBound(t *testing.T) {
 	rule := desiredRule()
 	other := mssIdentity("FORWARD", "muvg443") // same tag idea, different coordinate
 	crossObs := MSSObservation{Status: MSSAbsent, Identity: other}
-	if _, err := PlanMSSAction(rule, crossObs); err == nil {
+	if _, err := PlanMSSAction(rule, crossObs, provenChain()); err == nil {
 		t.Fatal("cross-coordinate observation must fail closed")
 	}
 }

@@ -228,7 +228,17 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			PlannerOutcome: mssspec.PlannerUnknown,
 			Reasons:        []string{"pre-execution observation refused: " + err.Error()}}, nil
 	}
-	decision, err := mssspec.PlanMSSAction(rule, obs)
+	// Structural chain/hook prerequisites (ZAI-63) come from the SAME
+	// snapshot: the planner refuses CREATE unless the target chain is
+	// PROVEN to exist, be user-defined, and be attached by a modeled,
+	// non-excluding jump.
+	chainObs, err := mssspec.ObserveChainSuitability(snapshot, action.Spec)
+	if err != nil {
+		return Result{Proven: false, Stage: StagePreObservation,
+			PlannerOutcome: mssspec.PlannerUnknown,
+			Reasons:        []string{"pre-execution chain assessment refused: " + err.Error()}}, nil
+	}
+	decision, err := mssspec.PlanMSSAction(rule, obs, chainObs)
 	if err != nil {
 		return Result{Proven: false, Stage: StagePreObservation,
 			PlannerOutcome: mssspec.PlannerUnknown,
@@ -287,7 +297,13 @@ func (e Ensurer) Ensure(ctx context.Context, action mssspec.MSSActionSpec) (Resu
 			ObservedSpecHash: postHash,
 			Reasons:          []string{"post-mutation semantic hash does not match the planned spec"}}, nil
 	}
-	rePlan, err := mssspec.PlanMSSAction(rule, postObs)
+	postChain, err := mssspec.ObserveChainSuitability(post, action.Spec)
+	if err != nil {
+		return Result{Proven: false, Stage: StagePostObservation,
+			PlannerOutcome: decision.Outcome,
+			Reasons:        []string{"post-mutation chain assessment refused: " + err.Error()}}, nil
+	}
+	rePlan, err := mssspec.PlanMSSAction(rule, postObs, postChain)
 	if err != nil {
 		return Result{Proven: false, Stage: StagePostObservation,
 			PlannerOutcome: decision.Outcome,

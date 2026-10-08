@@ -127,7 +127,14 @@ func mangleWith(rules ...discovery.IPTablesRule) discovery.Firewall {
 	return discovery.Firewall{IPTablesMangleRules: discovery.IPTablesRuleInventory{
 		Status: identity.FieldStatusPresent,
 		Table:  "mangle",
-		Chains: []discovery.IPTablesChain{{Name: testChain, Rules: rules}},
+		Chains: []discovery.IPTablesChain{
+			{Name: "FORWARD", Policy: "ACCEPT", Rules: []discovery.IPTablesRule{{
+				Raw:       "-A FORWARD -j " + testChain,
+				Supported: true,
+				Spec:      &discovery.IPTablesRuleSpec{Jump: testChain},
+			}}},
+			{Name: testChain, UserDefined: true, Rules: rules},
+		},
 	}}
 }
 

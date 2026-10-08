@@ -296,7 +296,7 @@ func TestMSSRuleHasNoExecutor(t *testing.T) {
 // the planner's decision type carries a nil action for NO_ACTION).
 func TestMSSNoActionProducesNoStateAction(t *testing.T) {
 	a := mssActionForPlanner(t)
-	res, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), absentObservation(t, a.Identity))
+	res, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), absentObservation(t, a.Identity), provenMSSChain())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestMSSNoActionProducesNoStateAction(t *testing.T) {
 	// Matching rule: NO_ACTION, action nil — nothing exists to convert
 	// into a state.Action.
 	match := mssspec.MSSObservation{Status: mssspec.MSSPresent, Identity: a.Identity, Spec: &a.Spec}
-	noAction, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), match)
+	noAction, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), match, provenMSSChain())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func decisionFor(t *testing.T, a mssspec.MSSActionSpec) mssspec.MSSPlanDecision 
 	// the real planner — the bridge input is planner-shaped, not
 	// hand-built.
 	absent := mssspec.MSSObservation{Status: mssspec.MSSAbsent, Identity: a.Identity}
-	dec, err := mssspec.PlanMSSAction(rule, absent)
+	dec, err := mssspec.PlanMSSAction(rule, absent, provenMSSChain())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestBridgeNonCreateOutcomesYieldNothing(t *testing.T) {
 		{"UNKNOWN", unknown, mssspec.PlannerUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dec, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), tc.obs)
+			dec, err := mssspec.PlanMSSAction(mssspec.DesiredMSSRule(a), tc.obs, provenMSSChain())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -462,4 +462,11 @@ func TestBridgeIdentityChangeChangesActionHash(t *testing.T) {
 	if hx == hy {
 		t.Fatal("identity change must change the action-spec hash")
 	}
+}
+
+// provenMSSChain is a value-level PROVEN structural chain observation for
+// planner-driven bridge tests (the structural assessment itself is tested
+// in internal/mssspec).
+func provenMSSChain() mssspec.ChainObservation {
+	return mssspec.ChainObservation{Status: mssspec.SuitabilityProven}
 }

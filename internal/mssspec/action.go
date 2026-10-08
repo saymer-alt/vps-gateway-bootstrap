@@ -129,12 +129,18 @@ const (
 	// PlannerUnknown: the live state could not be characterized — no
 	// CREATE (UNKNOWN != ABSENT).
 	PlannerUnknown MSSPlannerOutcome = "UNKNOWN"
+	// PlannerBlockedPrerequisite: the coordinate-level prerequisites are
+	// met but a structural chain/hook prerequisite is PROVEN violated —
+	// chain absent, built-in-where-user-defined-required, unattached,
+	// provably shadowed or excluding attachment (ZAI-63). Never a
+	// replacement; never auto-repair.
+	PlannerBlockedPrerequisite MSSPlannerOutcome = "BLOCKED_PREREQUISITE"
 )
 
 // Valid reports whether o is a member of the closed vocabulary.
 func (o MSSPlannerOutcome) Valid() bool {
 	switch o {
-	case PlannerNoAction, PlannerCreateMSSRule, PlannerBlockedCollision, PlannerUnknown:
+	case PlannerNoAction, PlannerCreateMSSRule, PlannerBlockedCollision, PlannerUnknown, PlannerBlockedPrerequisite:
 		return true
 	}
 	return false
@@ -150,19 +156,30 @@ type MSSPlanDecision struct {
 }
 
 // PlanMSSAction plans the future MSS mutation for one desired rule
-// against one observation of the same coordinate. PURE and deterministic.
+// against one observation of the same coordinate AND one structural
+// chain/hook assessment of the target chain (ZAI-63 — computed by
+// ObserveChainSuitability from the SAME snapshot the observation came
+// from). PURE and deterministic.
 //
 // Semantics (§7–§10), reusing the ZAI-50 collision classification (no
-// second collision engine) and the ZAI-48 observation contract (no second
-// observation path):
+// second collision engine) and the ZAI-48 observation contract (no
+// second observation path):
 //
 //   - NO_COLLISION (absence POSITIVELY proven under a complete mangle
 //     inventory — inherited from ObserveMSSRule; an incomplete inventory
-//     can never classify NO_COLLISION) → CREATE_MSS_RULE candidate;
+//     can never classify NO_COLLISION) → CREATE_MSS_RULE candidate —
+//     ONLY when the chain/hook structural prerequisites are
+//     SuitabilityProven; otherwise the decision is BLOCKED_PREREQUISITE
+//     (proven violation) or UNKNOWN (undeterminable). CREATE is
+//     mechanically unreachable without proven structural prerequisites;
 //   - OCCUPIED_MATCHING_SPEC → NO_ACTION: already satisfied, and the
 //     matching existing rule gains NO ownership, NO evidence, NO
 //     adoption and NO future DELETE authority — "satisfied" and "owned"
-//     are separate dimensions (§9);
+//     are separate dimensions (§9). NO_ACTION is semantic convergence
+//     at the coordinate; it NEVER claims packet-path effectiveness —
+//     when the chain/hook prerequisites are not proven, the decision
+//     carries an explicit reason saying so (additive; the outcome
+//     vocabulary is unchanged, ZAI-62 §15);
 //   - OCCUPIED_CONFLICTING_SPEC → BLOCKED_COLLISION: same identity +
 //     different spec never generates a replacement (§10);
 //   - AMBIGUOUS (incomplete inventory, unsupported occupants, conflicts)
@@ -172,7 +189,7 @@ type MSSPlanDecision struct {
 // fails closed; different identity + same spec cannot reach this planner
 // (classification is coordinate-bound and rejects cross-coordinate
 // observations).
-func PlanMSSAction(rule DesiredMSSRule, obs MSSObservation) (MSSPlanDecision, error) {
+func PlanMSSAction(rule DesiredMSSRule, obs MSSObservation, chain ChainObservation) (MSSPlanDecision, error) {
 	action, err := BuildMSSAction(rule)
 	if err != nil {
 		return MSSPlanDecision{}, err
@@ -181,30 +198,61 @@ func PlanMSSAction(rule DesiredMSSRule, obs MSSObservation) (MSSPlanDecision, er
 	if err != nil {
 		return MSSPlanDecision{}, err
 	}
+	var dec MSSPlanDecision
 	switch collision {
 	case CollisionNone:
 		a := action
-		return MSSPlanDecision{
+		dec = MSSPlanDecision{
 			Outcome: PlannerCreateMSSRule,
 			Action:  &a,
 			Reasons: []string{"absence is positively proven under the complete mangle inventory"},
-		}, nil
+		}
 	case CollisionOccupiedMatchingSpec:
-		return MSSPlanDecision{
+		dec = MSSPlanDecision{
 			Outcome: PlannerNoAction,
 			Reasons: []string{"an existing rule already matches the desired semantic spec; provenance remains unproven — no ownership, no adoption, no evidence, no DELETE authority"},
-		}, nil
+		}
 	case CollisionOccupiedConflictingSpec:
-		return MSSPlanDecision{
+		dec = MSSPlanDecision{
 			Outcome: PlannerBlockedCollision,
 			Reasons: []string{"the coordinate is occupied by a semantically different rule; replacement is not an authorized operation"},
-		}, nil
+		}
 	case CollisionAmbiguous:
-		return MSSPlanDecision{
+		dec = MSSPlanDecision{
 			Outcome: PlannerUnknown,
 			Reasons: append([]string(nil), obs.Reasons...),
-		}, nil
+		}
 	default:
 		return MSSPlanDecision{}, fmt.Errorf("collision classification %q is not in the closed vocabulary", collision)
 	}
+
+	// Structural chain/hook gate (ZAI-63): the CREATE candidate survives
+	// only a PROVEN structural assessment; a proven violation blocks
+	// explicitly; undeterminability stays UNKNOWN.
+	if dec.Outcome == PlannerCreateMSSRule {
+		switch chain.Status {
+		case SuitabilityProven:
+			dec.Reasons = append(dec.Reasons, chain.Reasons...)
+		case SuitabilityUnknown:
+			dec = MSSPlanDecision{
+				Outcome: PlannerUnknown,
+				Reasons: append(append([]string{"structural chain/hook prerequisites are undeterminable"}, chain.Reasons...), "no CREATE (UNKNOWN never becomes a mutation)"),
+			}
+		case SuitabilityAbsent, SuitabilityUnsuitable, SuitabilityAmbiguous:
+			dec = MSSPlanDecision{
+				Outcome: PlannerBlockedPrerequisite,
+				Reasons: append([]string{"structural chain/hook prerequisites are not proven"}, chain.Reasons...),
+			}
+		default:
+			return MSSPlanDecision{}, fmt.Errorf("chain suitability %q is not in the closed vocabulary", chain.Status)
+		}
+	}
+	// NO_ACTION never claims packet-path effectiveness: surface the
+	// structural gap as an additive reason without changing the
+	// established outcome semantics (ZAI-62 §15 / ZAI-63 §12).
+	if dec.Outcome == PlannerNoAction && chain.Status != SuitabilityProven {
+		dec.Reasons = append(dec.Reasons, "semantic convergence at the coordinate is NOT packet-path effectiveness: the structural chain/hook prerequisites are not proven (status "+string(chain.Status)+")")
+		dec.Reasons = append(dec.Reasons, chain.Reasons...)
+	}
+	return dec, nil
 }

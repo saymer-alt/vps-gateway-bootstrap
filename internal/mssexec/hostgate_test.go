@@ -16,8 +16,20 @@ import (
 // observation and long before any command.
 
 func presentMangle() discovery.Firewall {
+	// Structurally suitable environment (ZAI-63): the built-in FORWARD
+	// chain jumps into the empty user-defined vpsgw_in chain — the empty
+	// chain still proves coordinate absence, so ONLY the host gate can
+	// be the verdict differentiator.
 	return discovery.Firewall{IPTablesMangleRules: discovery.IPTablesRuleInventory{
 		Status: identity.FieldStatusPresent, Table: "mangle",
+		Chains: []discovery.IPTablesChain{
+			{Name: "FORWARD", Policy: "ACCEPT", Rules: []discovery.IPTablesRule{{
+				Raw:       "-A FORWARD -j vpsgw_in",
+				Supported: true,
+				Spec:      &discovery.IPTablesRuleSpec{Jump: "vpsgw_in"},
+			}}},
+			{Name: "vpsgw_in", UserDefined: true},
+		},
 	}}
 }
 
