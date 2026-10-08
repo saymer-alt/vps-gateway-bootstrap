@@ -415,6 +415,52 @@ This completes every PURE leg that needs no new command and prepares
 `discovered-awg` for a future producer decision. NOT in scope: any
 collector growth, route-get producer, planner wiring, mutation authority.
 
+## 15. ZAI-65 addendum — the predicates are LANDED
+
+ZAI-65 implemented exactly this slice as the new PURE package
+`internal/awgspec` (zero production consumers, tripwired). Technical
+note:
+
+- **Inputs:** `discovery.Docker` (containers: image/state/typed
+  published ports; networks: IPAM subnet/gateway) + caller-serialized
+  `HostNetworks{Prefixes, Complete}` (completeness attested from the
+  discovery `NETWORK_*_UNKNOWN` observations).
+- **Candidate predicates** (`EvaluateCandidate(docker, policy)`): image
+  evidence = operator-supplied case-insensitive image-substring patterns
+  (grounded in the repository's own `Gateway.Amnezia` heuristic;
+  container NAMES never consulted; empty policy = UNKNOWN, never a
+  guess); running state (`State == "running"`); published-UDP evidence
+  (all typed UDP mappings carried; the expected port is a MATCH leg, not
+  a filter; port tokens without typed mappings = undecidable leg →
+  UNKNOWN; no port configuration at all = definitive contradiction →
+  UNSUITABLE). Closed verdicts: PROVEN_CANDIDATE / NO_CANDIDATE /
+  AMBIGUOUS / UNSUITABLE / UNKNOWN — PROVEN_CANDIDATE is structural
+  candidacy ONLY.
+- **Source-pool predicates** (`EvaluateSourcePool(docker, host)`):
+  canonical IPv4 pools (malformed/non-canonical surfaced as ambiguity,
+  never dropped), duplicates and pairwise overlaps → AMBIGUOUS, host
+  overlap classified (EXACT / POOL_CONTAINS_HOST / HOST_CONTAINS_POOL /
+  PARTIAL / NONE / INDETERMINABLE — the last caps non-overlap when the
+  host inventory is not attested complete). **The pool verdict is
+  structurally capped: PROVEN is unreachable in this build** (single
+  pool → UNKNOWN "attachment unproven — never selected"; multiple →
+  AMBIGUOUS; none → UNSUITABLE).
+- **Typed gap registry** (constants, diagnostics only):
+  `CONTAINER_NETWORK_ATTACHMENT_MISSING`, `CONTAINER_OBSERVED_ADDRESS_MISSING`,
+  `ROUTE_GET_PRODUCER_MISSING`, `HOST_VISIBLE_SOURCE_UNVERIFIED`,
+  `DOCKER_NAT_UNVERIFIED`. The observed address is never substituted by
+  the gateway, subnet, published port, or a CIDR's first address.
+- **A1–A6 coverage after ZAI-65:** leg 1 (uniqueness) = predicates
+  landed, attachment input still missing; leg 2 (running) = landed; leg
+  3 (single pool) = predicates landed, container-address input still
+  missing; leg 4 (host overlap) = landed; legs 5/6 unchanged (route-get
+  producer missing / inspect correlation already implemented).
+- **Future collector decisions (owner-gated, NOT implemented):**
+  container↔network attachment modeling and container-observed-address
+  collection (both would grow the Docker command surface);
+  route-get producer. `discovered-awg` production selection remains
+  NOT IMPLEMENTED; no production code consumes `internal/awgspec`.
+
 ## 14. Integration with the ZAI-61 runbook
 
 The ZAI-61 runbook gains an additive section (no historical text
