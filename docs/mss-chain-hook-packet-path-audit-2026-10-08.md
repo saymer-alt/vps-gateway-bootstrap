@@ -1,5 +1,14 @@
 # ZAI-62 — Mangle Chain, Hook Attachment and Effective MSS Packet-Path Audit
 
+> **Correction (ZAI-64):** this document states that "the repository has
+> no Docker or AWG discovery". The Docker half is WRONG —
+> `internal/discovery` carries a typed Docker collector (containers with
+> image/state/typed published ports; networks with IPAM subnet/gateway;
+> `docker network inspect` correlation already implemented). The AWG
+> source-selector discovery (A1–A6) remains unimplemented. See
+> `muvg-runtime-packet-path-verification-2026-10-08.md` §0/§7 for the
+> corrected picture; this document's text below is preserved as written.
+
 Read-only, code-grounded architecture audit (ZAI-62). Production mutation
 authority: NONE. Every claim below is traced to a repository symbol or
 explicitly marked as an assumption/host-specific UNKNOWN. This document

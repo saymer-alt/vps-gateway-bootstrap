@@ -565,3 +565,48 @@ above stays closed, and the chain/hook question is unresolved.
    decisions (ZAI-49 legs) close.
 7. **Owner decisions** — G2 (approval v2 adoption), G4 (trust anchor),
    Triple-Gate activation authorization, O6-B wiring approval.
+
+## 19. Structural-gate vocabulary and packet-path verification (ZAI-63/ZAI-64 addition)
+
+This section is additive (2026-10-08); nothing above is rewritten.
+
+**Structural gate vocabulary (ZAI-63).** The MSS planner now refuses
+CREATE unless the target chain's STRUCTURAL prerequisites are PROVEN —
+assessed by `mssspec.ObserveChainSuitability` over the mangle inventory
+with the closed vocabulary:
+
+- `PROVEN` — chain exists, is user-defined, and is attached to a
+  built-in hook by exactly one fully-modeled jump whose match admits the
+  MSS rule's packets (the PREROUTING/INPUT `-o` hazard and terminal-rule
+  shadowing are structurally excluded);
+- `ABSENT` — chain positively missing from a complete inventory;
+- `UNSUITABLE` — a proven violation (built-in-where-user-defined
+  required, unattached, excluding or PREROUTING-only attachment,
+  shadowed append position);
+- `AMBIGUOUS` — duplicate chain identity or duplicate/conflicting
+  attachments;
+- `UNKNOWN` — incomplete inventory or undeterminable effects (never
+  treated as ABSENT).
+
+**Semantic convergence ≠ packet-path effectiveness.** A `NO_ACTION`
+planner outcome (a matching rule exists at the coordinate) is semantic
+convergence only: when the structural assessment is not PROVEN, the
+decision carries an explicit disclaimer saying so. A matching rule in an
+unreachable chain is NOT an effective gateway state.
+
+**Packet-path verification procedure.** The staged, read-only operator
+procedure (stages A–G: host identity, Docker/AWG topology, source-address
+visibility, netfilter chain/hook, policy routing, Mihomo TUN, evidence
+completeness), the three proof levels (L1 configuration / L2 structural
+/ L3 traversal — a read-only snapshot establishes at most L2), the MSS
+effectiveness checklist, the `discovered-awg`/A1–A6 audit, the
+explicit-source NAT hazards, and the reusable evidence template live in
+**`muvg-runtime-packet-path-verification-2026-10-08.md`** (ZAI-64). Use
+it before drawing any conclusion from §10 of this runbook.
+
+**Explicit-source/NAT warning (repeated for operators).** The
+`explicit` source CIDR is HOST-VISIBLE (post-container-NAT). If the
+declared prefix is pre-NAT (client subnet) while the host sees the
+Docker-bridge subnet — or vice versa — the MSS rule's `-s` selector
+never matches the intended traffic while every structural check still
+passes. Verify Stage C before trusting any structural verdict.
