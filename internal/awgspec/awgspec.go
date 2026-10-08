@@ -420,7 +420,7 @@ func EvaluateSourcePool(docker discovery.Docker, host HostNetworks) SourcePoolEv
 				best, peer = kind, host.Prefixes[k]
 			}
 		}
-		out.Overlaps = append(out.Overlaps, PoolOverlap{Pool: pools[i].String(), Kind: best, HostPeer: peer})
+		out.Overlaps = append(out.Overlaps, PoolOverlap{Network: strings.Join(poolNames[pools[i].String()], ","), Pool: pools[i].String(), Kind: best, HostPeer: peer})
 		if best != OverlapNone {
 			out.Reasons = append(out.Reasons, fmt.Sprintf("pool %s overlaps the host network (%s: %s)", pools[i].String(), string(best), peer))
 		}

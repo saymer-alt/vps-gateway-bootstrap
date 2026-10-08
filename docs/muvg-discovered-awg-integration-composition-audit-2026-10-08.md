@@ -450,6 +450,16 @@ makes the consumption side of decisions A/B ready before the owner
 decides on the parser extension — the same "land the PURE layer first"
 pattern the series has followed throughout.
 
+> **LANDED (ZAI-67):** the boundary is implemented in
+> `internal/awgspec/resolve.go` — typed `AttachmentEvidence`/
+> `AddressEvidence`/`HostVisibleEvidence` inputs (forward-looking;
+> today's parser produces none of them), the closed
+> `ResolutionVerdict` vocabulary, provenance-consistency (cross-host/
+> cross-snapshot) conflict detection, and the NAT trust boundary
+> (`HostVisibleBasis`: only OBSERVED_TRAFFIC/OPERATOR_CONFIRMED
+> resolve; Docker topology never implies the host-visible source).
+> Technical note: `awg-source-resolution-boundary-2026-10-08.md`.
+
 ## 18. Verification posture of this audit
 
 Documentation-only: no Go files touched; no commands executed against
