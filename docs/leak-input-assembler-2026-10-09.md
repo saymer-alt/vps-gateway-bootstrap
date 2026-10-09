@@ -113,6 +113,14 @@ tripwires (ZAI-69/70/71, awgspec, mssspec, muvgplan) all remain green
 — no sanction was needed: the assembler references no tripwired
 token.
 
+> **LANDED (ZAI-74):** B3 is implemented — the PURE strict-subset
+> config evidence reader (`internal/mihomoconf`) with the closed
+> status vocabulary, the exact auto-route tri-state (mapped to
+> `leak.AutoRouteState`, UNKNOWN blocking), the device policy, the
+> secret-retention boundary and a bounded explicit-path adapter. The
+> assembler integration is DEFERRED (provenance-aware input contract
+> needed); see `mihomo-config-evidence-2026-10-09.md`.
+
 Remaining for Level-2 VPS diagnostics (ZAI-72 §12): B3, the Mihomo
 config strict-subset reader (auto-route tri-state + tun.device under
 the §5.4 provenance and secret boundaries) — the only fact pair that
