@@ -419,6 +419,12 @@ MUVG planner consumer — both upstream of everything downstream.
    semantics (consumes the future discovery fields; zero consumers).
 2. The MUVG planning-layer skeleton: desired-source resolution →
    `DesiredMSSInput` composition (PURE; consumes the resolved prefix).
+   > **LANDED (ZAI-68):** `internal/muvgplan` — the typed
+   > `ComposeDesiredMSS` composition (MUVG intent + `Resolution` +
+   > frozen-contract chain/tag assertions → proposed
+   > `mssspec.DesiredMSSInput` or an explicit fail-closed outcome);
+   > consumer-free, production-unwired. Note:
+   > `muvg-planning-layer-skeleton-2026-10-09.md`.
 
 **Read-only collector work (each an owner-visible decision):**
 3. `docker network inspect` parser/model extension (Containers map) —

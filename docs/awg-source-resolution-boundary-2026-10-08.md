@@ -119,3 +119,11 @@ Docker parser/model are separate, explicitly owner-authorized tasks.
 `ActionMSSRule` remains `Defined:false`; all MSS admission blockers
 (ClassifyRetry, G2/G4, registration, chain/hook presence, L3 proof)
 stand unchanged.
+
+> **Forward (ZAI-68):** the first sanctioned consumer now exists — the
+> PURE MUVG planning-layer skeleton (`internal/muvgplan`) composes a
+> `Resolution` + MUVG intent + frozen-contract chain/tag/egress
+> assertions into a proposed `mssspec.DesiredMSSInput`, fail-closed on
+> every verdict except `RESOLVED_EVIDENCE` with a canonical IPv4
+> prefix. It remains consumer-free and production-unwired; see
+> `muvg-planning-layer-skeleton-2026-10-09.md`.

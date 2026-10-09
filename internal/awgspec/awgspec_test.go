@@ -463,6 +463,13 @@ func TestNoProductionConsumer(t *testing.T) {
 		if strings.Contains(filepath.ToSlash(path), "/internal/awgspec/") {
 			return nil
 		}
+		// Sanctioned production consumer (unreachable from production
+		// mutation wiring by its own tripwire):
+		//   - internal/muvgplan — ZAI-68 PURE MUVG planning-layer
+		//     skeleton (zero production importers of its own).
+		if strings.Contains(filepath.ToSlash(path), "/internal/muvgplan/") {
+			return nil
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
