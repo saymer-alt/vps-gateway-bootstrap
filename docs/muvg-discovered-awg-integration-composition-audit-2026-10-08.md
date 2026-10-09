@@ -157,6 +157,17 @@ invariant carried forward).
   HANDOFF-2026-09-27 §5.5 leg 5.
 - **Producer:** NONE (grep-verified: `RouteGet` exists only in
   `internal/leak`).
+> **LANDED (ZAI-70):** the producer now exists as an inert
+> discovery-side component — `Collector.CollectRouteGet` performs ONE
+> `ip route get <validated-destination>` (canonical IPv4, rejected
+> before execution otherwise, zero runner calls without an explicit
+> query) and returns typed `discovery.RouteGetEvidence` with the full
+> failure vocabulary (`ROUTE_FOUND`/`NO_ROUTE`/`UNSUPPORTED`/
+> `PERMISSION_DENIED`/`MALFORMED_OUTPUT`/`COMMAND_FAILED`/
+> `NOT_REQUESTED`/`UNKNOWN`). NOT wired into `Collect()` — no default
+> invocation, zero production consumers; the pure bridge to
+> `leak.RouteGetResult` stays future consumer work. Note:
+> `route-get-evidence-producer-2026-10-09.md`.
 - **Currently executed routing commands:** `ip -j rule` (policy rules),
   `ip -j route show table all` (ALL-table route inventory — rich, but
   STATIC: it shows what exists, not what a packet WOULD select),
