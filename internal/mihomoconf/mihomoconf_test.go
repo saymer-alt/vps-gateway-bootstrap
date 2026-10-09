@@ -426,6 +426,13 @@ func TestNoProductionConsumer(t *testing.T) {
 		if strings.Contains(filepath.ToSlash(path), "/internal/mihomoconf/") {
 			return nil
 		}
+		// Sanctioned production consumer (PURE mapping only, itself
+		// consumer-free by its own tripwire):
+		//   - internal/leakasm — ZAI-75 PURE provenance-aware
+		//     assembly (zero production importers of its own).
+		if strings.Contains(filepath.ToSlash(path), "/internal/leakasm/") {
+			return nil
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err

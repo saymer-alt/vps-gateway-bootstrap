@@ -37,15 +37,26 @@
 //     leak.Input can be built at all — the assembler reports this as
 //     a missing fact and returns a nil Input rather than fabricating
 //     a prefix.
+//   - Configuration-evidence admission (ZAI-75): explicitly supplied
+//     ZAI-74 Mihomo config evidence is preserved as observed
+//     CONFIGURATION facts with its provenance and stage — an observed
+//     auto-route value is NEVER admitted into the evaluator input
+//     (no service-correlation producer exists to prove the running
+//     process loaded that file), a configured device name is never
+//     promoted into the evaluator TUN, explicit host-identity
+//     mismatches are conflicts, and no runtime fact is ever proven.
 package leakasm
 
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/identity"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/leak"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/mihomoconf"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 )
 
@@ -63,6 +74,12 @@ const (
 	FactRouteGetCorrelation  = "ROUTE_GET_CORRELATION_UNAVAILABLE"
 	FactSelectorCIDR         = "AWG_SELECTOR_CIDR_UNAVAILABLE"
 	FactInterfaceInventory   = "INTERFACE_INVENTORY_INCOMPLETE"
+	// ZAI-75: configuration-evidence admission facts. An observed
+	// auto-route value is a CONFIGURATION fact — it is never admitted
+	// into the evaluator input, because no service-correlation producer
+	// exists to prove the running Mihomo loaded that file.
+	FactAutoRouteObservedNotAdmitted = "AUTO_ROUTE_OBSERVED_NOT_ADMITTED"
+	FactConfigEvidenceUnusable       = "MIHOMO_CONFIG_EVIDENCE_UNUSABLE"
 )
 
 // Readiness is the closed assembly vocabulary (ZAI-73 §14). A partial
@@ -101,6 +118,13 @@ func (r Readiness) Valid() bool {
 type Input struct {
 	Discovery discovery.Result
 	Intent    *pipeline.MUVGConfig
+	// MihomoConfig is OPTIONAL explicitly supplied ZAI-74 configuration
+	// evidence (nil = none; the ZAI-73 call shape is unchanged). It is
+	// never read from disk here and never discovered. Supplied evidence
+	// is admitted as OBSERVED CONFIGURATION FACTS only — never as
+	// evaluator facts (the service-correlation stage does not exist)
+	// and never as runtime facts.
+	MihomoConfig *mihomoconf.ConfigEvidence
 }
 
 // Result is the typed assembly output. Input is the fail-closed
@@ -112,9 +136,44 @@ type Result struct {
 	Readiness        Readiness
 	Input            *leak.Input
 	IntentConfigured bool
-	MissingFacts     []string
-	Conflicts        []string
-	Reasons          []string
+	// Config carries the admitted Mihomo configuration evidence planes
+	// (zero value when no evidence was supplied).
+	Config       ConfigFacts
+	MissingFacts []string
+	Conflicts    []string
+	Reasons      []string
+}
+
+// ConfigFacts separates the three evidence planes for the Mihomo
+// configuration facts (ZAI-75 §13): a configuration fact can be
+// OBSERVED while NOT ADMITTED to the evaluator, and a runtime fact is
+// NEVER proven by this package.
+type ConfigFacts struct {
+	Supplied bool
+	Status   mihomoconf.ConfigStatus
+	Stage    mihomoconf.ProvenanceStage
+	// Provenance is echoed verbatim from the supplied evidence; its
+	// identity strings are structural observations, never proof of
+	// service or runtime correlation.
+	Provenance mihomoconf.Provenance
+	// TUN holds the observed configuration facts (enable/device/
+	// auto-route) verbatim — zero when no usable evidence exists.
+	TUN mihomoconf.TUNEvidence
+	// AutoRouteObserved: a positively observed auto-route value exists.
+	AutoRouteObserved bool
+	// AutoRouteAdmittedToEvaluator: ALWAYS false in this package —
+	// the evaluator's AutoRoute input stays the blocking unknown until
+	// service correlation is established by a future producer.
+	AutoRouteAdmittedToEvaluator bool
+	// DeviceNameMatchesDiscoveredInterface: a structural name match
+	// against the discovered inventory — never ownership, use, or
+	// traversal.
+	DeviceNameMatchesDiscoveredInterface bool
+	// ConfigFactObservedMarker: a usable tun mapping was observed in
+	// the supplied evidence.
+	ConfigFactObservedMarker bool
+	// RuntimeFactProven: ALWAYS false — no runtime producer exists.
+	RuntimeFactProven bool
 }
 
 // Assemble maps discovery evidence plus explicit intent into the
@@ -150,6 +209,12 @@ func Assemble(in Input) Result {
 		res.Reasons = append(res.Reasons, "MUVG intent configuration present (mode "+in.Intent.Source.Mode+"); intent is never permission to act")
 	}
 
+	// Configuration-evidence admission (ZAI-75): supplied ZAI-74
+	// evidence becomes observed CONFIGURATION facts only. With no
+	// supplied evidence this is a no-op and the ZAI-73 output is
+	// unchanged.
+	res.Config = assembleConfigFacts(in, &res.MissingFacts, &conflicts, &res.Reasons)
+
 	// Every evaluator correlation fact the current evidence cannot
 	// establish is recorded, in fixed order.
 	res.MissingFacts = append(res.MissingFacts,
@@ -171,7 +236,11 @@ func Assemble(in Input) Result {
 			"this is the honest fail-closed state, not an error to be worked around")
 	} else {
 		res.Input = &leak.Input{
-			IntentConfigured:   false,
+			IntentConfigured: false,
+			// AutoRoute stays the blocking unknown even when a value
+			// was observed in supplied configuration evidence: the
+			// observed fact is never admitted without service
+			// correlation (see ConfigFacts).
 			AutoRoute:          leak.AutoRouteUnknown,
 			Selector:           leak.SelectorFacts{Status: identity.FieldStatusUnknownUnsupported},
 			TUN:                leak.TUNFacts{Status: identity.FieldStatusUnknownUnsupported},
@@ -210,6 +279,97 @@ func Assemble(in Input) Result {
 		res.Readiness = ReadinessPartialAssembled
 	}
 	return res
+}
+
+// assembleConfigFacts admits supplied ZAI-74 configuration evidence as
+// observed CONFIGURATION facts only. Admission rules (closed, ZAI-75
+// §6/§7): OBSERVED and DISABLED evidence retains its TUN facts and —
+// for a positively observed auto-route value — records the
+// observed-not-admitted missing fact; NOT_REPORTED is an honest
+// negative about the file; UNSUPPORTED/MALFORMED/UNKNOWN evidence is
+// unusable (nothing is admitted; it is defective, not contradictory);
+// CONFLICTING evidence is a recorded conflict. Out-of-contract
+// correlation stages and explicit host-identity mismatches fail closed
+// as conflicts. The evaluator input is never touched from here.
+func assembleConfigFacts(in Input, missing, conflicts, reasons *[]string) ConfigFacts {
+	var cf ConfigFacts
+	if in.MihomoConfig == nil {
+		return cf
+	}
+	cfg := in.MihomoConfig
+	cf.Supplied = true
+	cf.Status = cfg.Status
+	cf.Stage = cfg.Stage
+	cf.Provenance = cfg.Provenance
+	switch cfg.Stage {
+	case "", mihomoconf.StagePathSupplied, mihomoconf.StageFileRead, mihomoconf.StageConfigParsed:
+	default:
+		*conflicts = append(*conflicts, "the configuration evidence claims a service/runtime correlation stage; no producer for those stages exists, so the claim fails closed")
+		*missing = append(*missing, FactConfigEvidenceUnusable)
+		return cf
+	}
+	switch cfg.Status {
+	case mihomoconf.ConfigObserved, mihomoconf.ConfigDisabled:
+		cf.TUN = cfg.TUN
+		cf.ConfigFactObservedMarker = true
+		if cfg.TUN.AutoRoute == mihomoconf.AutoRouteTrue || cfg.TUN.AutoRoute == mihomoconf.AutoRouteFalse {
+			cf.AutoRouteObserved = true
+			*missing = append(*missing, FactAutoRouteObservedNotAdmitted)
+			*reasons = append(*reasons,
+				"an auto-route value was positively observed in the supplied configuration and is preserved as a CONFIGURATION fact",
+				"it is NOT admitted into the evaluator input: the running Mihomo process is not proven to have loaded this file (no service correlation exists)")
+		}
+		if cfg.TUN.Device != "" {
+			for _, i := range in.Discovery.Network.Interfaces {
+				if i.Name == cfg.TUN.Device {
+					cf.DeviceNameMatchesDiscoveredInterface = true
+					*reasons = append(*reasons, "structural match: the configured device name exists in the discovered interface inventory; ownership, use, and traffic traversal are NOT established")
+					break
+				}
+			}
+			if !cf.DeviceNameMatchesDiscoveredInterface {
+				*reasons = append(*reasons, "the configured device name does not appear in the discovered interface inventory (a configuration fact only; the interface is never fabricated)")
+			}
+		}
+	case mihomoconf.ConfigNotReported:
+		*reasons = append(*reasons, "the supplied configuration evidence reports no tun mapping; TUN configuration facts remain unknown")
+	case mihomoconf.ConfigUnsupported, mihomoconf.ConfigMalformed, mihomoconf.ConfigUnknown:
+		*missing = append(*missing, FactConfigEvidenceUnusable)
+		*reasons = append(*reasons, "the supplied configuration evidence is unusable and admits no configuration fact")
+	case mihomoconf.ConfigConflicting:
+		*missing = append(*missing, FactConfigEvidenceUnusable)
+		*conflicts = append(*conflicts, "the supplied configuration evidence is self-contradictory; its values are never admitted")
+		*conflicts = append(*conflicts, cfg.Conflicts...)
+	default:
+		*conflicts = append(*conflicts, fmt.Sprintf("configuration evidence status %q is not in the closed vocabulary; it fails closed", string(cfg.Status)))
+		*missing = append(*missing, FactConfigEvidenceUnusable)
+	}
+	cf.compareHostIdentity(in, conflicts, reasons)
+	return cf
+}
+
+// compareHostIdentity flags explicit host mismatches as conflicts and
+// records matches as structural only — never as correlation, and
+// never as snapshot consistency. Missing or unverifiable identities
+// stay unresolved.
+func (cf *ConfigFacts) compareHostIdentity(in Input, conflicts, reasons *[]string) {
+	if !cf.Supplied || strings.TrimSpace(cf.Provenance.HostIdentity) == "" {
+		return
+	}
+	if in.Discovery.Host.MachineIDStatus != discovery.MachineIDPresent || strings.TrimSpace(in.Discovery.Host.MachineID) == "" {
+		*reasons = append(*reasons, "the configuration provenance names a host identity but the discovery evidence carries no comparable machine-id; correlation stays unresolved")
+		return
+	}
+	hid, err := machineid.HostIdentity(in.Discovery.Host.MachineID)
+	if err != nil {
+		*reasons = append(*reasons, "the discovery machine-id is not normalizable to the canonical identity form; correlation stays unresolved")
+		return
+	}
+	if hid == cf.Provenance.HostIdentity {
+		*reasons = append(*reasons, "host identities agree (structural match only): this never proves the configuration belongs to the running service, and snapshot consistency stays unproven")
+		return
+	}
+	*conflicts = append(*conflicts, "the configuration provenance names a different host than the discovery evidence; combining them is forbidden")
 }
 
 // mapInterfacesStatus maps the discovery completeness vocabulary to the

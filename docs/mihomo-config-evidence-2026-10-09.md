@@ -100,6 +100,15 @@ empty path).
 
 ## 8. ZAI-73 assembler relationship
 
+> **Forward (ZAI-75):** the provenance-aware assembly now exists —
+> `leakasm.Input.MihomoConfig` optionally carries this package's
+> `ConfigEvidence`; observed values are preserved as CONFIGURATION
+> facts (AutoRouteObserved) while the evaluator AutoRoute stays the
+> blocking unknown (`AutoRouteAdmittedToEvaluator` is always false
+> until a service-correlation producer exists). Host-identity
+> mismatches are conflicts; snapshot consistency stays unproven. See
+> `provenance-aware-leak-assembly-2026-10-09.md`.
+
 DEFERRED by design: `leakasm.Assemble` is unchanged and nothing feeds
 config evidence into it automatically. Integrating B3 into the
 assembler requires an owner decision plus provenance growth (the
