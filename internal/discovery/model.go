@@ -112,7 +112,23 @@ type Network struct {
 	IPv4              bool        `json:"ipv4"`
 	IPv6              bool        `json:"ipv6"`
 	DNS               DNS         `json:"dns"`
+	// ZAI-73 (B2): explicit interface-inventory completeness. Both
+	// required sources (ip -j link AND ip -j addr) must succeed for
+	// COMPLETE; one failing source is PARTIAL; both failing (or an
+	// older snapshot without this field) is UNKNOWN — a failed command
+	// is never an empty interface inventory, and an empty successful
+	// inventory stays COMPLETE.
+	InterfacesStatus string `json:"interfaces_status,omitempty"`
 }
+
+// Interface-inventory completeness statuses (closed vocabulary,
+// ZAI-73 B2). The zero value exists only on pre-ZAI-73 snapshots and
+// means UNKNOWN, never COMPLETE.
+const (
+	InterfacesComplete = "INTERFACES_COMPLETE"
+	InterfacesPartial  = "INTERFACES_PARTIAL"
+	InterfacesUnknown  = "INTERFACES_UNKNOWN"
+)
 type Interface struct {
 	Name      string    `json:"name"`
 	Kind      string    `json:"kind"`

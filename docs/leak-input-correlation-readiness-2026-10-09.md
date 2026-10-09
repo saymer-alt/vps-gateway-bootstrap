@@ -283,6 +283,12 @@ prerequisite) — separate owner track.
 
 ## 12. Recommended smallest next step
 
+> **LANDED (ZAI-73):** B1 and B2 are implemented — the PURE assembler
+> (`internal/leakasm`) with fail-closed unresolved fields and the
+> additive interface-inventory completeness status; see
+> `leak-input-assembler-2026-10-09.md`. B3 (the Mihomo config reader)
+> remains the next owner decision.
+
 **ZAI-73 — PURE leak-input assembler + interface-inventory status**
 (B1+B2): a consumer-free assembler that builds a typed
 `leak.Input`-shaped result from `(discovery.Result, config intent)`,

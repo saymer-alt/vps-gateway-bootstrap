@@ -153,7 +153,9 @@ func (c *Collector) collectNetwork(ctx context.Context, r *Result) {
 		LinkType  string   `json:"link_type"`
 		Altnames  []string `json:"altnames"`
 	}
+	linksOK := false
 	if err := jsonOut(c, ctx, &links, "ip", "-j", "link"); err == nil {
+		linksOK = true
 		for _, l := range links {
 			r.Network.Interfaces = append(r.Network.Interfaces, Interface{Name: l.Ifname, MTU: l.MTU, State: l.OperState, MAC: l.Address, Kind: l.LinkType, AltNames: l.Altnames})
 		}
@@ -169,7 +171,9 @@ func (c *Collector) collectNetwork(ctx context.Context, r *Result) {
 			Prefix int    `json:"prefixlen"`
 		} `json:"addr_info"`
 	}
+	addrsOK := false
 	if err := jsonOut(c, ctx, &addrs, "ip", "-j", "addr"); err == nil {
+		addrsOK = true
 		for _, a := range addrs {
 			for _, x := range a.AddrInfo {
 				for i := range r.Network.Interfaces {
@@ -181,6 +185,17 @@ func (c *Collector) collectNetwork(ctx context.Context, r *Result) {
 		}
 	} else {
 		addObservation(&r.Unknowns, "NETWORK_ADDRS_UNKNOWN", "network", err.Error())
+	}
+	// ZAI-73 (B2): completeness from actual collection success — never
+	// from a nonempty interface list. Both sources must succeed for
+	// COMPLETE; an empty successful inventory stays COMPLETE.
+	switch {
+	case linksOK && addrsOK:
+		r.Network.InterfacesStatus = InterfacesComplete
+	case linksOK || addrsOK:
+		r.Network.InterfacesStatus = InterfacesPartial
+	default:
+		r.Network.InterfacesStatus = InterfacesUnknown
 	}
 
 	var routes []struct {
