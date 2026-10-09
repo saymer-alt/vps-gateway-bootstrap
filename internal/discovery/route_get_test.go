@@ -311,6 +311,13 @@ func TestRouteGetNoProductionConsumer(t *testing.T) {
 		if strings.Contains(filepath.ToSlash(path), "/internal/discovery/") {
 			return nil
 		}
+				// Sanctioned production consumer (PURE mapping only, itself
+		// consumer-free by its own tripwire):
+		//   - internal/leakbridge — ZAI-71 PURE discovery-to-leak
+		//     evidence bridge (zero production importers of its own).
+		if strings.Contains(filepath.ToSlash(path), "/internal/leakbridge/") {
+			return nil
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err

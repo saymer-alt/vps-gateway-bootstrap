@@ -125,6 +125,13 @@ zero-production-consumer, and a source-scan for mutation verbs. All
 fixtures are realistic captured-format text; nothing is
 host-dependent.
 
+> **Forward (ZAI-71):** the PURE discovery-to-leak bridge now exists
+> (`internal/leakbridge`): a closed, fail-closed mapping from this
+> producer's `RouteGetEvidence` (and the ZAI-69 attachment facts) into
+> `leak.RouteGetResult`, with `Ran=true` reserved for complete
+> positively observed lookups and `RouteGet` nil on every failure
+> status. Consumer-free; see `leak-evidence-bridge-2026-10-09.md`.
+
 ## 9. Remaining runtime packet-path gaps
 
 L3 traversal (ZAI-64), NAT/source visibility, MSS clamp effectiveness,
