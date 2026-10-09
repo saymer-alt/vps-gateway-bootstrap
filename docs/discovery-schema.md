@@ -422,6 +422,17 @@ docker:
       subnet: 172.17.0.0/16
       gateway: 172.17.0.1
       interface: docker0
+      # ZAI-69: attachment evidence from the same `docker network
+      # inspect` payload (no new command). attachments_status is one of
+      # ATTACHMENTS_OBSERVED / ATTACHMENTS_EMPTY / ATTACHMENTS_NOT_REPORTED
+      # / ATTACHMENTS_PARTIALLY_PARSED / ATTACHMENTS_UNKNOWN; the field's
+      # absence in older snapshots means "never established", never empty.
+      attachments_status: ATTACHMENTS_OBSERVED
+      containers:
+        - container_id: "<full-64-hex-id>"
+          name: mihomo
+          ipv4_address: "172.17.0.2/16"
+          ipv6_address: ""
   containers:
     - id: "..."
       name: mihomo

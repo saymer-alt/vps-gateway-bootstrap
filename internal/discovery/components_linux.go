@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -92,25 +93,92 @@ func (c *Collector) collectDocker(ctx context.Context, r *Result) {
 		if e != nil {
 			addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", e.Error())
 		} else {
-			ipam, ambiguous, seen, perr := parseDockerNetworkInspect(out)
+			facts, perr := parseDockerNetworkInspect(out)
 			if perr != nil {
 				addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", "parse: "+perr.Error())
 			} else {
 				for i := range r.Docker.Networks {
-					if cfg, ok := ipam[r.Docker.Networks[i].Name]; ok {
+					if cfg, ok := facts.ipam[r.Docker.Networks[i].Name]; ok {
 						r.Docker.Networks[i].Subnet = cfg.Subnet
 						r.Docker.Networks[i].Gateway = cfg.Gateway
 					}
 				}
-				for name, count := range ambiguous {
+				for name, count := range facts.ambiguous {
 					addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("network %q has %d IPAM configurations; the single-subnet model cannot represent it", name, count))
 				}
 				for _, n := range r.Docker.Networks {
-					if _, wasSeen := seen[n.Name]; !wasSeen && !skipped[n.Name] {
+					if _, wasSeen := facts.seen[n.Name]; !wasSeen && !skipped[n.Name] {
 						addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("network %q was listed but is absent from the inspect output", n.Name))
 					}
 				}
+				// ZAI-69: attachment evidence from the SAME payload —
+				// typed per network, with an explicit inventory status
+				// for every network the inspect covered.
+				for i := range r.Docker.Networks {
+					n := &r.Docker.Networks[i]
+					if status, ok := facts.attachStatus[n.Name]; ok {
+						n.AttachmentsStatus = status
+					}
+					if atts, ok := facts.attachments[n.Name]; ok {
+						n.Containers = atts
+					}
+					for _, note := range facts.attachMalformed[n.Name] {
+						addObservation(&r.Unknowns, "DOCKER_NETWORKS_UNKNOWN", "docker", fmt.Sprintf("network %q: %s", n.Name, note))
+					}
+				}
+				// Attachment identity is cross-referenced against the
+				// container listing collected moments earlier: an
+				// attachment the listing does not know is preserved
+				// (the inspect positively observed it) but surfaced as
+				// uncertainty — never silently accepted, never dropped.
+				inventory := map[string]bool{}
+				for _, ct := range r.Docker.Containers {
+					inventory[ct.ID] = true
+				}
+				for i := range r.Docker.Networks {
+					for _, a := range r.Docker.Networks[i].Containers {
+						if !inventory[a.ContainerID] {
+							addObservation(&r.Unknowns, "DOCKER_ATTACHMENT_ID_NOT_IN_INVENTORY", "docker", fmt.Sprintf("network %q: attached container %s is absent from the container listing", r.Docker.Networks[i].Name, displayToken(a.ContainerID)))
+						}
+					}
+				}
+				// An attachment address outside the network's single
+				// known IPAM pool is recorded as an anomalous observed
+				// fact — never rewritten, never dropped (ZAI-69 §8).
+				// Networks without exactly one usable IPv4 pool
+				// (ambiguous/absent IPAM, malformed subnet) cannot be
+				// checked and are skipped without claims.
+				for i := range r.Docker.Networks {
+					n := &r.Docker.Networks[i]
+					if n.Subnet == "" {
+						continue
+					}
+					pool, perr := netip.ParsePrefix(n.Subnet)
+					if perr != nil || !pool.Addr().Is4() {
+						continue
+					}
+					for _, a := range n.Containers {
+						if a.IPv4Address == "" || !canonicalDockerAddr(a.IPv4Address) {
+							continue
+						}
+						ap, aerr := netip.ParsePrefix(a.IPv4Address)
+						if aerr != nil || pool.Contains(ap.Addr()) {
+							continue
+						}
+						addObservation(&r.Observations, "DOCKER_ATTACHMENT_ADDRESS_OUTSIDE_POOL", "docker", fmt.Sprintf("network %q: container %s address %s is outside the IPAM pool %s", n.Name, a.ContainerID, a.IPv4Address, n.Subnet))
+					}
+				}
 			}
+		}
+	}
+	// Every network leaves collection with an explicit attachment
+	// status: whatever the inspect section decided above stands;
+	// anything it did not cover (command failure, parse failure,
+	// skipped unsafe name, listed-but-absent) is UNKNOWN — never an
+	// empty attachment set (UNKNOWN != absent).
+	for i := range r.Docker.Networks {
+		if r.Docker.Networks[i].AttachmentsStatus == "" {
+			r.Docker.Networks[i].AttachmentsStatus = AttachmentsUnknown
 		}
 	}
 }

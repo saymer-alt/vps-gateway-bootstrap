@@ -3,6 +3,7 @@ package awgspec
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -385,7 +386,10 @@ func TestImmutabilityAndOrderIndependence(t *testing.T) {
 		}
 	}
 	for i := range d.Networks {
-		if d.Networks[i] != beforeNetworks[i] {
+		// DockerNetwork gained a slice field (ZAI-69 attachments), so
+		// the snapshot comparison uses DeepEqual — the assertion is
+		// unchanged: no input network may be mutated.
+		if !reflect.DeepEqual(d.Networks[i], beforeNetworks[i]) {
 			t.Fatal("input networks must not be mutated")
 		}
 	}

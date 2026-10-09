@@ -79,38 +79,38 @@ func TestParseDockerPortMalformed(t *testing.T) {
 
 func TestParseDockerNetworkInspect(t *testing.T) {
 	out := []byte(`[{"Name":"bridge","IPAM":{"Config":[{"Subnet":"172.17.0.0/16","Gateway":"172.17.0.1"}]}},{"Name":"custom","IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}]`)
-	ipam, ambiguous, seen, err := parseDockerNetworkInspect(out)
+	facts, err := parseDockerNetworkInspect(out)
 	if err != nil { t.Fatalf("unexpected error: %v", err) }
-	if len(ambiguous) != 0 { t.Fatalf("ambiguous=%#v", ambiguous) }
-	if ipam["bridge"].Subnet != "172.17.0.0/16" || ipam["bridge"].Gateway != "172.17.0.1" { t.Fatalf("ipam=%#v", ipam) }
-	if ipam["custom"].Subnet != "172.18.0.0/16" { t.Fatalf("ipam=%#v", ipam) }
-	if !seen["bridge"] || !seen["custom"] { t.Fatalf("seen=%#v", seen) }
+	if len(facts.ambiguous) != 0 { t.Fatalf("ambiguous=%#v", facts.ambiguous) }
+	if facts.ipam["bridge"].Subnet != "172.17.0.0/16" || facts.ipam["bridge"].Gateway != "172.17.0.1" { t.Fatalf("ipam=%#v", facts.ipam) }
+	if facts.ipam["custom"].Subnet != "172.18.0.0/16" { t.Fatalf("ipam=%#v", facts.ipam) }
+	if !facts.seen["bridge"] || !facts.seen["custom"] { t.Fatalf("seen=%#v", facts.seen) }
 }
 
 func TestParseDockerNetworkInspectZeroConfigIsPositiveAbsence(t *testing.T) {
 	// none/host networks carry no IPAM configuration: the successful
 	// inspect proves their absence from the typed view.
 	out := []byte(`[{"Name":"none","IPAM":{"Config":[]}}]`)
-	ipam, ambiguous, seen, err := parseDockerNetworkInspect(out)
+	facts, err := parseDockerNetworkInspect(out)
 	if err != nil { t.Fatalf("unexpected error: %v", err) }
-	if len(ipam) != 0 || len(ambiguous) != 0 { t.Fatalf("ipam=%#v ambiguous=%#v", ipam, ambiguous) }
-	if !seen["none"] { t.Fatalf("seen=%#v", seen) }
+	if len(facts.ipam) != 0 || len(facts.ambiguous) != 0 { t.Fatalf("ipam=%#v ambiguous=%#v", facts.ipam, facts.ambiguous) }
+	if !facts.seen["none"] { t.Fatalf("seen=%#v", facts.seen) }
 }
 
 func TestParseDockerNetworkInspectMultiConfigIsAmbiguous(t *testing.T) {
 	out := []byte(`[{"Name":"pool","IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"},{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]`)
-	ipam, ambiguous, seen, err := parseDockerNetworkInspect(out)
+	facts, err := parseDockerNetworkInspect(out)
 	if err != nil { t.Fatalf("unexpected error: %v", err) }
-	if _, ok := ipam["pool"]; ok { t.Fatalf("an ambiguous network must not be recorded: %#v", ipam) }
-	if ambiguous["pool"] != 2 { t.Fatalf("ambiguous=%#v", ambiguous) }
-	if !seen["pool"] { t.Fatalf("seen=%#v", seen) }
+	if _, ok := facts.ipam["pool"]; ok { t.Fatalf("an ambiguous network must not be recorded: %#v", facts.ipam) }
+	if facts.ambiguous["pool"] != 2 { t.Fatalf("ambiguous=%#v", facts.ambiguous) }
+	if !facts.seen["pool"] { t.Fatalf("seen=%#v", facts.seen) }
 }
 
 func TestParseDockerNetworkInspectMalformedFails(t *testing.T) {
-	if _, _, _, err := parseDockerNetworkInspect([]byte(`[{"Name":`)); err == nil {
+	if _, err := parseDockerNetworkInspect([]byte(`[{"Name":`)); err == nil {
 		t.Fatal("malformed JSON must fail the parse")
 	}
-	if _, _, _, err := parseDockerNetworkInspect([]byte(`[{"Name":"a"},{"Name":"a"}]`)); err == nil {
+	if _, err := parseDockerNetworkInspect([]byte(`[{"Name":"a"},{"Name":"a"}]`)); err == nil {
 		t.Fatal("duplicate network names must fail the parse")
 	}
 }

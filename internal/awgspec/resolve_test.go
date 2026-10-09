@@ -3,6 +3,7 @@ package awgspec
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -368,7 +369,10 @@ func TestResolveInputImmutability(t *testing.T) {
 		}
 	}
 	for i := range in.Networks {
-		if in.Networks[i] != beforeNet[i] {
+		// DockerNetwork gained a slice field (ZAI-69 attachments), so
+		// the snapshot comparison uses DeepEqual — the assertion is
+		// unchanged: no input network may be mutated.
+		if !reflect.DeepEqual(in.Networks[i], beforeNet[i]) {
 			t.Fatal("network inputs must not be mutated")
 		}
 	}

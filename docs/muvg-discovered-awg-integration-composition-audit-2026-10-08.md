@@ -103,6 +103,15 @@ Four distinct levels, never interchangeable:
 Command-surface implication: **zero new commands**; the growth is a
 discovery-schema/model decision (owner-visible, not collector-surface).
 
+> **LANDED (ZAI-69):** decision A is implemented — the existing
+> `docker network inspect` parse now preserves the payload's
+> `Containers` map as typed `discovery.DockerNetworkContainer`
+> attachments with an explicit per-network attachment-inventory status
+> (OBSERVED/EMPTY/NOT_REPORTED/PARTIALLY_PARSED/UNKNOWN — UNKNOWN !=
+> absent); no new command, schema version unchanged (additive), zero
+> production consumers. Note:
+> `docker-network-attachment-discovery-2026-10-09.md`.
+
 ## 5. Missing collector decision B — container-observed address (§7)
 
 The SAME `Containers` map carries the address: `IPv4Address` is the

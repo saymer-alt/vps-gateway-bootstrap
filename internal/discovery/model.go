@@ -377,6 +377,56 @@ type DockerNetwork struct {
 	Driver  string `json:"driver"`
 	Subnet  string `json:"subnet,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// ZAI-69: attachment evidence preserved from the SAME
+	// `docker network inspect` payload the IPAM fields come from —
+	// no new command. AttachmentsStatus is always written on the
+	// collection path; the zero value (and the field's absence in older
+	// snapshots) means the attachment set was never established —
+	// NEVER that it is empty (UNKNOWN != absent).
+	Containers        []DockerNetworkContainer `json:"containers,omitempty"`
+	AttachmentsStatus string                   `json:"attachments_status,omitempty"`
+}
+
+// Attachment-inventory statuses (closed vocabulary), mapped onto the
+// repository's PRESENT/ABSENT/UNKNOWN family:
+//
+//	OBSERVED         → PRESENT: the Containers map was present in a
+//	                   successful inspect payload and every entry parsed
+//	                   cleanly (positive, complete inventory).
+//	EMPTY            → positively empty: the Containers map was present
+//	                   and explicitly empty under a successful inspect.
+//	NOT_REPORTED     → the payload carried no Containers field
+//	                   (UNKNOWN family — never empty).
+//	PARTIALLY_PARSED → the map was present but at least one entry was
+//	                   malformed; the typed inventory is incomplete
+//	                   (UNKNOWN family — never claimed complete).
+//	UNKNOWN          → the network was never covered by inspect output
+//	                   (command failure, parse failure, listed-but-
+//	                   absent, skipped unsafe name), or an older
+//	                   snapshot carried no status at all.
+const (
+	AttachmentsObserved    = "ATTACHMENTS_OBSERVED"
+	AttachmentsEmpty       = "ATTACHMENTS_EMPTY"
+	AttachmentsNotReported = "ATTACHMENTS_NOT_REPORTED"
+	AttachmentsPartial     = "ATTACHMENTS_PARTIALLY_PARSED"
+	AttachmentsUnknown     = "ATTACHMENTS_UNKNOWN"
+)
+
+// DockerNetworkContainer is one container-to-network attachment as
+// reported by the network-inspect Containers map (ZAI-69). ContainerID
+// is the map key — the full 64-hex Docker identity, never truncated and
+// never replaced by Name: Name is display metadata, not identity.
+// Addresses are preserved as reported (canonical "addr/prefix" strings
+// are validated at parse time; a value that fails validation stays
+// verbatim and the network's status becomes PARTIALLY_PARSED). An empty
+// IPv6Address is a normal absence (IPv4-only attachment), never an
+// error. These are Docker topology facts only — never an AWG identity,
+// client subnet, or host-visible source.
+type DockerNetworkContainer struct {
+	ContainerID string `json:"container_id"`
+	Name        string `json:"name,omitempty"`
+	IPv4Address string `json:"ipv4_address,omitempty"`
+	IPv6Address string `json:"ipv6_address,omitempty"`
 }
 
 type Gateway struct {
