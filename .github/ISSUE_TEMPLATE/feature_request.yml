@@ -1,0 +1,23 @@
+name: "Feature request"
+description: "Propose an improvement to vps-gateway-bootstrap"
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem to solve"
+      description: "Describe the real user or maintainer need."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Proposed behaviour"
+      description: "Desired outcome, non-goals, constraints and risks."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives and evidence"
+      description: "Other options or upstream references, if known."
