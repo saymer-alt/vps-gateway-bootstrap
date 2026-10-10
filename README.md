@@ -1,6 +1,18 @@
 # vps-gateway-bootstrap
 Production-oriented VPS bootstrap framework for building reliable network gateways with automated system setup, security, routing, VPN/proxy modules, diagnostics and recovery.
 
+## Status
+
+Early-stage and deliberately safety-first: the useful surface today is read-only
+(`discover`, `doctor`, `validate`, `install --dry-run`, `apply --dry-run`, `tools/livedryrun`).
+Real mutations are confined by design to a single pinned, fingerprint-confirmed experiment
+(`fail2ban.service` repair) executed through the orchestrated Prepare → Confirm → Execute
+lifecycle. Generalized provisioning (system setup, routing, VPN/proxy modules) is designed
+and partially implemented as foundations, but intentionally locked until ownership-admission
+and recovery authorization are complete — see the widening moratorium in
+[`docs/HANDOFF-2026-09-28.md`](docs/HANDOFF-2026-09-28.md) §I. Do not expect a
+general "set up my VPS" command yet.
+
 ## Commands
 
 ```text
