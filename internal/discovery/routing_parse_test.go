@@ -250,7 +250,10 @@ func TestParseRouteInventoryUbuntu2404NoTableOnMain(t *testing.T) {
 			`{"type":"broadcast","dst":"192.0.2.255","dev":"eth0","table":"local","protocol":"kernel","scope":"link","prefsrc":"192.0.2.7","flags":[]},` +
 			`{"type":"local","dst":"127.0.0.0/8","dev":"lo","table":"local","protocol":"kernel","scope":"host","prefsrc":"127.0.0.1","flags":[]},` +
 			`{"dst":"fd00::1","dev":"eth0","protocol":"static","metric":1024,"flags":[],"pref":"medium"},` +
-			`{"dst":"fe80::/64","dev":"eth0","protocol":"kernel","metric":256,"flags":[],"pref":"medium"}]`))
+			`{"dst":"fe80::/64","dev":"eth0","protocol":"kernel","metric":256,"flags":[],"pref":"medium"},` +
+			// mihomo sing-tun adds an IPv6 default via its TUN in table
+			// 2022 with auto-route:false (live ZAI-78 evidence).
+			`{"dst":"default","gateway":"fd00:2022::2","dev":"tun9","table":"2022","metric":1024,"flags":[],"pref":"medium"}]`))
 	if err != nil {
 		t.Fatalf("the stock Ubuntu 24.04 shape must parse completely: %v", err)
 	}
@@ -270,7 +273,7 @@ func TestParseRouteInventoryUbuntu2404NoTableOnMain(t *testing.T) {
 		t.Fatalf("local table routes = %v", tables)
 	}
 	if len(defaults) != 2 {
-		t.Fatalf("defaults = %#v, want the v4 and v6 defaults", defaults)
+		t.Fatalf("defaults = %#v, want the v4 main default and the v6 2022 default", defaults)
 	}
 	fams := map[string]int{}
 	for _, d := range defaults {
