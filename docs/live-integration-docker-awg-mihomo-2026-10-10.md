@@ -204,6 +204,127 @@ apt-get purge -y docker.io && rm -f /var/lib/docker/... # or leave installed
   Mihomo process was started manually; no provenance chain (M1–M6)
   exists yet.
 
+
+
+## 10. ZAI-79 — autonomous AWG → Mihomo traffic integration (follow-up session)
+
+The full data path was demonstrated autonomously on the same host, at
+packet level, with the management network untouched.
+
+### 10.1 Topology (all host-network changes scoped + rolled back by design)
+
+```text
+awg-client-test (10.30.0.2, AllowedIPs 0.0.0.0/0, userspace TUN)
+    │ encrypted AWG UDP over the docker bridge (172.17.0.3→172.17.0.2:51820)
+    ▼
+awg-server-test (decrypts; ip_forward inside its netns)
+    │ decrypted TCP/UDP, source 10.30.0.2, via docker0
+    ▼ host: ip route 10.30.0.0/24 via 172.17.0.2 dev docker0
+    ▼ host: ip rule priority 5000: from 10.30.0.0/24 lookup 2030
+    │   table 2030: default dev mitun0 metric 100
+    │               unreachable default metric 42760   ← fail-secure pair
+    ▼ mitun0 (mihomo TUN, auto-route: false, stack: system)
+mihomo 1.19.31 — "doesn't match any rule using DIRECT"
+    ▼ re-originated from the host IP (5.175.236.76) via ens3
+```
+
+Scoped host-network change set (exact rollback in parentheses):
+`ip route add 10.30.0.0/24 via 172.17.0.2 dev docker0` (`ip route del`),
+`ip rule add from 10.30.0.0/24 lookup 2030 priority 5000` (`ip rule del`),
+table 2030 pair (`ip route flush table 2030`),
+`iptables -I DOCKER-USER 1 -i mitun0 -o docker0 -d 10.30.0.0/24 -j ACCEPT`
+(`iptables -D DOCKER-USER …`). Management traffic (SSH/owner IPs) never
+matches any of these — they match only the AWG test subnet 10.30.0.0/24.
+
+### 10.2 Verified packet path (three captured planes)
+
+1. **Encrypted plane (docker0):** AWG UDP between the containers
+   (172.17.0.3:51821 ↔ 172.17.0.2:51820) — alongside it, the DECRYPTED
+   forwarded traffic.
+2. **Decrypted plane (mitun0):** `10.30.0.2:50646 > 1.1.1.1:80 SYN` →
+   mihomo's TUN stack answers `SYN-ACK` → client `ACK` → `GET /
+   HTTP/1.1` → `301` delivered back into the tunnel. The real
+   conversation with the true client source, inside the TUN.
+3. **Egress plane (ens3):** mihomo re-originates:
+   `5.175.236.76.56984 > 1.1.1.1:80 SYN → S. → GET / → 301`. The client
+   address 10.30.0.2 NEVER appears on ens3 (proxy semantics: mihomo
+   terminates and re-originates).
+   mihomo's own log attributes every connection:
+   `[TCP] 10.30.0.2:50646 --> 1.1.1.1:80 ... using DIRECT`.
+
+4. **Host-visible decrypted source:** a host-local HTTP server logged
+   the request from **10.30.0.2** — the decrypted AWG client source
+   arriving on the host — with the full TCP handshake visible on
+   docker0. This moves the ZAI-64 host-visible-source question from
+   UNKNOWN to OBSERVED for THIS topology (a bridge-networked AWG
+   container whose decrypted traffic reaches the host), matching the
+   documented §5.5 selector semantics ("for bridge-networked AWG
+   containers the Docker network IPAM subnet … post-container-NAT").
+   It is OBSERVED evidence for this specific test configuration — not
+   yet a production-verified selector (no service correlation, no
+   snapshot contract).
+
+### 10.3 Failure behavior (live-tested)
+
+- **mihomo stop:** mitun0 disappears, table 2030 falls to the
+  `unreachable default metric 42760` — the client receives explicit
+  "Host is unreachable" and tcpdump confirms **NO egress anywhere**
+  (fail-closed blackhole; the main-table fall-through leak is
+  structurally impossible while the fail-secure pair is in place).
+  Operational finding: the `default dev mitun0 metric 100` route must
+  be re-added after a mihomo restart (it dies with the interface) —
+  exactly the job of a supervisor/watchdog (the amnezia-mihomo-gateway
+  pattern; the project's watchdog would own this step).
+- **mihomo restart + route re-add:** full path recovers (real HTML
+  response end-to-end, mihomo logs the new connections).
+- **AWG server restart:** the tunnel re-established autonomously via
+  the 5 s persistent keepalive (handshake re-done ~1-2 min later;
+  transfer counters advanced; ping 0.5 ms; full path re-verified with
+  a completing HTTP fetch). A short outage window during re-handshake
+  is expected WireGuard behavior.
+
+### 10.4 Resource measurements (913 MiB physical RAM host)
+
+| Component | Memory | CPU during test traffic |
+|---|---|---|
+| awg-client-test | 10.7 MiB | ~0.04% |
+| awg-server-test | 4.5 MiB | ~0.03% |
+| mihomo 1.19.31 (userspace TUN, system stack) | ~10-15 MiB RSS | low single-digit % |
+| Docker daemon + system baseline | ~490 MiB total used | — |
+
+No OOM events; swap usage peaked at 6.5 MB of 1.5 GiB. The complete
+stack (Docker + 2 AWG containers + mihomo + discovery) operates
+comfortably on the 913 MiB host with 1.5 GiB swap.
+
+### 10.5 Discovery at the final topology
+
+Status PARTIAL (the two known uncertainties only). The discovery
+captured the complete live topology exactly: RPDB rule 5000
+(from 10.30.0.0/24 → 2030), table 2030 with the unicast+unreachable
+pair (families correctly ipv4), tables 2022/254/255, all six
+interfaces, mihomo installed+version (PATH-extended). The ZAI-73
+assembler + the real evaluator on this evidence: PARTIAL_INPUT_
+ASSEMBLED, all five missing facts, evaluator BLOCKED
+(AUTO_ROUTE_UNKNOWN) — fail-closed held on the most complete live
+topology yet.
+
+### 10.6 What this stage proved (and did not)
+
+PROVEN at packet level: AWG handshake, real decrypted traffic, the
+decrypted source arriving host-visible (10.30.0.2), the steering into
+mihomo's TUN, mihomo DIRECT egress with re-origination, the fail-
+secure blackhole on mihomo failure, autonomous tunnel recovery, and
+SSH/management preservation throughout.
+
+STILL UNKNOWN/NOT PROVEN: production service correlation (the mihomo
+process here is manually run — no M1–M6 chain); a verified selector
+under the project's full admission contract; end-to-end leak safety
+through a REAL proxy egress (this test used mihomo DIRECT — a real
+proxy hop would need a configured outbound, out of scope here);
+IPv6 coverage (the steering rule is IPv4-only; mihomo's IPv6 TUN
+side exists but no v6 policy path was created — reported explicitly,
+IPv6 NOT silently disabled).
+
 ## 9. Recommended next test
 
 An external AWG client (the owner's phone/laptop with a test-only
