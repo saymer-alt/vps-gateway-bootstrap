@@ -228,6 +228,69 @@ func TestEvaluateRouteGetProofOverridesStaticAnalysis(t *testing.T) {
 	}
 }
 
+// TestEvaluateIPv6DefaultDoesNotFabricateAmbiguity is the ZAI-78
+// live-host regression: current iproute2 mixes address families in the
+// `table all` dump, and mihomo's sing-tun adds an IPv6 default via its
+// TUN in an unruled table (2022). An IPv6 default is out of the
+// evaluator's documented IPv4 scope — it must never fabricate
+// table-default ambiguity for the IPv4 question, and it must never be
+// selected as the IPv4 escape path.
+func TestEvaluateIPv6DefaultDoesNotFabricateAmbiguity(t *testing.T) {
+	in := baseInput()
+	// main: the v4 default via ens3 PLUS an IPv6 default via ens3, and
+	// an unruled table 2022 whose only route is an IPv6 default via a
+	// DIFFERENT device (the live mihomo shape).
+	in.Routing.Tables = append(in.Routing.Tables, discovery.RouteTable{
+		ID: 2022, Name: "2022", Routes: []discovery.Route{
+			{Destination: "default", Gateway: "fdfe:dcba:9876::2", Device: "mitun0", Table: "2022", Type: "unicast", Family: "ipv6", Status: identity.FieldStatusPresent},
+		},
+	})
+	for i := range in.Routing.Tables {
+		if in.Routing.Tables[i].ID == 254 {
+			in.Routing.Tables[i].Routes = append(in.Routing.Tables[i].Routes,
+				discovery.Route{Destination: "default", Gateway: "2001:db8::1", Device: "ens3", Table: "254", Type: "unicast", Family: "ipv6", Status: identity.FieldStatusPresent})
+		}
+	}
+	// TUN-gone scenario: the walk falls through to main. The IPv6
+	// default must not fabricate ambiguity; the v4 default via ens3 is
+	// the proven direct path (UNSAFE).
+	in.Interfaces = nil
+	in.RouteGet = nil
+	got, err := Evaluate(in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if containsReason(got, ReasonTableDefaultAmbiguous) {
+		t.Fatalf("an IPv6 default must not fabricate table-default ambiguity: %v", got.Reasons)
+	}
+	if got.Status != StatusUnsafe || !containsReason(got, ReasonMainFallthrough) {
+		t.Fatalf("status = %q (%v), want UNSAFE via the IPv4 main fall-through", got.Status, got.Reasons)
+	}
+	// The table-2022 IPv6 default is never selected as an escape path
+	// even when a rule WOULD resolve there — the family filter keeps the
+	// IPv4 scope honest.
+	rulesWith2022 := []discovery.Rule{
+		{Priority: 100, From: "172.29.172.0/24", Table: 100, TableRaw: "100", Status: identity.FieldStatusPresent},
+		{Priority: 200, From: "172.29.172.0/24", Table: 2022, TableRaw: "2022", Status: identity.FieldStatusPresent},
+	}
+	in2 := baseInput()
+	in2.Routing.Rules = rulesWith2022
+	in2.Routing.Tables = append(in2.Routing.Tables, discovery.RouteTable{
+		ID: 2022, Name: "2022", Routes: []discovery.Route{
+			{Destination: "default", Gateway: "fdfe:dcba:9876::2", Device: "mitun0", Table: "2022", Type: "unicast", Family: "ipv6", Status: identity.FieldStatusPresent},
+		},
+	})
+	got2, err := Evaluate(in2)
+	if err != nil {
+		t.Fatalf("Evaluate(2022 rule): %v", err)
+	}
+	// Table 2022 has no IPv4 default → the walk continues; with the TUN
+	// path present the classification stays SAFE (not ambiguous).
+	if got2.Status != StatusSafe {
+		t.Fatalf("status = %q (%v), want SAFE (the 2022 IPv6 default is out of scope, not ambiguity)", got2.Status, got2.Reasons)
+	}
+}
+
 func TestEvaluateNotConfigured(t *testing.T) {
 	in := baseInput()
 	in.IntentConfigured = false

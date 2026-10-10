@@ -493,9 +493,21 @@ const (
 func tableDefault(group discovery.RouteTable) (discovery.Route, defaultKind, bool) {
 	var candidates []discovery.Route
 	for _, r := range group.Routes {
-		if isDefaultRoute(r) {
-			candidates = append(candidates, r)
+		if !isDefaultRoute(r) {
+			continue
 		}
+		// Scope (package header): IPv4 policy-routing semantics, v1.
+		// The `table all` dump mixes address families on current
+		// iproute2, and an IPv6 default via a different device would
+		// otherwise fabricate table-default ambiguity for a purely
+		// IPv4 question (ZAI-78 live evidence: mihomo's unruled table
+		// 2022 IPv6 default). IPv6 defaults are out of scope here, not
+		// evidence of an IPv4 escape path. Legacy snapshots without a
+		// family keep the old behavior.
+		if r.Family == "ipv6" {
+			continue
+		}
+		candidates = append(candidates, r)
 	}
 	if len(candidates) == 0 {
 		return discovery.Route{}, noDefault, false

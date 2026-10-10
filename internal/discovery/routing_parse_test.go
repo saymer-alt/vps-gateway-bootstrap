@@ -269,8 +269,26 @@ func TestParseRouteInventoryUbuntu2404NoTableOnMain(t *testing.T) {
 	if !ok || len(local.Routes) != 3 {
 		t.Fatalf("local table routes = %v", tables)
 	}
-	if len(defaults) != 1 || defaults[0].Destination != "0.0.0.0/0" || defaults[0].Device != "eth0" || defaults[0].Table != "main" {
-		t.Fatalf("defaults = %#v", defaults)
+	if len(defaults) != 2 {
+		t.Fatalf("defaults = %#v, want the v4 and v6 defaults", defaults)
+	}
+	fams := map[string]int{}
+	for _, d := range defaults {
+		fams[d.Family]++
+	}
+	if fams["ipv4"] != 1 || fams["ipv6"] != 1 {
+		t.Fatalf("families = %v, want one ipv4 and one ipv6 default (family-blind parsing mislabeled IPv6 as ipv4)", fams)
+	}
+	for _, tb := range tables {
+		for _, r := range tb.Routes {
+			want := "ipv4"
+			if strings.Contains(r.Destination, ":") || strings.Contains(r.Gateway, ":") {
+				want = "ipv6"
+			}
+			if r.Family != want {
+				t.Fatalf("route %s via %s: family %q, want %q", r.Destination, r.Gateway, r.Family, want)
+			}
+		}
 	}
 }
 

@@ -234,6 +234,19 @@ func parseRouteEntry(e map[string]any) (Route, string, error) {
 	if err != nil {
 		return route, "", err
 	}
+	// Family derivation: the `table all` dump mixes address families on
+	// current iproute2 (observed live on Ubuntu 24.04 — IPv6 main/2022
+	// entries appear in the same JSON array as IPv4 ones) and carries no
+	// family field. An address containing ':' is IPv6; everything else
+	// stays IPv4. Family-blind parsing mislabeled IPv6 defaults as ipv4
+	// (ZAI-78 live evidence). The gateway must be checked too: an IPv6
+	// default carries the literal dst "default" and is distinguishable
+	// only by its gateway.
+	if strings.Contains(dst, ":") {
+		route.Family = "ipv6"
+	} else if gw, ok := e["gateway"].(string); ok && strings.Contains(gw, ":") {
+		route.Family = "ipv6"
+	}
 	// The table token is a JSON number on current iproute2 and a symbolic
 	// string on some versions; both are accepted and preserved.
 	//
