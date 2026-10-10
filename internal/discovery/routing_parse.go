@@ -236,12 +236,20 @@ func parseRouteEntry(e map[string]any) (Route, string, error) {
 	}
 	// The table token is a JSON number on current iproute2 and a symbolic
 	// string on some versions; both are accepted and preserved.
+	//
+	// iproute2 omits the table attribute for MAIN-table entries in a
+	// `table all` dump (the attribute is printed only when the table is
+	// not main): observed live on Ubuntu 24.04 (iproute2 6.x), where
+	// default/link/IPv6 main-table entries carry no "table" key while
+	// local/broadcast entries carry "table":"local". An absent table in
+	// this dump is therefore unambiguously the main table — assigned the
+	// literal token "main", never guessed per-entry from other fields.
 	_, tableRaw, present, err := parseTableToken(e, "table")
 	if err != nil {
 		return route, "", err
 	}
 	if !present {
-		return route, "", fmt.Errorf("table: required field missing")
+		tableRaw = "main"
 	}
 	route.Destination = dst
 	route.Table = tableRaw

@@ -233,6 +233,47 @@ func TestParseRouteInventoryVariants(t *testing.T) {
 	}
 }
 
+// TestParseRouteInventoryUbuntu2404NoTableOnMain is the ZAI-77 live-host
+// regression: Ubuntu 24.04 iproute2 omits the table attribute for
+// main-table entries in `ip -j route show table all` (default, link and
+// IPv6 routes), while local/broadcast entries carry "table":"local".
+// The inventory must parse completely, group the no-table entries under
+// main (254), and extract the default — never fail closed on the stock
+// shape of a supported target.
+func TestParseRouteInventoryUbuntu2404NoTableOnMain(t *testing.T) {
+	// Real captured shape, sanitized to TEST-NET (192.0.2.x, fd00::/32).
+	tables, defaults, err := parseRouteInventory([]byte(
+		`[{"dst":"default","gateway":"192.0.2.1","dev":"eth0","protocol":"static","flags":[]},` +
+			`{"dst":"192.0.2.0/24","dev":"eth0","protocol":"kernel","scope":"link","prefsrc":"192.0.2.7","flags":[]},` +
+			`{"dst":"192.0.2.1","dev":"eth0","protocol":"static","scope":"link","flags":[]},` +
+			`{"type":"local","dst":"192.0.2.7","dev":"eth0","table":"local","protocol":"kernel","scope":"host","prefsrc":"192.0.2.7","flags":[]},` +
+			`{"type":"broadcast","dst":"192.0.2.255","dev":"eth0","table":"local","protocol":"kernel","scope":"link","prefsrc":"192.0.2.7","flags":[]},` +
+			`{"type":"local","dst":"127.0.0.0/8","dev":"lo","table":"local","protocol":"kernel","scope":"host","prefsrc":"127.0.0.1","flags":[]},` +
+			`{"dst":"fd00::1","dev":"eth0","protocol":"static","metric":1024,"flags":[],"pref":"medium"},` +
+			`{"dst":"fe80::/64","dev":"eth0","protocol":"kernel","metric":256,"flags":[],"pref":"medium"}]`))
+	if err != nil {
+		t.Fatalf("the stock Ubuntu 24.04 shape must parse completely: %v", err)
+	}
+	byID := map[int]RouteTable{}
+	for _, tb := range tables {
+		byID[tb.ID] = tb
+	}
+	main, ok := byID[254]
+	if !ok {
+		t.Fatalf("the no-table entries must group under main (254): tables=%v", tables)
+	}
+	if len(main.Routes) != 5 {
+		t.Fatalf("main routes = %d, want 5 (v4 default + link + gateway + 2 IPv6)", len(main.Routes))
+	}
+	local, ok := byID[255]
+	if !ok || len(local.Routes) != 3 {
+		t.Fatalf("local table routes = %v", tables)
+	}
+	if len(defaults) != 1 || defaults[0].Destination != "0.0.0.0/0" || defaults[0].Device != "eth0" || defaults[0].Table != "main" {
+		t.Fatalf("defaults = %#v", defaults)
+	}
+}
+
 func TestParseRouteInventoryMalformedFailsClosed(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -241,7 +282,9 @@ func TestParseRouteInventoryMalformedFailsClosed(t *testing.T) {
 	}{
 		{"missing dst", `{"dev":"eth0","table":254}`, "dst"},
 		{"malformed dst", `{"dst":[],"table":254}`, "dst"},
-		{"missing table", `{"dst":"default","dev":"eth0"}`, "table"},
+		// A missing table field is NOT a failure: iproute2 omits the
+		// table attribute for main-table entries in a `table all` dump
+		// (ZAI-77 live evidence, Ubuntu 24.04) — it means main.
 		{"malformed table", `{"dst":"default","table":{"id":1}}`, "table"},
 		{"malformed gateway", `{"dst":"default","gateway":[],"table":254}`, "gateway"},
 		{"invalid gateway address", `{"dst":"default","gateway":"not-an-ip","table":254}`, "gateway"},
