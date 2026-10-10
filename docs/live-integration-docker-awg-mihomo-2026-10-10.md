@@ -325,6 +325,102 @@ IPv6 coverage (the steering rule is IPv4-only; mihomo's IPv6 TUN
 side exists but no v6 policy path was created — reported explicitly,
 IPv6 NOT silently disabled).
 
+
+
+## 11. ZAI-80 — live MUVG dry-run and local proxy-hop verification
+
+### 11.1 Live CLI on the integrated topology (all read-only)
+
+| Command | Exit | Result |
+|---|---|---|
+| `discover` | 0 | status PARTIAL (only the two known uncertainties) |
+| `doctor` | 0 | WARN: honest 913 MB memory note + unknowns surfaced |
+| `validate` | 0 | **PASS** — 5 default routes, no false ambiguity |
+| `validate --production` | 3 | honest FAIL: MEMORY 913 < 1024 + 3 undiscovered areas |
+| `install --dry-run` (no config) | 0 | READY, 0 actions |
+| `install --dry-run --config muvg-test.json` | 0 | READY, 0 actions |
+
+The explicit-MUVG configuration (`{"muvg":{"source":{"mode":"explicit",
+"subnet":"10.30.0.0/24"},"mss_clamp":false}}`) was ACCEPTED by the
+strict parser — proven by the negative probe: an invalid muvg config
+(host bits set) is rejected at exit 1 with the exact JSON-path error
+`muvg.source.subnet: host bits are set, use the canonical form
+"10.30.0.0/24"`. The wiring boundary is therefore precise: the intent
+is parsed and validated, but the planner never consumes it — the plan
+stays 0 actions and the output never mentions muvg (NOT_WIRED, the
+documented ZAI-68 boundary).
+
+### 11.2 Dry-run zero-mutation verification
+
+Before/after host snapshots (routes v4+v6, RPDB, table 2030/2022,
+iptables-save, addresses, containers, networks, mihomo process+TUN,
+services, memory): the diff contains ONLY live-counter noise
+(iptables packet counters, iptables-save timestamps, container
+"Up X minutes" strings, free -h live values, the capture script's own
+pgrep entry). ZERO structural mutations. SSH active throughout.
+
+### 11.3 LOCAL_PROXY_HOP_VERIFIED (same-host proxy; no geographic claim)
+
+Proxy endpoint: a SECOND instance of the same verified mihomo binary
+as a pure credentialed SOCKS endpoint (`mixed-port: 7892` bound to
+127.0.0.1, `authentication: testuser:testpass` — fresh test-only
+credentials, loopback-only, no exposure). TUN-mihomo got an outbound
+`socks5 test-socks` (same credentials) + `rules: [MATCH,test-socks]`.
+
+**DIRECT baseline:** client fetch works, ZERO packets on lo:7892, no
+proxy log, ens3 shows the host-source re-origination.
+
+**Proxy hop — five independent evidence points:**
+1. mitun0: `10.30.0.2:35586 > 1.1.1.1:80 SYN` (client source entering
+   the TUN);
+2. tun-mihomo log: `[TCP] 10.30.0.2:35586 --> 1.1.1.1:80 match Match
+   using test-socks` (proxy selection);
+3. **lo:7892 packet capture**: the SOCKS5 exchange on loopback
+   (handshake + the 3-byte greeting) — the packet-level proof of the
+   proxy hop, absent in the DIRECT baseline;
+4. proxy-mihomo log: inbound `127.0.0.1:36324 --> 1.1.1.1:443 ...
+   using DIRECT` (post-authentication);
+5. ens3 egress from the proxy-mihomo process + the client receiving
+   the real response.
+
+Classification: **LOCAL_PROXY_HOP_VERIFIED** — a same-host proxy
+cannot demonstrate a geographic exit change (explicitly not claimed);
+an external proxy hop remains NOT_TESTED.
+
+### 11.4 Proxy failure behavior (fail-closed, non-fallback rule)
+
+With `MATCH,test-socks` (explicitly non-fallback) and the proxy
+killed: tun-mihomo logs repeated `dial test-socks ... connect:
+connection refused`, the client gets an error, and the ens3 egress
+count during the outage is **0** — the policy BLOCKS (fail-closed);
+it does NOT fall back to DIRECT. Not labeled fail-closed would be
+wrong for any fallback; there is none here.
+
+### 11.5 RAM threshold analysis (documented, NOT changed)
+
+`internal/validate/validate.go` compares
+`System.Memory.TotalMB < 1024`. TotalMB derives from the kernel's
+MemTotal, which always excludes reserved/kernel memory: this 1 GiB-
+nominal host reports 913 MiB and a nominal-1024-MB VPS would report
+~990 MiB — both REJECTED by the current threshold. The gate is an
+intentional conservative production requirement; the measured
+ZAI-79/80 workload (full stack ~490-540 MiB used, no OOM, swap
+barely touched) would support a lower minimum, but changing the
+threshold is an owner decision (a nominal-vs-visible-RAM semantics
+choice: compare against nominal plan RAM or kernel MemTotal, with
+regression cases for 512 MiB / 913 MiB / 2 GiB hosts). Left
+unchanged per the task boundary.
+
+### 11.6 Config restoration
+
+TUN-mihomo was restored to its original config (backup
+`config.yaml.pre-proxyhop` kept); the proxy-hop config is preserved
+as `config.yaml`-in-backup only in the report text above; the
+proxy-mihomo endpoint files remain under `/root/zai78/proxy-mihomo/`
+(stopped) with the documented start command. Full AWG→mihomo→DIRECT
+path re-verified working after restoration; SSH and default routes
+intact throughout.
+
 ## 9. Recommended next test
 
 An external AWG client (the owner's phone/laptop with a test-only
