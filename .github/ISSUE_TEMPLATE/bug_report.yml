@@ -1,0 +1,33 @@
+name: "Bug report"
+description: "Report a reproducible problem with vps-gateway-bootstrap"
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "No credentials, private keys, real VPS identifiers, sensitive logs, or undisclosed vulnerability details. Do not report vulnerabilities publicly."
+  - type: textarea
+    id: summary
+    attributes:
+      label: "What happened? What was expected?"
+      description: "Include the actual and expected outcomes."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Minimal steps to reproduce"
+      description: "Use safe read-only reproduction or synthetic fixtures; no real server credentials."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Versions and environment"
+      description: "Software versions, OS, architecture, affected release or workflow tag."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Redacted evidence"
+      description: "Relevant sanitized CI logs, commands and test outcomes (optional)."
