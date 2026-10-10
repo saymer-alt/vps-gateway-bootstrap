@@ -283,8 +283,28 @@ func ParseMihomoTUNConfig(data []byte, prov Provenance) ConfigEvidence {
 			res.Reasons = append(res.Reasons, "a tun mapping line is not a key/value pair")
 			return res
 		}
+		relevant := key == "enable" || key == "auto-route" || key == "device"
+		if key == "<<" {
+			// A merge key injects entries into the whole mapping —
+			// including the relevant keys — so it is rejected even
+			// under otherwise-irrelevant keys.
+			res.Status = ConfigUnsupported
+			res.Reasons = append(res.Reasons, "a merge key is outside the strict subset")
+			return res
+		}
 		value, why, ok := plainScalar(rest)
 		if !ok {
+			if !relevant {
+				// A non-scalar value on an IRRELEVANT key (e.g. the
+				// common `dns-hijack: []` idiom) does not affect the
+				// relevant interpretation: it is skipped, never
+				// retained. Multi-line flow constructions still fail
+				// via the indentation check above; relevant keys keep
+				// the full strict-subset rejection (live ZAI-78
+				// evidence: real Mihomo configs carry empty flow
+				// sequences).
+				continue
+			}
 			res.Status = ConfigUnsupported
 			res.Reasons = append(res.Reasons, why)
 			return res

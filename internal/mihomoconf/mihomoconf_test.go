@@ -253,6 +253,30 @@ func TestParseEmptyInput(t *testing.T) {
 	}
 }
 
+// ZAI-78 live-evidence regression: real Mihomo configs carry empty
+// (and non-empty) flow sequences on irrelevant keys — the common
+// `dns-hijack: []` idiom. Such values are skipped without affecting
+// the relevant interpretation; merge keys stay universally rejected;
+// relevant keys keep the strict subset.
+func TestParseIrrelevantFlowValuesSkipped(t *testing.T) {
+	res := ParseMihomoTUNConfig([]byte("tun:\n  enable: true\n  device: mitun0\n  auto-route: false\n  dns-hijack: []\n  exclude-package: [com.example]\n"), baseProv())
+	if res.Status != ConfigObserved || res.TUN.Enable != EnableTrue ||
+		res.TUN.Device != "mitun0" || res.TUN.AutoRoute != AutoRouteFalse {
+		t.Fatalf("status = %s tun = %#v", res.Status, res.TUN)
+	}
+	// A merge key injects into the mapping (including relevant keys):
+	// rejected even on an irrelevant line.
+	res = ParseMihomoTUNConfig([]byte("defaults: &d\n  enable: true\ntun:\n  <<: *d\n"), baseProv())
+	if res.Status != ConfigUnsupported {
+		t.Fatalf("merge key under tun: status = %s, want CONFIG_UNSUPPORTED", res.Status)
+	}
+	// A relevant key keeps the strict subset: flow values rejected.
+	res = ParseMihomoTUNConfig([]byte("tun:\n  enable: {value: true}\n"), baseProv())
+	if res.Status != ConfigUnsupported {
+		t.Fatalf("relevant-key flow: status = %s, want CONFIG_UNSUPPORTED", res.Status)
+	}
+}
+
 // 25/26: comments and irrelevant ordinary fields do not disturb the
 // relevant interpretation.
 func TestParseCommentsAndIrrelevantFields(t *testing.T) {
