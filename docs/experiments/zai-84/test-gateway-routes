@@ -1,0 +1,89 @@
+#!/bin/sh
+# Owner-authorized disposable ZAI-84 experiment ONLY. Not a bootstrap executor.
+set -eu
+export LC_ALL=C
+egress_guard() {
+    # mangle/FORWARD runs before Docker/UFW filter ACCEPT and before NAT.
+    # Host-originated management traffic never traverses this chain.
+    if iptables -w 5 -t mangle -C FORWARD -s 10.30.0.0/24 ! -o mitun0 -m comment --comment ZAI85-client-failclosed -j DROP 2>/dev/null; then
+        :
+    else
+        status=$?
+        [ "$status" = 1 ] || return "$status"
+        iptables -w 5 -t mangle -I FORWARD 1 -s 10.30.0.0/24 ! -o mitun0 -m comment --comment ZAI85-client-failclosed -j DROP
+    fi
+    forward=$(iptables -w 5 -t mangle -S FORWARD)
+    first=$(printf '%s\n' "$forward" | awk '/^-A / {print; exit}')
+    [ "$first" = '-A FORWARD -s 10.30.0.0/24 ! -o mitun0 -m comment --comment ZAI85-client-failclosed -j DROP' ] || {
+        echo 'Client egress guard is not first in mangle/FORWARD' >&2; return 1;
+    }
+}
+guard() {
+    egress_guard
+    # A fresh boot may have no table 2030 yet. Query all tables so this is
+    # explicit absence, rather than swallowing an iproute2 read failure.
+    all_routes=$(ip -4 route show table all)
+    defaults=$(printf '%s\n' "$all_routes" | awk '/ table 2030( |$)/ {gsub(/ table 2030/, ""); $1=$1; print}')
+    if printf '%s\n' "$defaults" | grep -Ev '^$|^unreachable default metric 42760 *$|^default dev mitun0 scope link metric 100 *$' | grep -q .; then
+        echo 'Unexpected route in table 2030' >&2; return 1
+    fi
+    rules=$(ip -4 rule show)
+    # This disposable topology has exactly these system rules. Fail on any
+    # unmodelled rule, including earlier selectors, marks, throws or goto.
+    normalized=$(printf '%s\n' "$rules" | awk '{$1=$1; print}')
+    printf '%s\n' "$normalized" | awk '
+        $0 == "0: from all lookup local" {local++; next}
+        $0 == "5000: from 10.30.0.0/24 lookup 2030" {client++; next}
+        $0 == "32766: from all lookup main" {main++; next}
+        $0 == "32767: from all lookup default" {fallback++; next}
+        {bad=1}
+        END {exit (bad || local != 1 || main != 1 || fallback != 1 || client > 1)}
+    ' || { echo 'Unexpected or duplicate IPv4 policy rule' >&2; return 1; }
+    at_priority=$(printf '%s\n' "$rules" | awk '$1 == "5000:"')
+    # Install the terminal fallback BEFORE admitting the client selector.
+    ip -4 route replace unreachable default table 2030 metric 42760
+    if [ -z "$at_priority" ]; then
+        ip -4 rule add from 10.30.0.0/24 lookup 2030 priority 5000
+    fi
+}
+case "${1:-}" in
+    firewall) egress_guard ;;
+    guard) guard ;;
+    tun)
+        guard
+        # Bounded startup readiness, not a background watchdog.
+        n=0
+        until ip link show dev mitun0 >/dev/null 2>&1; do
+            n=$((n + 1)); [ "$n" -lt 20 ] || exit 1
+            sleep 0.5
+        done
+        ip -4 route replace default dev mitun0 table 2030 metric 100
+        ;;
+    docker)
+        guard
+        # Only the already-discovered test server on the existing bridge.
+        n=0
+        until [ "$(docker inspect -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' awg-server-test 2>/dev/null)" = '172.17.0.2' ]; do
+            n=$((n + 1)); [ "$n" -lt 30 ] || exit 1
+            sleep 1
+        done
+        # The synthetic test client uses restart=no: Docker does not auto-start
+        # it on daemon restart. Start it only after the server owns .2.
+        [ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' awg-client-test)" = 'no' ] || {
+            echo 'Unexpected test client restart policy' >&2; exit 1;
+        }
+        docker start awg-client-test >/dev/null
+        [ "$(docker inspect -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' awg-client-test)" = '172.17.0.3' ] || {
+            echo 'Unexpected test client address' >&2; exit 1;
+        }
+        ip -4 route replace 10.30.0.0/24 via 172.17.0.2 dev docker0
+        if iptables -w 5 -C DOCKER-USER -d 10.30.0.0/24 -i mitun0 -o docker0 -j ACCEPT 2>/dev/null; then
+            :
+        else
+            status=$?
+            [ "$status" = 1 ] || exit "$status"
+            iptables -w 5 -I DOCKER-USER 1 -d 10.30.0.0/24 -i mitun0 -o docker0 -j ACCEPT
+        fi
+        ;;
+    *) echo 'Usage: test-gateway-routes firewall|guard|tun|docker' >&2; exit 2 ;;
+esac
