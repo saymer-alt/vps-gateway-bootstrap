@@ -326,16 +326,27 @@ inspect data and decrypted archives must never enter Git, PRs or public outputs.
 
 ## 6. Provider rescue readiness
 
-No provider account was opened or authenticated. Existing reports do not name
-the retail provider or confirm console credentials. Public
+No provider account was opened or authenticated. After the initial report,
+the owner identified the private hosting panel as
+[cloud.my-infra.eu](https://cloud.my-infra.eu/). An unauthenticated HTTPS request
+redirected to `/login` and returned the public page titled My Infra. Public
+response metadata suggests VirtFusion; this is an inference, not verified
+installed software/version or instance permissions. No login was attempted.
+Public
 [RIPE RDAP](https://rdap.db.ripe.net/ip/5.175.236.76) reports network NyaInfra,
 range 5.175.236.0/24, CH, GHOSTNET-MNT/ORG-NA1663-RIPE; this identifies address
-registration, not the seller of this VPS. Public search did not establish an
-authoritative provider-console document tied to this instance. Provider name
-was requested from the owner; it remains unknown at report preparation.
+registration, not an independent identification of the seller of this VPS.
+Public search did not establish a provider-specific console/rescue runbook.
+Upstream [VirtFusion documentation](https://docs.virtfusion.com/releases/v7/)
+describes VNC and rescue features. Its
+[rescue API reference](https://docs.virtfusion.com/api/enableServerRescue/)
+states that rescue starts a different boot environment and restarts the server;
+availability depends on permissions, enabled images and compatible hypervisors.
+This establishes a possible software capability, not availability on this
+private panel, this account or this VM. Do not invoke the API or activate rescue.
 
 **PROVIDER_RESCUE_NOT_CONFIRMED.** Do not substitute generic other-provider VNC
-instructions. Owner must identify the actual panel/service and verify usable
+instructions. The panel is now owner-identified; owner must still verify usable
 non-destructive console access, login method and the documented rescue path.
 Viewing a console page without a usable login is insufficient. Activating
 rescue/power controls is not authorized by this audit. A key-only SSH login
