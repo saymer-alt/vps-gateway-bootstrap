@@ -1,0 +1,54 @@
+#!/bin/sh
+# Owner-authorized disposable ZAI-84 experiment ONLY. Not a bootstrap executor.
+set -eu
+export LC_ALL=C
+guard() {
+    # A fresh boot may have no table 2030 yet. Query all tables so this is
+    # explicit absence, rather than swallowing an iproute2 read failure.
+    all_defaults=$(ip -4 route show table all default)
+    defaults=$(printf '%s\n' "$all_defaults" | awk '/ table 2030( |$)/ {gsub(/ table 2030/, ""); $1=$1; print}')
+    if printf '%s\n' "$defaults" | grep -Ev '^$|^unreachable default metric 42760 *$|^default dev mitun0 scope link metric 100 *$' | grep -q .; then
+        echo 'Conflicting default route in table 2030' >&2; return 1
+    fi
+    rules=$(ip -4 rule show)
+    at_priority=$(printf '%s\n' "$rules" | awk '$1 == "5000:"')
+    if [ -n "$at_priority" ] && [ "$at_priority" != "5000: from 10.30.0.0/24 lookup 2030" ]; then
+        # ip uses tabs; normalize whitespace before comparing.
+        normalized=$(printf '%s\n' "$at_priority" | awk '{$1=$1;print}')
+        [ "$normalized" = "5000: from 10.30.0.0/24 lookup 2030" ] || {
+            echo 'Conflicting policy rule at priority 5000' >&2; return 1;
+        }
+    fi
+    # Install the terminal fallback BEFORE admitting the client selector.
+    ip -4 route replace unreachable default table 2030 metric 42760
+    if [ -z "$at_priority" ]; then
+        ip -4 rule add from 10.30.0.0/24 lookup 2030 priority 5000
+    fi
+}
+case "${1:-}" in
+    guard) guard ;;
+    tun)
+        guard
+        # Bounded startup readiness, not a background watchdog.
+        n=0
+        until ip link show dev mitun0 >/dev/null 2>&1; do
+            n=$((n + 1)); [ "$n" -lt 20 ] || exit 1
+            sleep 0.5
+        done
+        ip -4 route replace default dev mitun0 table 2030 metric 100
+        ;;
+    docker)
+        guard
+        # Only the already-discovered test server on the existing bridge.
+        n=0
+        until [ "$(docker inspect -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' awg-server-test 2>/dev/null)" = '172.17.0.2' ]; do
+            n=$((n + 1)); [ "$n" -lt 30 ] || exit 1
+            sleep 1
+        done
+        ip -4 route replace 10.30.0.0/24 via 172.17.0.2 dev docker0
+        if ! iptables -C DOCKER-USER -d 10.30.0.0/24 -i mitun0 -o docker0 -j ACCEPT 2>/dev/null; then
+            iptables -I DOCKER-USER 1 -d 10.30.0.0/24 -i mitun0 -o docker0 -j ACCEPT
+        fi
+        ;;
+    *) echo 'Usage: test-gateway-routes guard|tun|docker' >&2; exit 2 ;;
+esac
