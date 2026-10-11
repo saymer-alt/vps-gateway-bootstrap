@@ -1,0 +1,25 @@
+[Unit]
+Description=ZAI-84 supervision of existing disposable Test Mihomo
+Requires=test-routing-guard.service
+After=network-online.target ufw.service test-routing-guard.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=exec
+WorkingDirectory=/root/zai78
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=/bin/sh -c '! pgrep -x mihomo >/dev/null'
+ExecStartPre=/root/zai78/mihomo -t -d /root/zai78/mihomo-config
+ExecStart=/root/zai78/mihomo -d /root/zai78/mihomo-config
+ExecStartPost=/usr/local/libexec/test-gateway-routes tun
+Restart=always
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
