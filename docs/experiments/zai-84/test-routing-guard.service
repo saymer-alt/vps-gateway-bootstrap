@@ -1,12 +1,15 @@
 [Unit]
 Description=ZAI-84 disposable client routing fail-secure guard
 Before=docker.service test-mihomo.service
+Requires=ufw.service
+After=ufw.service
 
 [Service]
 Type=oneshot
 Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/libexec/test-gateway-routes guard
 RemainAfterExit=yes
+TimeoutStartSec=30
 
 [Install]
 WantedBy=multi-user.target

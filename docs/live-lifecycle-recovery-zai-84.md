@@ -1,5 +1,14 @@
 # ZAI-84 — Test VPS lifecycle recovery and reboot readiness
 
+> ZAI-85 acceptance update (2026-10-11): this report preserves the original
+> experiment's observations. Current implementation, corrected security claims,
+> Docker address ordering, UFW integration, validation and rollback are documented
+> in [lifecycle-acceptance-zai-85.md](lifecycle-acceptance-zai-85.md).
+> ZAI-84's unreachable-only selector safety and one successful Docker restart
+> were insufficient. The old rollback entrypoint is retired; use the reviewed
+> `/root/zai85/rollback.sh` only to restore the weaker ZAI-84 deployment.
+> REBOOT_NOT_TESTED and full rollback NOT TESTED remain in force.
+
 Date: 2026-10-11. Starting HEAD and origin/main:
 `1e41c29c1f35a9b092472d9b2bfc43fcbfbd0872`; clean checkout.
 Only the owner-designated disposable Test VPS was accessed. Production access
@@ -16,7 +25,9 @@ No new host key was silently accepted. Credentials are outside Git.
 
 This is an explicitly owner-authorized, isolated live Test experiment, continuing
 ZAI-78..83. Its operational assets under `docs/experiments/zai-84/` are NOT
-production provisioning code, an apply executor, or a new authority path. The
+production provisioning code or an apply executor. They ARE a standalone
+mutation path outside orchestration, permitted only by the owner's explicit
+disposable Test authorization; this is not general AGENTS compliance. The
 bootstrap CLI, experiment pins, imports and production mutation gates are unchanged.
 
 ## Discovered defects
@@ -179,21 +190,24 @@ the owner confirms console/rescue access and approves the procedure below.
 
 ## Rollback and later reboot procedure
 
-For reverting supervision only, over verified SSH or the provider console:
+Historical ZAI-84 rollback below is RETIRED. Review found that stopping its
+required guard also stops Docker, without restoring Docker. It also does not
+clean ZAI-85 UFW integration. Its old entrypoint now refuses execution. For a
+reviewed emergency rollback to ZAI-84 (not to the unsupervised state), inspect
+`docs/experiments/zai-84/rollback-zai85.sh`, the backups and the ZAI-85 report,
+then run over verified SSH/provider console:
 
 ```sh
-systemd-run --unit=zai84-manual-rollback -p Type=oneshot \
-  -p RemainAfterExit=yes /root/zai84/rollback.sh
+systemd-run --unit=zai85-manual-rollback -p Type=oneshot \
+  /root/zai85/rollback.sh
 ```
 
-The script stops/disables the new supervisor and guard, restores the exact
-old route unit, removes new unit/drop-in/hook files, reloads systemd, starts
-the original binary/config with nohup if absent and restores the TUN route.
-RemainAfterExit keeps that fallback process in a retained systemd cgroup.
-It does not overwrite WARP or secrets, disable UFW, change SSH, or flush
-routing/firewall tables. Verify new SSH, one Mihomo, the route pair and AWG
-`warp=on`. This restores the original unsupervised state, including its boot
-limitations. The rollback was prepared and reviewed, not executed end to end.
+The replacement restores backed-up ZAI-84 units, hook and UFW files, explicitly
+orders container addresses and restarts Docker/Mihomo. It keeps WARP/config
+unchanged. It removes the new independent DROP only after WARP verification.
+This restores known weaker ZAI-84 security; prefer the hardened deployment.
+Full rollback has been reviewed, not executed end to end. Verify external SSH,
+one Mihomo, route pair and AWG `warp=on` after any rollback.
 
 For a future separately owner-approved reboot:
 
