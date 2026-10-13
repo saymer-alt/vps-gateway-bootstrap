@@ -48,6 +48,31 @@ sys.exit(rc)
 
 @unittest.skipUnless(os.name == 'posix', 'requires POSIX sh')
 class Routes(unittest.TestCase):
+    def test_rollback_server_ready_before_docker_post_start(self):
+        script = HOOK.with_name('rollback-zai85.sh').read_text()
+        start = script.index('docker start awg-server-test\n')
+        restart = script.index('systemctl restart docker.service\n')
+        # Execute the actual admission/restart segment against isolated mocks.
+        segment = script[min(start, restart):script.index('docker start awg-client-test\n')]
+        for address, expected in [('172.17.0.2', 0), ('172.17.0.9', 1)]:
+            harness = '''set -eu
+ready=no
+docker() {
+    case "$1" in
+        start) ready=yes ;;
+        inspect) echo "$ADDRESS" ;;
+    esac
+}
+systemctl() { [ "$ready" = yes ]; }
+''' + segment
+            result = subprocess.run(['sh', '-c', harness],
+                                    env=dict(os.environ, ADDRESS=address), capture_output=True)
+            self.assertEqual(result.returncode, expected, result.stderr)
+        self.assertNotIn('iptables -w 5 -t mangle -D', script)
+        self.assertNotIn('cp -a backup/test-gateway-routes', script)
+        self.assertNotIn('cp -a backup/ufw-', script)
+        self.assertNotIn('--restart=unless-stopped awg-client-test', script)
+
     def run_hook(self, mode, repeat=1, **state):
         with tempfile.TemporaryDirectory() as directory:
             d = Path(directory)
