@@ -48,6 +48,61 @@ sys.exit(rc)
 
 @unittest.skipUnless(os.name == 'posix', 'requires POSIX sh')
 class Routes(unittest.TestCase):
+    def test_rollback_check_read_only_and_missing_prerequisites(self):
+        script = HOOK.with_name('rollback-zai85.sh').read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            (d / 'backup').mkdir()
+            files = 'test-mihomo.service test-routing-guard.service test-route-restore.service docker-zai84.conf test-gateway-routes ufw-before.rules ufw-after.init config.sha256'.split()
+            for name in files:
+                (d / 'backup' / name).touch()
+            hook = d / 'hook'
+            hook.touch()
+            hook.chmod(0o700)
+            (d / 'after.init').touch()
+            (d / 'before.rules').touch()
+            # Redirect fixed file paths only in the fixture, never in production.
+            script = script.replace('/root/zai85', str(d)).replace('/usr/local/libexec/test-gateway-routes', str(hook)).replace('/etc/ufw/', str(d) + '/')
+            mock = '''#!/bin/sh
+echo "$0 $*" >> "$CALLS"
+case "${0##*/}:$*" in
+ hostname:*) echo "${HOST:-Test}" ;;
+ sha256sum:*) [ "${BAD:-}" != checksum ] ;;
+ systemctl:show*) [ "${BAD:-}" != unit ] && echo loaded ;;
+ docker:network*) [ "${BAD:-}" != network ] && echo 'bridge 172.17.0.0/16 false' ;;
+ docker:inspect*)
+   [ "${BAD:-}" != container ] || exit 1
+   case "$*" in *awg-server-test) echo 'bridge 172.17.0.2 unless-stopped';; *) echo 'bridge 172.17.0.3 no';; esac ;;
+ iptables:*) if [ "${BAD:-}" != firewall ]; then echo '-A FORWARD -s 10.30.0.0/24 ! -o mitun0 -m comment --comment ZAI85-client-failclosed -j DROP'; fi ;;
+ *) exit 99 ;;
+esac
+'''
+            for name in ('hostname', 'sha256sum', 'systemctl', 'docker', 'iptables'):
+                path = d / name
+                path.write_text(mock)
+                path.chmod(0o700)
+            cases = [('', 'Test', ''), ('', 'Other', 'hostname'),
+                     ('checksum', 'Test', 'checksum'), ('unit', 'Test', 'unit'),
+                     ('network', 'Test', 'bridge'), ('container', 'Test', 'container'),
+                     ('firewall', 'Test', 'DROP'), ('backup', 'Test', 'Missing backup'),
+                     ('hook', 'Test', 'hook')]
+            for bad, host, diagnostic in cases:
+                with self.subTest(bad=bad, host=host):
+                    if bad == 'backup': (d / 'backup' / files[0]).unlink()
+                    if bad == 'hook': hook.chmod(0o600)
+                    calls = d / 'calls'
+                    calls.write_text('')
+                    result = subprocess.run(['sh', '-s', '--', '--check'], input=script, text=True, capture_output=True,
+                                            env=dict(os.environ, PATH=str(d) + ':' + os.environ['PATH'], BAD=bad, HOST=host, CALLS=str(calls)))
+                    self.assertEqual(result.returncode == 0, not diagnostic, result.stderr)
+                    self.assertIn(diagnostic or 'PASS', result.stderr if diagnostic else result.stdout)
+                    for call in calls.read_text().splitlines():
+                        command = call.split()[0].split('/')[-1]
+                        if command == 'systemctl': self.assertIn(' show ', call)
+                        if command == 'docker': self.assertTrue(' inspect ' in call)
+                        if command == 'iptables': self.assertIn(' -S FORWARD', call)
+                    if bad == 'backup': (d / 'backup' / files[0]).touch()
+
     def test_rollback_server_ready_before_docker_post_start(self):
         script = HOOK.with_name('rollback-zai85.sh').read_text()
         start = script.index('docker start awg-server-test\n')
