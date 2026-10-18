@@ -1,5 +1,11 @@
 # AGENTS.md — operational and safety contract for AI agents
 
+## Owner design style: composition-first, atomically simple components
+
+The operator is an architect who enjoys building **apparently mind-bending overall systems from many simple autonomous bricks**. Each brick does one focused job and is ignorant of the entire system; the **system-level knowledge lives in the architecture designed by the operator**, not in an omniscient process. The pattern recurs in home plumbing, a three-phase electrical distribution panel, an IP-camera→ring-buffer NVR→media adapter→CRT chain, and layered Mihomo/VPS infrastructure.
+
+For discovery, planning and operations: decompose the system into minimal owned components, map their inputs/outputs and coupling contracts, test local invariants, then the cross-layer packet path/fail-secure behavior. Do not make one service manage all others or treat apparent complexity at system scale as a reason to rewrite working independent layers. If a boundary cannot be established from evidence, mark UNKNOWN and ask the owner, not guess.
+
 ## Owner architecture: independent, autonomous abstraction layers (2026-10-18)
 
 The owner is an architect of **complex layered systems**, intentionally separating independently managed parts. No fleet-wide omniscient controller and no hidden fusion of service ownership:
