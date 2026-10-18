@@ -1,5 +1,17 @@
 # AGENTS.md — operational and safety contract for AI agents
 
+## Owner architecture: independent, autonomous abstraction layers (2026-10-18)
+
+The owner is an architect of **complex layered systems**, intentionally separating independently managed parts. No fleet-wide omniscient controller and no hidden fusion of service ownership:
+
+- Each VPS is independently configured and makes local decisions. SE, SE2, EE, MSK have different allowed egress tiers and local Mihomo `GLOBAL` / `EXIT_STRATEGY` / `url-test`; MSK→EE is an optional transport endpoint, **not** shared policy/configuration.
+- Inbound Xray/3x-ui, Mieru, AmneziaWG, etc. do not need to know Mihomo's outgoing strategy; Mihomo need not know what inbound applications are installed. Linux route/mark/iptables, Docker and TUN are explicit **connector contracts** between those layers.
+- Client/Keenetic is a separate decision-maker that selects an entrance VPS; the owner's currently working v1.11.1 router config is out of scope for VPS work.
+- Independently configured is **not** the same as independently reliable: a bridge/route failure can break traffic safety. Require live discovery, provenance, ownership preflight and separate fail-secure testing for packet paths before any mutation.
+- No unexpected user-data-plane fallback to a VPS public IP. Service/control-plane bootstrap/provider/dialer/DNS is evaluated by purpose, not an unqualified lexical `DIRECT` ban.
+
+Agent: preserve existing component ownership and autonomy; never combine or reconfigure unrelated services/hosts to meet a narrow YAML request. If changing one layer requires actions in another, produce a separate explicit plan and ask the owner (anti-monkey-paw). This is owner architectural intent, not a live inventory or authority to apply changes.
+
 This file is a binding contract for any AI agent (coding assistant,
 autonomous runner or interactive helper) that works with this repository, its
 code, or the real VPS machines this project manages. It is not a tutorial and
