@@ -37,6 +37,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Disposable Test lifecycle hook fault tests
+        run: python3 docs/experiments/zai-84/test_routes.py -v
+
   build:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
     runs-on: ubuntu-latest
