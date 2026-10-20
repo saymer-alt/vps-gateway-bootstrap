@@ -359,6 +359,92 @@ esac
         for key in conf['Service']:
             self.assertFalse(key.startswith(('Restart', 'PartOf', 'Wants', 'Conflicts', 'OnFailure', 'OnSuccess')), key)
 
+    def test_rollback_version_marker_and_argument_rejection(self):
+        script = HOOK.with_name('rollback-zai85.sh').read_text()
+        self.assertIn("ROLLBACK_VERSION='zai90e-1'", script)
+        self.assertIn('1:--check', script)
+        for argv in (['--cheque'], ['--check', 'extra'], ['-x']):
+            with self.subTest(argv=argv):
+                result = subprocess.run(['sh', '-s', '--'] + argv, input=script, text=True,
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('usage', result.stderr)
+
+    def test_rollback_tolerates_absent_awg_return_unit(self):
+        script = HOOK.with_name('rollback-zai85.sh').read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            (d / 'backup').mkdir()
+            files = 'test-mihomo.service test-routing-guard.service test-route-restore.service docker-zai84.conf test-gateway-routes ufw-before.rules ufw-after.init config.sha256'.split()
+            for name in files:
+                (d / 'backup' / name).touch()
+            hook = d / 'hook'
+            hook.touch()
+            hook.chmod(0o700)
+            (d / 'after.init').touch()
+            (d / 'before.rules').touch()
+            script = script.replace('/root/zai85', str(d)).replace('/usr/local/libexec/test-gateway-routes', str(hook)).replace('/etc/ufw/', str(d) + '/')
+            mock = '''#!/bin/sh
+case "${0##*/}:$*" in
+ hostname:*) echo "Test" ;;
+ sha256sum:*) exit 0 ;;
+ systemctl:show*)
+   case "$*" in
+     *test-awg-return*) echo "${AWG_LOAD:-not-found}" ;;
+     *) [ "${BAD:-}" != unit ] && echo loaded || exit 1 ;;
+   esac ;;
+ docker:network*) echo 'bridge 172.17.0.0/16 false' ;;
+ docker:inspect*)
+   case "$*" in *awg-server-test) echo 'bridge 172.17.0.2 unless-stopped';; *) echo 'bridge 172.17.0.3 no';; esac ;;
+ iptables:*) echo '-P FORWARD ACCEPT'
+   echo '-A FORWARD -s 10.30.0.0/24 ! -o mitun0 -m comment --comment ZAI85-client-failclosed -j DROP' ;;
+ *) exit 99 ;;
+esac
+'''
+            for name in ('hostname', 'sha256sum', 'systemctl', 'docker', 'iptables'):
+                path = d / name
+                path.write_text(mock)
+                path.chmod(0o700)
+            for awg_load, expect_rc, needle in (('not-found', 0, 'zai90e-1'), ('masked', 1, 'unexpected state'),
+                                                ('active', 1, 'unexpected state')):
+                with self.subTest(awg_load=awg_load):
+                    result = subprocess.run(['sh', '-s', '--', '--check'], input=script, text=True,
+                                            capture_output=True,
+                                            env=dict(os.environ, AWG_LOAD=awg_load,
+                                                     PATH=str(d) + ':' + os.environ['PATH']))
+                    self.assertEqual(result.returncode, expect_rc, result.stderr)
+                    self.assertIn(needle, result.stdout if expect_rc == 0 else result.stderr)
+
+    def test_rollback_body_guards_awg_return_disable(self):
+        script = HOOK.with_name('rollback-zai85.sh').read_text()
+        start = script.index('if [ "$(systemctl show test-awg-return.service')
+        end = script.index('docker update --restart=no')
+        segment = script[start:end]
+        for awg_load, disable_expected in (('not-found', False), ('loaded', True)):
+            with self.subTest(awg_load=awg_load):
+                calls = tempfile.NamedTemporaryFile(delete=False).name
+                harness = '''set -eu
+CAL=''' + repr(calls) + '''
+AWG=''' + repr(awg_load) + '''
+systemctl() {
+    printf '%s\n' "$*" >> "$CAL"
+    case "$*" in *test-awg-return*) echo "$AWG" ;; esac
+}
+''' + segment
+                try:
+                    result = subprocess.run(['sh', '-c', harness], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    log = open(calls, encoding='utf-8').read()
+                    self.assertEqual('disable' in log, disable_expected, log)
+                finally:
+                    os.unlink(calls)
+
+    def test_rollback_staging_procedure_documented(self):
+        proc = HOOK.with_name('ROLLBACK-STAGING-PROCEDURE.md').read_text()
+        for needle in ('SHA256', 'ROLLBACK_VERSION', '--check', 'NEW, explicitly versioned filename',
+                       'install -m 644'):
+            self.assertIn(needle, proc)
+
     def test_git_tracks_executable_hook(self):
         root = Path(__file__).resolve().parents[3]
         result = subprocess.run(['git', '-C', str(root), 'ls-files', '-s', '--',
