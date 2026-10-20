@@ -1,0 +1,21 @@
+[Unit]
+Description=Bounded disposable AWG return-path recovery after Docker
+Requires=docker.service test-routing-guard.service
+After=docker.service test-routing-guard.service
+PartOf=docker.service
+StartLimitIntervalSec=180
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/libexec/test-gateway-routes docker
+ExecStop=/usr/bin/docker stop --time 5 awg-client-test
+TimeoutStartSec=40
+TimeoutStopSec=15
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=docker.service
