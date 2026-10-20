@@ -286,6 +286,79 @@ systemctl() { [ "$ready" = yes ]; }
         self.assertEqual(sum(c[0] == 'iptables' and '-I' in c for c in calls), 1)
         self.assertFalse(any(c[0] in ('ip', 'docker') for c in calls))
 
+    def test_partial_state_fallback_only_repair(self):
+        result, calls = self.run_hook('guard', rules=BASE_RULES + '\n5000:\tfrom 10.30.0.0/24 lookup 2030')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c[1:4] == ['-4', 'rule', 'add'] for c in calls))
+        self.assertIn(['ip', '-4', 'route', 'replace', 'unreachable', 'default', 'table', '2030', 'metric', '42760'], calls)
+
+    def test_networkd_dropin_contract_and_dash_semantics(self):
+        conf = configparser.ConfigParser(strict=False)
+        conf.optionxform = str
+        conf.read(HOOK.with_name('zai90d-policy-guard.conf'))
+        self.assertIn('Service', conf)
+        self.assertEqual([k for k in conf['Service'].keys()], ['ExecStartPost'])
+        line = conf['Service']['ExecStartPost']
+        self.assertTrue(line.startswith('-'), line)
+        cmdline = line[1:]
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            # ip mock: rule-show call numbers listed in $SWEEP_CALLS return the
+            # selector-less view, simulating the networkd foreign-rule cleanup
+            # landing between the guard pass and the drop-in's own verification.
+            ip_mock = """#!/bin/sh
+case "$*" in
+  "-4 rule show")
+    c=$(cat "$CALLNO" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$CALLNO"
+    swept=0
+    for s in $SWEEP_CALLS; do [ "$s" = "$c" ] && swept=1; done
+    if [ "$swept" = 1 ]; then
+      printf '0:\tfrom all lookup local\n32766:\tfrom all lookup main\n32767:\tfrom all lookup default\n'
+    else
+      printf '0:\tfrom all lookup local\n5000:\tfrom 10.30.0.0/24 lookup 2030\n32766:\tfrom all lookup main\n32767:\tfrom all lookup default\n'
+    fi ;;
+  "-4 route show table all") printf 'default dev mitun0 table 2030 scope link metric 100\nunreachable default table 2030 metric 42760\n' ;;
+  *) exit 0 ;;
+esac
+"""
+            # A failing `ip route show` makes the guard itself fail (set -e):
+            # the bounded loop must exhaust and exit nonzero for observability.
+            ip_fail = '#!/bin/sh\ncase "$*" in *route*) exit 2;; esac\nexit 0\n'
+            libexec = d / 'libexec'
+            libexec.mkdir()
+            instrumented = libexec / 'test-gateway-routes'
+            instrumented.write_text('#!/bin/sh\necho guard >> "$CALLS"\nexec ' + str(HOOK) + ' "$@"\n')
+            instrumented.chmod(0o700)
+            (d / 'sleep').write_text('#!/bin/sh\nexit 0\n')
+            (d / 'sleep').chmod(0o700)
+            ipt = d / 'iptables'
+            ipt.write_text('#!/bin/sh\ncase "$*" in *"-S FORWARD"*) printf -- ' +
+                           repr('-P FORWARD ACCEPT\n-A FORWARD -s 10.30.0.0/24 ! -o mitun0 -m comment '
+                                '--comment ZAI85-client-failclosed -j DROP\n') + ' ;;\n*) exit 0 ;;\nesac\n')
+            ipt.chmod(0o700)
+            for sweep_calls, min_calls, expect_rc in (('', 1, 0), ('2', 2, 0), ('always', 6, 1)):
+                with self.subTest(sweep_calls=sweep_calls):
+                    (d / 'ip').write_text(ip_fail if sweep_calls == 'always' else ip_mock)
+                    (d / 'ip').chmod(0o700)
+                    calls = d / 'guard-calls'
+                    calls.write_text('')
+                    (d / 'callno').write_text('0')
+                    env = dict(os.environ, PATH=str(d) + ':' + os.environ['PATH'],
+                               SWEEP_CALLS=sweep_calls, CALLS=str(calls), CALLNO=str(d / 'callno'))
+                    result = subprocess.run(['sh', '-c', cmdline.replace(
+                        '/usr/local/libexec/test-gateway-routes', str(instrumented))],
+                        env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, expect_rc, result.stderr)
+                    self.assertGreaterEqual(calls.read_text().count('guard'), min_calls)
+
+    def test_dropin_no_restart_semantics(self):
+        conf = configparser.ConfigParser(strict=False)
+        conf.optionxform = str
+        conf.read(HOOK.with_name('zai90d-policy-guard.conf'))
+        self.assertTrue(set(conf.sections()) <= {'Unit', 'Service'})
+        for key in conf['Service']:
+            self.assertFalse(key.startswith(('Restart', 'PartOf', 'Wants', 'Conflicts', 'OnFailure', 'OnSuccess')), key)
+
     def test_git_tracks_executable_hook(self):
         root = Path(__file__).resolve().parents[3]
         result = subprocess.run(['git', '-C', str(root), 'ls-files', '-s', '--',
