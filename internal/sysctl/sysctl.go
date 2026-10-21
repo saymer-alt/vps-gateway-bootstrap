@@ -162,6 +162,13 @@ func observeRuntimeKey(key SysctlKey, read ReadFunc) RuntimeObservation {
 	if err != nil {
 		return RuntimeObservation{Key: key, Status: RuntimeAbsentUnsupported}
 	}
+	return observeRuntimePath(key, path, read)
+}
+
+// observeRuntimePath is the shared classify-one-read core. The path always
+// comes from a compile-time table (RuntimePath allowlist or the fixed
+// ipv6ForwardingKeys below) — never from caller input.
+func observeRuntimePath(key SysctlKey, path string, read ReadFunc) RuntimeObservation {
 	data, err := read(path)
 	if err != nil {
 		switch {
@@ -194,6 +201,42 @@ func parseRuntimeValue(data []byte) (int64, error) {
 		return 0, errors.New("runtime value is not in canonical decimal form")
 	}
 	return v, nil
+}
+
+// ipv6ForwardingKeys is the ZAI-91 observation-only extension for the
+// network doctor: IPv6 forwarding evidence. The two paths are compile-time
+// constants and the keys are deliberately OUTSIDE the compiled v1 mutation
+// allowlist: CheckSysctlKey must keep rejecting them (pinned by test), so
+// this table can never authorize a sysctl write. If a future task wants to
+// mutate forwarding, that is an explicit allowlist-widening decision, not a
+// side effect of this observation.
+type ipv6ForwardingKey struct {
+	Key  SysctlKey
+	Path string
+}
+
+var ipv6ForwardingKeys = []ipv6ForwardingKey{
+	{"net.ipv6.conf.all.forwarding", "/proc/sys/net/ipv6/conf/all/forwarding"},
+	{"net.ipv6.conf.default.forwarding", "/proc/sys/net/ipv6/conf/default/forwarding"},
+}
+
+// ObserveIPv6Forwarding reads the fixed IPv6 forwarding evidence paths through
+// the injected reader. Output is deterministic (table order). This is the ONLY
+// read path that consults paths outside RuntimePath, and it exists so the
+// network doctor can report IPv6 forwarding without widening the mutation
+// allowlist.
+func ObserveIPv6Forwarding(read ReadFunc) []RuntimeObservation {
+	out := make([]RuntimeObservation, 0, len(ipv6ForwardingKeys))
+	for _, k := range ipv6ForwardingKeys {
+		// Defensive: if the key ever becomes allowlisted, this observation
+		// must switch to RuntimePath and the pin test updated consciously.
+		if _, err := RuntimePath(k.Key); err == nil {
+			out = append(out, RuntimeObservation{Key: k.Key, Status: RuntimeUnknownIO})
+			continue
+		}
+		out = append(out, observeRuntimePath(k.Key, k.Path, read))
+	}
+	return out
 }
 
 // EffectiveRPFilter applies the kernel-documented reverse-path-filter rule:

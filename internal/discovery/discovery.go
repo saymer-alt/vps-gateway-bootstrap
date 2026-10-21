@@ -25,6 +25,9 @@ type Collector struct {
 	// ReadFile injects file reads (e.g. /etc/machine-id); nil uses the real
 	// filesystem. Same injection rule as pipeline.InspectFile.
 	ReadFile func(path string) ([]byte, error)
+	// Readlink injects symlink-target reads (ZAI-91 DNS evidence); nil uses
+	// os.Readlink. Same injection rule as ReadFile.
+	Readlink func(path string) (string, error)
 }
 func New() *Collector { return &Collector{Run: CommandRunner{}} }
 
@@ -36,6 +39,11 @@ func (c *Collector) lookPath(name string) (string, error) {
 func (c *Collector) readFile(path string) ([]byte, error) {
 	if c.ReadFile != nil { return c.ReadFile(path) }
 	return os.ReadFile(path)
+}
+
+func (c *Collector) readlink(path string) (string, error) {
+	if c.Readlink != nil { return c.Readlink(path) }
+	return os.Readlink(path)
 }
 
 // discoveryVersion is the Discovery 0.4 record version: typed routing
