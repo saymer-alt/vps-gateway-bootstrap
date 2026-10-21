@@ -740,7 +740,11 @@ func handshakesFact(extras Extras) Fact {
 		}
 		f.Detail += " (age is an indicator, never a tunnel-health or connectivity proof): " + renderPeers(h.Peers, 6)
 	case StatusSkipped, StatusInconclusive:
-		f.Detail = "handshake ages not observed via " + h.Binary
+		if h.Binary != "" {
+			f.Detail = "handshake ages not observed via " + h.Binary
+		} else {
+			f.Detail = "handshake ages not observed (no awg/wg binary)"
+		}
 		f.Unknowns = append(f.Unknowns, h.Unknowns...)
 	}
 	return f
@@ -812,12 +816,13 @@ func ipv6AddressesFact(extras Extras) Fact {
 	if f.Status == StatusOK {
 		switch {
 		case len(v.GlobalInterfaces) > 0:
-			f.Detail = "publicly routable IPv6 (GUA, outside fc00::/7) on: " + strings.Join(v.GlobalInterfaces, ", ")
+			f.Detail = "global unicast IPv6 addresses (GUA, outside fc00::/7) on: " + strings.Join(v.GlobalInterfaces, ", ") +
+				" — address class only; routing and reachability are not proven by this fact"
 		case len(v.UlaInterfaces) > 0:
-			f.Detail = "no publicly routable IPv6; unique-local addresses (fc00::/7) on: " +
+			f.Detail = "no global unicast (GUA) IPv6 addresses; unique-local (fc00::/7) on: " +
 				strings.Join(v.UlaInterfaces, ", ") + " — ULA presence implies no public IPv6 reachability"
 		default:
-			f.Detail = "no publicly routable IPv6 on " + strconv.Itoa(v.Inventoried) + " interface(s)"
+			f.Detail = "no global unicast (GUA) IPv6 addresses on " + strconv.Itoa(v.Inventoried) + " interface(s)"
 		}
 		if v.LinkLocalInterfaces > 0 {
 			f.Detail += "; link-local (fe80::/10) on " + strconv.Itoa(v.LinkLocalInterfaces) + " interface(s)"
