@@ -8,12 +8,13 @@
 > the actual release run. No tag, release, or publication has been created by
 > this document.
 >
-> Dependency: the Network Doctor pilot runbook
-> (`docs/network-doctor-v1-pilot.md`) and the ZAI-92 hardening land via
-> PR #29; this package is valid only AFTER that PR is merged (see
-> checklist item E1).
+> Dependency: this package is valid only AFTER BOTH PR #29 (pilot runbook
+> and ZAI-92 hardening) and PR #30 (this document) are merged; the tag
+> target is the FINAL reviewed `main` HEAD after both merges (see
+> checklist items E1/E2/E5).
 
-Proposed tag: `v0.1.0` (annotated, on the merge commit of PR #29).
+Proposed tag: `v0.1.0` (annotated, on the final reviewed `main` HEAD
+after both merges, with green CI on that exact commit).
 Proposed title: `v0.1.0 — Network Doctor v1 (passive read-only diagnostics)`.
 
 ---
@@ -146,30 +147,37 @@ All boxes must be checked with recorded values before publication. A
 release must NOT be published with any box unchecked or any `<fill: …>`
 marker unresolved.
 
-- [ ] **E1 — PR #29 merged.** The ZAI-92 branch
-      (`zai-92-netdiag-pilot-readiness`, head `f8bec62`) is merged into
-      `main` and the branch is gone or inert.
-      `<fill: merge commit SHA>`
-- [ ] **E2 — Green exact-SHA main CI.** The "Build and test" run for the
-      merge commit is green (Test and vet + Build linux-amd64 + Build
-      linux-arm64) and its `headSha` equals the merge commit SHA.
+- [ ] **E1 — PRs #29 and #30 merged.** Both documentation PRs are merged
+      into `main` (order irrelevant; their changesets do not overlap),
+      and the FINAL reviewed `main` HEAD after both merges is identified.
+      `<fill: PR #29 merge commit SHA>` `<fill: PR #30 merge commit SHA>`
+      `<fill: final main HEAD SHA>`
+- [ ] **E2 — Green exact-SHA main CI on the final HEAD.** The "Build and
+      test" run for that exact final `main` HEAD is green (Test and vet +
+      Build linux-amd64 + Build linux-arm64) and its `headSha` equals the
+      final HEAD SHA — not any earlier intermediate merge commit.
       `<fill: run id>` `<fill: headSha>` — verify:
-      `gh run list --repo saymer-alt/vps-gateway-bootstrap --branch main --workflow "Build and test" --limit 3`
+      `gh run list --repo saymer-alt/vps-gateway-bootstrap --branch main --workflow "Build and test" --limit 5`
 - [ ] **E3 — Owner release approval.** Explicit operator GO for tagging
-      `v0.1.0` on the merge commit. `<fill: approval reference/date>`
+      `v0.1.0` on the final `main` HEAD from E1/E2.
+      `<fill: approval reference/date>`
 - [ ] **E4 — Operator-authorized read-only pilot accepted.** The pilot
       per `docs/network-doctor-v1-pilot.md` was performed on a
       owner-designated VPS (no remediation actions), feedback recorded
       and reviewed; no unresolved pilot findings against the release.
       `<fill: host role/OS, date, feedback reference>`
-- [ ] **E5 — Tag created on the merge commit.** Annotated tag `v0.1.0`,
-      pushed; the tag-triggered "Build and test" run is green.
+- [ ] **E5 — Tag created on the final HEAD.** Annotated tag `v0.1.0` on
+      the exact final `main` HEAD from E1/E2, pushed; the tag-triggered
+      "Build and test" run is green. Note: pushing the tag is already a
+      PUBLIC action — the tag is immediately visible and fetchable in the
+      repository, independent of any GitHub Release.
       `<fill: tag object SHA>` `<fill: tag run id>`
 - [ ] **E6 — Release artifacts validated.** From the tag run's artifact
       `vps-gateway-v0.1.0` (`dist/`):
       `sha256sum -c SHA256SUMS` passes;
       `go version -m vps-gateway-linux-amd64 | grep vcs.revision` equals
-      the merge commit SHA and `vcs.modified=false`;
+      the exact tagged commit SHA (the final `main` HEAD from E5) and
+      `vcs.modified=false`;
       the same holds for `vps-gateway-linux-arm64`;
       `file` confirms x86-64 and aarch64 static ELFs.
       `<fill: SHA256SUMS checksum itself>` `<fill: vcs.revision observed>`
@@ -201,7 +209,8 @@ gh release create v0.1.0 \
 # 4. Re-verify from the DRAFT release page: download all three assets
 #    fresh and repeat sha256sum -c against SHA256SUMS.
 
-# 5. Publish the draft (this is the single irreversible step):
+# 5. Publish the draft (makes the RELEASE PAGE public; the tag itself
+#    has been public since E5):
 gh release edit v0.1.0 --repo saymer-alt/vps-gateway-bootstrap --draft=false
 
 # 6. Post-publication spot check:
@@ -210,27 +219,38 @@ gh release view v0.1.0 --repo saymer-alt/vps-gateway-bootstrap
 
 ## Part 4 — Rollback / cancellation BEFORE publication
 
-The release becomes public only at step 5 (`--draft=false`). Until then,
-cancellation is clean and reversible at every stage:
+**Visibility model.** Three distinct states with different exposure:
 
-- **E1–E4 fail** (merge, CI, approval, or pilot problems): stop; no tag
-  is created; nothing to roll back. Record the blocking finding and
-  return to development.
+- **A pushed tag** (E5) is immediately PUBLIC — visible and fetchable by
+  anyone in the repository, independent of any GitHub Release. Treating
+  a pushed tag as private or invisible is wrong.
+- **A Draft GitHub Release** (Part 3 step 3) is NOT publicly published:
+  the release page and its assets are visible only to collaborators with
+  sufficient access until publication.
+- **A published GitHub Release** (Part 3 step 5) is fully public, with
+  verified assets downloadable by anyone.
+
+Consequence: cancellation before publication avoids a public RELEASE
+page, but a tag pushed at E5 is already a public reference. Nothing in
+this section may be read as "deleting or recreating a pushed tag is
+invisible or risk-free".
+
+- **E1–E4 fail** (merges, final-HEAD CI, approval, or pilot problems):
+  stop; no tag exists yet; nothing public happened. Record the blocking
+  finding and return to development.
 - **E5/E6 fail** (tag run red, checksum mismatch, provenance stamp
-  missing or ≠ merge commit, wrong architecture): do NOT create the
-  release draft. Delete the tag and stop:
-  ```bash
-  git push origin :refs/tags/v0.1.0        # owner action; remote tag only
-  git tag -d v0.1.0                        # local, if present
-  ```
-  The tag-triggered artifacts are unpublished CI artifacts with 90-day
-  retention and require no action. After fixing the cause, re-tag on the
-  SAME merge commit (re-tagging is acceptable only while NO release was
-  published; once a release exists, never move a tag — cut `v0.1.1`).
-- **Draft created but verification fails at step 4**: delete the draft
-  (`gh release delete v0.1.0 --cleanup-tag` only if the tag itself must
-  also go; otherwise keep the tag and investigate), then follow the E5/E6
-  path.
-- **Never** rewrite published history, force-push, or move a published
-  tag; a broken published release is superseded by a new version, not
-  edited.
+  missing or ≠ the tagged commit, wrong architecture): do NOT create the
+  release draft, and do NOT delete, move or reuse the pushed tag on your
+  own. **STOP and require an explicit owner decision.** If the owner
+  decides the `v0.1.0` name cannot be used for publication, the
+  preferred path is to cut a NEW version for the release (avoiding
+  inconsistent references to the already-pushed tag); removing the
+  pushed tag is possible only as a separate owner-recorded action that
+  acknowledges the tag was publicly fetchable and may already have been
+  referenced. Record the decision and its rationale either way.
+- **Draft created but verification fails at step 4**: delete the DRAFT
+  release only (it was never public), keep the tag untouched, and
+  escalate to the owner per the E5/E6 path.
+- **Never** rewrite published history, force-push, or move/reuse a tag
+  that a release or any published reference points to; a broken released
+  version is superseded by a new version, not edited.
