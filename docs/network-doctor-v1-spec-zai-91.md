@@ -187,3 +187,42 @@ small producers above; the only genuinely new surface is the versioned
 document + its assembly, which is exactly the `network-diagnostics/v1`
 contract issue #19 asks for and the hook KAS and link-generators
 diagnostics can consume later without re-deriving machine reads.
+
+## 9. Implementation status (ZAI-91, 2026-10-21)
+
+Implemented on branch `zai-91-network-doctor-v1` (Draft PR, repository-only;
+no live machine was touched). Deviations from this spec, resolved to the
+SAFER interpretation:
+
+- **Mihomo configuration evidence (§3, reused list): NOT wired.**
+  `internal/mihomoconf` requires an explicitly supplied configuration path
+  (no path search by design), discovery collects no Mihomo config path, and
+  the package carries a hard zero-production-consumer tripwire
+  (`TestNoProductionConsumer`) that sanctions only the PURE `leakasm`
+  bridge. Wiring it into doctor would widen that safety tripwire, which
+  ZAI-91 must not do. The document therefore carries an explicit
+  SKIPPED/NOT-REQUESTED `gateway.mihomo_tun_config` fact instead of silently
+  omitting the area. Wiring it later is an owner decision that edits the
+  tripwire consciously.
+- **IPv6 forwarding evidence (§3, producer 2): observation-only paths
+  OUTSIDE the compiled mutation allowlist.** The spec suggested routing the
+  reads through the existing sysctl path, but that path enforces the
+  compiled v1 allowlist, and adding `net.ipv6.conf.{all,default}.forwarding`
+  to it would also widen `capability.CheckSysctlKey` — i.e. authorize sysctl
+  MUTATIONS of those keys. Instead `sysctl.ObserveIPv6Forwarding` reads two
+  fixed compile-time paths, and a regression test pins that the same keys
+  stay REJECTED by `RuntimePath` and `CheckSysctlKey`.
+- **Service allowlist (§3, producer 3): generic units only.** The disposable
+  Test VPS is deleted; its `test-*` unit names are topology values and are
+  deliberately NOT allowlisted (anti-leakage rule). The fixed list covers
+  containerd, docker, fail2ban, mihomo, mita, ssh, ssh.socket,
+  systemd-resolved, ufw.
+- **Expectations (§4E): API-level only.** `netdiag.Options` accepts an
+  explicit validated expectation set (routing selector/fallback, mangle
+  guard comment, listeners, IPv6-forwarding-forbidden) used by the fixture
+  tests; the CLI always passes the zero value, so every expectation fact
+  reports SKIPPED/NOT-REQUESTED there.
+- Handshake ages come verbatim from `awg/wg show all latest-handshakes`, so
+  no clock is consumed and tests are deterministic by construction (the
+  injected-clock requirement is satisfied vacuously and pinned by the
+  determinism test).

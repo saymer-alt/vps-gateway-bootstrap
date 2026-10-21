@@ -17,7 +17,8 @@ general "set up my VPS" command yet.
 
 ```text
 vps-gateway discover            read-only discovery snapshot as JSON
-vps-gateway doctor [--json]     read-only diagnosis over discovery
+vps-gateway doctor [--json] [--network-json]
+                                read-only diagnosis over discovery
 vps-gateway validate [--json] [--production]
                                 strict PASS/FAIL gate over effective machine state
 vps-gateway install --dry-run [--config FILE] [--state FILE] [--json]
@@ -50,6 +51,22 @@ flags:
 
 Anything not listed as desired is never changed; mutations of resources with
 unknown ownership are blocked by design.
+
+### doctor --network-json (ZAI-91)
+
+`doctor --network-json` prints only the versioned passive
+`network-diagnostics/v1` evidence document: closed OK/FAIL/SKIPPED/INCONCLUSIVE
+statuses, OBSERVED/CONFIG-INFERRED/NOT-REQUESTED provenance, deterministic fact
+order, no timestamps, redacted output. It adds five bounded read-only producers
+on top of discovery (resolver file kind + nameservers, IPv6 addresses and
+forwarding, a fixed allowlist of systemd unit states, WireGuard/AWG handshake
+ages via `awg`/`wg`, and an RPDB/default-route summary) and runs NO active
+probes: no DNS queries, no TCP/TLS/UDP reachability tests, no packet captures.
+A failed command is INCONCLUSIVE, never a network verdict; expected routing/
+firewall/listener comparisons run only against an explicitly supplied policy
+and the CLI supplies none, so no topology (Test-VPS or production) is ever
+assumed. See
+[`docs/network-doctor-v1-spec-zai-91.md`](docs/network-doctor-v1-spec-zai-91.md).
 
 ## State persistence
 
@@ -87,6 +104,7 @@ internal/state       desired-state model, diff, plan, preflight, persistence
 internal/apply       transaction engine: plan → backup → apply → validate → rollback
 internal/orchestrate apply lifecycle: prepare → confirm → lock → execute → verify → persist
 internal/doctor      triage of discovery results (OK/WARN/FAIL)
+internal/netdiag     network-diagnostics/v1 passive evidence document (ZAI-91)
 internal/validate    strict effective-state gate (PASS/FAIL)
 internal/pipeline    read-only pipeline: discovery → model → diff → plan → preflight
 internal/probe       external management-probe model (controller-side; not wired)
