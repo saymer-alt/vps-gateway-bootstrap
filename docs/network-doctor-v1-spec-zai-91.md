@@ -66,8 +66,10 @@ Contract rules (each pinned by a test):
   peer configs anywhere in `detail` or raw attachments; listener output
   keeps process names but drops nothing that identifies credentials.
 - Determinism: fixed per-command timeouts through the injected Runner;
-  byte-stable ordering (facts sorted by `id`); identical machine state
-  ⇒ identical document.
+  byte-stable ordering (facts sorted by `id`); identical machine state at
+  the same observation instant ⇒ identical document (ZAI-91A: time-derived
+  evidence such as handshake ages legitimately differs between live runs
+  at different instants; see the operator runbook's determinism contract).
 
 ## 3. Producers: reuse first, five bounded additions
 

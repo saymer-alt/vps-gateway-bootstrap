@@ -66,7 +66,11 @@ A failed command is INCONCLUSIVE, never a network verdict; expected routing/
 firewall/listener comparisons run only against an explicitly supplied policy
 and the CLI supplies none, so no topology (Test-VPS or production) is ever
 assumed. See
-[`docs/network-doctor-v1-spec-zai-91.md`](docs/network-doctor-v1-spec-zai-91.md).
+[`docs/network-doctor-v1-spec-zai-91.md`](docs/network-doctor-v1-spec-zai-91.md);
+for the first operator-controlled read-only pilot on an existing
+Ubuntu 24.04 / Debian 12 VPS (binary acquisition, integrity checks,
+output interpretation, privacy checklist, feedback template), follow
+[`docs/network-doctor-v1-pilot.md`](docs/network-doctor-v1-pilot.md).
 
 ## State persistence
 

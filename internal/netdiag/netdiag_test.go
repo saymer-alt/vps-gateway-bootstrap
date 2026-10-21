@@ -354,6 +354,161 @@ func TestHandshakesFactRendersAgesAndNever(t *testing.T) {
 	}
 }
 
+// ZAI-92 A4 regression: the address-class observation must never be worded
+// as demonstrated routing/reachability. An address that belongs to a
+// nominal unicast class is not evidence that an upstream provider routes
+// or permits traffic to it.
+func TestIPv6AddressFactNeverClaimsReachability(t *testing.T) {
+	gua := healthyExtras()
+	gua.IPv6.GlobalInterfaces = []string{"eth0"}
+	f := ipv6AddressesFact(gua)
+	if !strings.Contains(f.Detail, "address class only; routing and reachability are not proven") {
+		t.Fatalf("GUA detail overclaims reachability: %q", f.Detail)
+	}
+	if strings.Contains(f.Detail, "publicly routable IPv6 (") {
+		t.Fatalf("GUA detail still uses the routability wording: %q", f.Detail)
+	}
+
+	ulaOnly := healthyExtras()
+	ulaOnly.IPv6.GlobalInterfaces = nil
+	ulaOnly.IPv6.UlaInterfaces = []string{"wg0"}
+	f = ipv6AddressesFact(ulaOnly)
+	if !strings.Contains(f.Detail, "no global unicast (GUA)") || !strings.Contains(f.Detail, "implies no public IPv6 reachability") {
+		t.Fatalf("ULA-only detail = %q", f.Detail)
+	}
+
+	none := healthyExtras()
+	none.IPv6.GlobalInterfaces = nil
+	none.IPv6.UlaInterfaces = nil
+	f = ipv6AddressesFact(none)
+	if !strings.Contains(f.Detail, "no global unicast (GUA) IPv6 addresses on 2 interface(s)") {
+		t.Fatalf("no-addresses detail = %q", f.Detail)
+	}
+}
+
+// ZAI-92 A1 regression: the non-OK handshake fact must not render a
+// dangling "via " when no binary was found.
+func TestHandshakesFactNoDanglingViaOnMissingBinary(t *testing.T) {
+	extras := healthyExtras()
+	extras.Handshakes = discovery.AWGHandshakeEvidence{Status: discovery.FactStatusSkipped,
+		Unknowns: []string{"no awg/wg inspection binary in PATH; handshake ages not observable (binary-optional)"}}
+	f := handshakesFact(extras)
+	if strings.Contains(f.Detail, "via ") {
+		t.Fatalf("dangling via in detail: %q", f.Detail)
+	}
+	if !strings.Contains(f.Detail, "no awg/wg binary") {
+		t.Fatalf("detail = %q", f.Detail)
+	}
+}
+
+// Scope B scenario: a small VPS with Docker and AWG where several optional
+// service units do not exist. Absent units are SKIPPED, existing ones are
+// classified independently, handshake ages carry fresh + never peers, and
+// the document stays overall-OK (nothing failed, nothing inconclusive).
+func TestSmallVPSWithDockerAWGAndAbsentUnits(t *testing.T) {
+	res := healthyResult()
+	res.Ports = append(res.Ports,
+		discovery.Listener{Address: "0.0.0.0", Port: 51820, Protocol: "udp", Process: "awg"})
+	extras := Extras{
+		DNS: discovery.DNSConfigEvidence{
+			Status: discovery.FactStatusOK, EvidenceLevel: string(EvidenceConfigInferred),
+			FileKind: discovery.DNSFileSymlink, SymlinkTarget: "/run/systemd/resolve/stub-resolv.conf",
+			Nameservers: []string{"127.0.0.53"}, StubResolver: true,
+			Resolved: discovery.ResolvedEvidence{Status: discovery.FactStatusOK, ActiveState: "active", SubState: "running"},
+		},
+		IPv6: discovery.IPv6Evidence{
+			Status: discovery.FactStatusOK, InterfacesStatus: discovery.InterfacesComplete, Inventoried: 3,
+			GlobalInterfaces: []string{"ens3"},
+			Forwarding: []sysctl.RuntimeObservation{
+				{Key: "net.ipv6.conf.all.forwarding", Value: 1, Status: sysctl.RuntimePresent},
+				{Key: "net.ipv6.conf.default.forwarding", Value: 0, Status: sysctl.RuntimePresent},
+			},
+		},
+		Services: discovery.ServiceHealthEvidence{
+			Status: discovery.FactStatusOK, SystemctlAvailable: true,
+			Units: []discovery.UnitHealth{
+				{Unit: "containerd.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+				{Unit: "docker.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+				{Unit: "fail2ban.service", LoadState: "not-found", ActiveState: "inactive", SubState: "dead", Classification: discovery.UnitAbsent},
+				{Unit: "mihomo.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+				{Unit: "mita.service", LoadState: "not-found", ActiveState: "inactive", SubState: "dead", Classification: discovery.UnitAbsent},
+				{Unit: "ssh.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+				{Unit: "ssh.socket", LoadState: "not-found", ActiveState: "inactive", SubState: "dead", Classification: discovery.UnitAbsent},
+				{Unit: "systemd-resolved.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+				{Unit: "ufw.service", LoadState: "loaded", ActiveState: "active", SubState: "exited", Classification: discovery.UnitActive},
+			},
+		},
+		Handshakes: discovery.AWGHandshakeEvidence{
+			Status: discovery.FactStatusOK, Binary: "awg",
+			Peers: []discovery.PeerHandshake{
+				{Peer: 1, Interface: "awg0", AgeSeconds: 42},
+				{Peer: 2, Interface: "awg0", NeverHandshook: true},
+			},
+			NewestAgeSeconds: 42, NeverHandshookPeers: 1,
+		},
+	}
+	doc := Assemble(res, extras, Options{})
+	if doc.Summary.Overall != StatusOK {
+		for _, f := range doc.Facts {
+			t.Logf("%s %s %s", f.ID, f.Status, f.Detail)
+		}
+		t.Fatalf("overall = %s", doc.Summary.Overall)
+	}
+	if f := factByID(t, doc, "services.mita.service"); f.Status != StatusSkipped {
+		t.Fatalf("absent unit = %+v", f)
+	}
+	if f := factByID(t, doc, "services.docker.service"); f.Status != StatusOK {
+		t.Fatalf("docker unit = %+v", f)
+	}
+	if f := factByID(t, doc, "gateway.wireguard_handshakes"); f.Status != StatusOK ||
+		!strings.Contains(f.Detail, "42s ago") || !strings.Contains(f.Detail, "1 never handshook") {
+		t.Fatalf("handshake fact = %+v", f)
+	}
+	// IPv6 forwarding=1 stays an unjudged observation on the CLI path.
+	if f := factByID(t, doc, "ipv6.forwarding"); f.Status != StatusOK || !strings.Contains(f.Detail, "observation only") {
+		t.Fatalf("forwarding fact = %+v", f)
+	}
+}
+
+// Scope B scenario: healthy services but incomplete routing and firewall
+// inventories. Incomplete inventories must stay INCONCLUSIVE — never false
+// ABSENT, never false OK.
+func TestHealthyServicesWithIncompleteRoutingAndFirewall(t *testing.T) {
+	res := healthyResult()
+	res.Routing.RulesStatus = identity.FieldStatusUnknownPermission
+	res.Routing.RoutesStatus = identity.FieldStatusUnknownParse
+	res.Routing.Rules = nil
+	res.Routing.DefaultRoutes = nil
+	res.Routing.Tables = nil
+	res.Unknowns = append(res.Unknowns,
+		discovery.Observation{Code: "ROUTING_RULES_UNKNOWN", Component: "routing", Message: "exit status 1"},
+		discovery.Observation{Code: "ROUTING_TABLES_UNKNOWN", Component: "routing", Message: "exit status 1"},
+		discovery.Observation{Code: "FIREWALL_NFTABLES_UNKNOWN", Component: "firewall", Message: "ambiguous base chains"})
+	extras := Extras{Services: discovery.ServiceHealthEvidence{
+		Status: discovery.FactStatusOK, SystemctlAvailable: true,
+		Units: []discovery.UnitHealth{
+			{Unit: "docker.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+			{Unit: "ssh.service", LoadState: "loaded", ActiveState: "active", SubState: "running", Classification: discovery.UnitActive},
+		},
+	}}
+	doc := Assemble(res, extras, Options{})
+	for _, id := range []string{"routing.defaults", "routing.policy_rules", "routing.tables"} {
+		if f := factByID(t, doc, id); f.Status != StatusInconclusive {
+			t.Fatalf("%s = %s, want INCONCLUSIVE (unknown inventory must never become ABSENT or OK)", id, f.Status)
+		}
+	}
+	if f := factByID(t, doc, "firewall.rule_inventories"); f.Status != StatusInconclusive {
+		t.Fatalf("firewall.rule_inventories = %s", f.Status)
+	}
+	if doc.Summary.Overall != StatusInconclusive {
+		t.Fatalf("overall = %s", doc.Summary.Overall)
+	}
+	// The healthy services stay individually OK.
+	if f := factByID(t, doc, "services.ssh.service"); f.Status != StatusOK {
+		t.Fatalf("ssh service = %+v", f)
+	}
+}
+
 func TestProducerVocabulariesMatchDocumentContract(t *testing.T) {
 	if string(StatusOK) != discovery.FactStatusOK || string(StatusFail) != discovery.FactStatusFail ||
 		string(StatusSkipped) != discovery.FactStatusSkipped || string(StatusInconclusive) != discovery.FactStatusInconclusive {
