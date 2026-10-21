@@ -9,14 +9,16 @@ between locally configured egress tiers, `url-test` inside a tier).
 The tier set is not necessarily identical across machines; there is
 **no centralized shared Mihomo decision maker**.
 
-Inbound Xray/3x-ui, Mieru and AmneziaWG do not need to know Mihomo's
-outbound configuration; Mihomo need not know the inbound service list.
+Inbound Xray (independently of its management panel), Mieru and AmneziaWG
+do not need to know Mihomo's outbound configuration; Mihomo need not know the inbound service list.
 Linux TUN, routing marks/tables, SOCKS, Docker and iptables are a
 **separate, explicit integration contract**. Autonomous software does
-not mean packet paths are fail-safe by themselves — verify the bridge
-and the absence of unintended user traffic public-IP egress with
-host-level evidence. Provider fetch/dialer/bootstrap use different
-service-plane contracts.
+not mean packet paths are fail-safe by themselves. Before changing a
+forwarding, routing, egress or connector contract, verify its actual
+packet path and absence of unintended user traffic public-IP egress
+with appropriately scoped host-level evidence. Unrelated service changes
+do not require network failure-injection tests. Provider fetch/dialer/bootstrap
+use different service-plane contracts.
 
 An MSK→EE transport path, if configured, is not a shared controller:
 MSK sees a remote endpoint; EE independently chooses its outgoing
@@ -24,6 +26,7 @@ proxy. The working home Keenetic config is a separate client layer,
 not a VPS bootstrap target. This repository must not take ownership
 of Xray/Mieru/Mihomo configuration or other VPS without explicit
 operator authorization. See [../AGENTS.md](../AGENTS.md).
+
 ## Purpose
 
 `vps-gateway-bootstrap` is a production-oriented bootstrap framework for turning a clean Debian/Ubuntu VPS into a predictable network gateway. The project is intentionally broader than an installation script: it establishes a managed host baseline, discovers the real environment, applies only owned configuration, validates effective runtime state, and provides diagnostics and repair paths.
