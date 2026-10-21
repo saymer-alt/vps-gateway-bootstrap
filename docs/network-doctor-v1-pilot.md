@@ -15,18 +15,37 @@ and the tool does not try.
 
 ## 1. Obtain the binary for an exact reviewed commit
 
-Pick ONE of the two options. Either way, you end up with a binary whose
-embedded build metadata you verify against the reviewed commit SHA.
+Two independent properties must hold before execution, and they are
+established differently — do not confuse them:
+
+- **Build provenance** — *which commit produced this binary* — is
+  established ONCE, before transfer: either from a verified exact GitHub
+  Actions run of the reviewed commit (Option A), or from a local build
+  of the explicitly checked-out reviewed commit (Option B), optionally
+  cross-checked with `go version -m` on a machine that has Go (§2 note).
+- **Transfer integrity** — *the bytes that reached the VPS are the bytes
+  you verified* — is established by the SHA256 comparison in §2.
+
+The target VPS needs **no Go toolchain and nothing installed** for any
+part of this runbook.
 
 ### Option A — download the CI build artifact (no toolchain needed)
 
+**Which run to use:** for the first live pilot, use a **post-merge `main`
+run of the reviewed commit** (Actions → "Build and test" → filter branch
+`main`), or build locally per Option B. **Do not assume a pull-request
+run's artifact matches the PR head commit**: GitHub checks out a
+synthetic merge ref (`refs/pull/<N>/merge`) for PR workflow runs, so such
+an artifact may be built from a merge of the PR branch with the base —
+not from the PR head SHA you reviewed.
+
 1. Open the repository's **Actions → "Build and test"** page on GitHub.
-2. Find the run for the **exact reviewed commit** (the run header shows
-   the commit message and short SHA; confirm it matches the SHA you were
-   given). The workflow also runs on pull requests — prefer a `main`
-   (post-merge) run.
-3. In the run's **Artifacts** section download the artifact for your CPU
-   architecture: `vps-gateway-linux-amd64` (typical VPS) or
+2. Select a run whose **branch is `main`** and whose commit (shown in the
+   run header) is exactly the reviewed post-merge SHA. Record the run ID
+   and the commit SHA together — that pair is the artifact's provenance.
+3. Confirm the run is green (Test and vet + both Build jobs succeeded)
+   before downloading from its **Artifacts** section:
+   `vps-gateway-linux-amd64` (typical VPS) or
    `vps-gateway-linux-arm64` (ARM VPS). Downloading requires a GitHub
    login with access to the repository.
 4. Unzip it on your workstation, then transfer the single binary to the
@@ -48,7 +67,8 @@ embedded build metadata you verify against the reviewed commit SHA.
 
 ### Option B — build locally from the reviewed commit
 
-Requires Go (the version in `go.mod`) and a git clone:
+Requires Go (the version in `go.mod`) and a git clone **on your
+workstation**, not on the VPS:
 
 ```bash
 git clone https://github.com/saymer-alt/vps-gateway-bootstrap
@@ -60,30 +80,50 @@ sha256sum vps-gateway-linux-amd64
 scp vps-gateway-linux-amd64 user@your-vps:/tmp/vps-gateway
 ```
 
-(Use `GOARCH=arm64` for an ARM VPS. These are the same flags CI uses.)
+(Use `GOARCH=arm64` for an ARM VPS. These are the same flags CI uses.
+Because you built from an explicit checkout, the provenance is the commit
+you checked out — verify with `git rev-parse HEAD` and keep the pair.)
 
 ## 2. Verify architecture and integrity before executing
 
-On the VPS, as any user (no root needed for the checks themselves):
+All checks below run on the VPS, as any user, and require **nothing to
+be installed**: `uname`, `file` and `sha256sum` are present on a minimal
+Ubuntu 24.04 / Debian 12 system. If one of them is unexpectedly missing,
+do NOT install packages on the pilot host — run the verification on your
+workstation instead or use a different host.
 
 ```bash
 uname -m                                   # x86_64 -> amd64 binary, aarch64 -> arm64 binary
 file /tmp/vps-gateway                      # must say "ELF 64-bit ... x86-64" (or aarch64), "statically linked"
 sha256sum /tmp/vps-gateway                 # must match the checksum you recorded at download/build time
-go version -m /tmp/vps-gateway 2>/dev/null | grep -E 'vcs.revision|vcs.modified' || true
+chmod +x /tmp/vps-gateway
 ```
 
 - `file` must agree with `uname -m` (x86_64 ↔ amd64, aarch64 ↔ arm64).
 - The `sha256sum` output must be **byte-identical** to the value you
-  recorded before the transfer — if it differs, the file changed in
-  transit: do not execute it, re-transfer.
-- The `go version -m` line shows the build's provenance: `vcs.revision`
-  must equal the reviewed commit SHA and `vcs.modified` should be `false`
-  (a `true` here means the binary was built from a dirty tree — prefer a
-  clean one). CI artifacts carry the same stamp; a missing stamp means an
-  unofficial build — do not use it for the pilot.
-- `chmod +x /tmp/vps-gateway` before running. The binary makes no
-  network connections of its own, installs nothing, and writes nothing.
+  recorded before the transfer. This check verifies **transfer
+  integrity only** — it says nothing about which commit built the
+  binary; that is the provenance established in §1. A mismatch means the
+  file changed in transit: **do not execute it**, re-transfer and
+  re-verify. A missing or failed required check is never acceptable to
+  skip or suppress.
+
+**Build-provenance cross-check (optional, workstation only).** On a
+machine that has Go — never required on the VPS, and nothing is installed
+anywhere if you skip it — inspect the embedded build metadata:
+
+```bash
+go version -m vps-gateway-linux-amd64 | grep -E 'vcs.revision|vcs.modified'
+```
+
+`vcs.revision` should equal the reviewed commit SHA from §1 and
+`vcs.modified` should be `false` (a `true` means a dirty-tree build —
+prefer a clean one). **If this check is unavailable or the stamp is
+missing or mismatched, do not use the binary for the pilot**: fall back
+to a post-merge `main` CI artifact (Option A) or a fresh local build of
+the explicit commit (Option B). The binary itself runs fine without Go
+present anywhere — this step only reads embedded metadata on the
+workstation.
 
 ## 3. Run the three read-only commands
 
@@ -99,9 +139,18 @@ configuration change, and no service restart anywhere in this runbook.
 ```
 
 Optional: bound every underlying command with an explicit timeout
-(default 60 s) — `--timeout 30s`. Every command above is repeatable;
-running them twice must produce identical `--network-json` documents
-(the document is deterministic by design and contains no timestamp).
+(default 60 s) — `--timeout 30s`.
+
+**Determinism contract.** Given identical discovery inputs and the same
+observation instant, the `--network-json` document is deterministic:
+fixed fact ordering, closed vocabularies, no generation timestamp in the
+document, and a versioned schema (`network-diagnostics/v1`). Two LIVE
+runs are two different observations, so their documents may legitimately
+differ — most visibly the WireGuard/AWG handshake age, which is computed
+against each run's observation clock. A changed handshake age between two
+runs is, by itself, **not** evidence of a malfunction; it only means time
+passed between the snapshots. Compare runs fact-by-fact, and expect
+time-derived ages and any genuinely changed machine state to move.
 
 ## 4. Exit codes: separating tool failure from machine findings
 
