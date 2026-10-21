@@ -32,6 +32,34 @@ func TestCollectIPv6EvidenceGlobalAddresses(t *testing.T) {
 	}
 }
 
+// ZAI-91A: the address classes stay apart. ULA (fc00::/7) is never
+// "global": a ULA-only server must not look publicly reachable over IPv6.
+func TestCollectIPv6EvidenceClassifiesGuaUlaLinkLocal(t *testing.T) {
+	r := Result{Status: "OK"}
+	r.Network.InterfacesStatus = InterfacesComplete
+	r.Network.Interfaces = []Interface{
+		{Name: "ens3", Addresses: []Address{
+			{Address: "2001:db8::1", PrefixLength: 64, Family: "inet6"},
+			{Address: "fd00::10", PrefixLength: 64, Family: "inet6"},
+			{Address: "fe80::1", PrefixLength: 64, Family: "inet6"},
+			{Address: "203.0.113.10", PrefixLength: 24, Family: "inet"},
+		}},
+		{Name: "wg0", Addresses: []Address{{Address: "fdca:abcd::1", PrefixLength: 64, Family: "inet6"}}},
+		{Name: "lo", Addresses: []Address{{Address: "::1", PrefixLength: 128, Family: "inet6"}}},
+	}
+	c := &Collector{ReadFile: func(string) ([]byte, error) { return []byte("0\n"), nil }}
+	ev := c.CollectIPv6Evidence(context.Background(), &r)
+	if len(ev.GlobalInterfaces) != 1 || ev.GlobalInterfaces[0] != "ens3" {
+		t.Fatalf("GUA interfaces = %v, want [ens3] only (fd00::10 is ULA, fe80::1 link-local, ::1 loopback)", ev.GlobalInterfaces)
+	}
+	if len(ev.UlaInterfaces) != 2 {
+		t.Fatalf("ULA interfaces = %v, want ens3+wg0", ev.UlaInterfaces)
+	}
+	if ev.LinkLocalInterfaces != 1 {
+		t.Fatalf("link-local count = %d, want 1", ev.LinkLocalInterfaces)
+	}
+}
+
 func TestCollectIPv6EvidenceIncompleteInventoryInconclusive(t *testing.T) {
 	r := Result{Status: "OK"}
 	r.Network.InterfacesStatus = InterfacesUnknown

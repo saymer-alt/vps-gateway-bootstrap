@@ -226,3 +226,30 @@ SAFER interpretation:
   no clock is consumed and tests are deterministic by construction (the
   injected-clock requirement is satisfied vacuously and pinned by the
   determinism test).
+
+## 10. Audit corrections (ZAI-91A, 2026-10-21)
+
+The independent review of PR #28 (`090cd9a`) found two correctness defects
+and one imprecision; all fixed on the same branch with fails-without-fix
+regression tests (verified by temporarily reverting each fix per AGENTS §11):
+
+- **Handshake output is Unix epoch, not age.** `awg|wg show all
+  latest-handshakes` emits `<iface> <peer-key> <last-handshake-epoch>`;
+  §3 producer 4's original "parse into age seconds" was wrong. The
+  producer now takes an injected clock (`Collector.Now`), computes
+  `now − timestamp` at a single observation instant, reports timestamp 0
+  as NEVER (never as age zero), fails closed to INCONCLUSIVE on future
+  timestamps (clock skew) and unparseable/negative values, and cannot
+  produce negative ages or overflow (0 ≤ ts ≤ nowUnix is enforced before
+  the subtraction). Sorting and peer-key hiding unchanged.
+- **INCONCLUSIVE network findings now WARN in the human doctor.** These
+  collectors run after `Discover`, so their failures are NOT in
+  `discovery.Result.Unknowns`; mapping them to INFO could let the default
+  `doctor` conclude OK while a diagnostic never completed. New mapping:
+  OK → INFO, INCONCLUSIVE → WARN, FAIL → FAIL, SKIPPED unrendered.
+  `doctor --json` shape and exit codes unchanged (WARN exits 0).
+- **IPv6 address classes are kept apart.** The former single "global
+  unicast" bucket now excludes ULA: the evidence separates GUA (outside
+  fc00::/7, the only public-reachability-capable class), ULA (fc00::/7 —
+  presence implies NO public reachability), link-local (fe80::/10, counted)
+  and loopback (excluded). The fact text states this explicitly.

@@ -28,6 +28,9 @@ type Collector struct {
 	// Readlink injects symlink-target reads (ZAI-91 DNS evidence); nil uses
 	// os.Readlink. Same injection rule as ReadFile.
 	Readlink func(path string) (string, error)
+	// Now injects the clock for time-derived evidence (ZAI-91A handshake
+	// ages); nil uses time.Now. Same injection rule as ReadFile.
+	Now func() time.Time
 }
 func New() *Collector { return &Collector{Run: CommandRunner{}} }
 
@@ -44,6 +47,11 @@ func (c *Collector) readFile(path string) ([]byte, error) {
 func (c *Collector) readlink(path string) (string, error) {
 	if c.Readlink != nil { return c.Readlink(path) }
 	return os.Readlink(path)
+}
+
+func (c *Collector) now() time.Time {
+	if c.Now != nil { return c.Now() }
+	return time.Now()
 }
 
 // discoveryVersion is the Discovery 0.4 record version: typed routing

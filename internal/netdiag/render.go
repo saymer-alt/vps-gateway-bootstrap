@@ -133,7 +133,11 @@ func renderPeers(peers []discovery.PeerHandshake, limit int) string {
 		if p.Interface != "" {
 			entry += "@" + p.Interface
 		}
-		entry += ": " + strconv.FormatInt(p.AgeSeconds, 10) + "s"
+		if p.NeverHandshook {
+			entry += ": never"
+		} else {
+			entry += ": " + strconv.FormatInt(p.AgeSeconds, 10) + "s ago"
+		}
 		parts = append(parts, entry)
 	}
 	return strings.Join(parts, ", ")

@@ -729,8 +729,16 @@ func handshakesFact(extras Extras) Fact {
 	f.Status = factStatus(h.Status)
 	switch f.Status {
 	case StatusOK:
-		f.Detail = strconv.Itoa(len(h.Peers)) + " peer(s); newest handshake " + strconv.FormatInt(h.NewestAgeSeconds, 10) +
-			"s ago via " + h.Binary + " (age is an indicator, not a connectivity proof): " + renderPeers(h.Peers, 6)
+		f.Detail = strconv.Itoa(len(h.Peers)) + " peer(s) via " + h.Binary
+		if h.NeverHandshookPeers > 0 {
+			f.Detail += "; " + strconv.Itoa(h.NeverHandshookPeers) + " never handshook (timestamp 0)"
+		}
+		if h.NewestAgeSeconds >= 0 {
+			f.Detail += "; newest handshake " + strconv.FormatInt(h.NewestAgeSeconds, 10) + "s ago"
+		} else if h.NeverHandshookPeers == len(h.Peers) {
+			f.Detail += "; no handshake observed yet"
+		}
+		f.Detail += " (age is an indicator, never a tunnel-health or connectivity proof): " + renderPeers(h.Peers, 6)
 	case StatusSkipped, StatusInconclusive:
 		f.Detail = "handshake ages not observed via " + h.Binary
 		f.Unknowns = append(f.Unknowns, h.Unknowns...)
@@ -802,10 +810,17 @@ func ipv6AddressesFact(extras Extras) Fact {
 		Source: "discovery: ip -j addr (global unicast inet6)",
 	}
 	if f.Status == StatusOK {
-		if len(v.GlobalInterfaces) == 0 {
-			f.Detail = "no global IPv6 unicast addresses on " + strconv.Itoa(v.Inventoried) + " interface(s)"
-		} else {
-			f.Detail = "global IPv6 unicast addresses on: " + strings.Join(v.GlobalInterfaces, ", ")
+		switch {
+		case len(v.GlobalInterfaces) > 0:
+			f.Detail = "publicly routable IPv6 (GUA, outside fc00::/7) on: " + strings.Join(v.GlobalInterfaces, ", ")
+		case len(v.UlaInterfaces) > 0:
+			f.Detail = "no publicly routable IPv6; unique-local addresses (fc00::/7) on: " +
+				strings.Join(v.UlaInterfaces, ", ") + " — ULA presence implies no public IPv6 reachability"
+		default:
+			f.Detail = "no publicly routable IPv6 on " + strconv.Itoa(v.Inventoried) + " interface(s)"
+		}
+		if v.LinkLocalInterfaces > 0 {
+			f.Detail += "; link-local (fe80::/10) on " + strconv.Itoa(v.LinkLocalInterfaces) + " interface(s)"
 		}
 	} else {
 		f.Detail = "IPv6 address presence not fully observed"

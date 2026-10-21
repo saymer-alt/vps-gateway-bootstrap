@@ -322,6 +322,38 @@ func TestSecretRedactionSweep(t *testing.T) {
 	}
 }
 
+func TestHandshakesFactRendersAgesAndNever(t *testing.T) {
+	extras := healthyExtras()
+	extras.Handshakes = discovery.AWGHandshakeEvidence{
+		Status: discovery.FactStatusOK, Binary: "awg",
+		Peers: []discovery.PeerHandshake{
+			{Peer: 1, Interface: "wg0", AgeSeconds: 38},
+			{Peer: 2, Interface: "wg1", NeverHandshook: true},
+		},
+		NewestAgeSeconds: 38, NeverHandshookPeers: 1,
+	}
+	doc := Assemble(healthyResult(), extras, Options{})
+	f := factByID(t, doc, "gateway.wireguard_handshakes")
+	if f.Status != StatusOK {
+		t.Fatalf("fact = %+v", f)
+	}
+	for _, want := range []string{"newest handshake 38s ago", "1 never handshook (timestamp 0)", "peer-1@wg0: 38s ago", "peer-2@wg1: never", "never a tunnel-health"} {
+		if !strings.Contains(f.Detail, want) {
+			t.Fatalf("detail %q misses %q", f.Detail, want)
+		}
+	}
+	// All never: no fake "0s ago" freshness.
+	extras.Handshakes.NewestAgeSeconds = -1
+	extras.Handshakes.Peers = extras.Handshakes.Peers[:1:1]
+	extras.Handshakes.Peers[0] = discovery.PeerHandshake{Peer: 1, Interface: "wg1", NeverHandshook: true}
+	extras.Handshakes.NeverHandshookPeers = 1
+	doc = Assemble(healthyResult(), extras, Options{})
+	f = factByID(t, doc, "gateway.wireguard_handshakes")
+	if !strings.Contains(f.Detail, "no handshake observed yet") || strings.Contains(f.Detail, "0s ago") {
+		t.Fatalf("all-never detail = %q", f.Detail)
+	}
+}
+
 func TestProducerVocabulariesMatchDocumentContract(t *testing.T) {
 	if string(StatusOK) != discovery.FactStatusOK || string(StatusFail) != discovery.FactStatusFail ||
 		string(StatusSkipped) != discovery.FactStatusSkipped || string(StatusInconclusive) != discovery.FactStatusInconclusive {
