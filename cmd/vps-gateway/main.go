@@ -10,6 +10,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/doctor"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/netdiag"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/validate"
@@ -19,7 +20,10 @@ const usage = `usage: vps-gateway <command> [flags]
 
 commands:
   discover                read-only discovery snapshot as JSON
-  doctor [--json]         read-only diagnosis over discovery
+  doctor [--json] [--network-json]
+                          read-only diagnosis over discovery; --network-json
+                          prints only the versioned network-diagnostics/v1
+                          passive evidence document (no active probes)
   validate [--json] [--production]
                           strict gate over effective machine state (read-only)
   install --dry-run [--config FILE] [--state FILE] [--json]
@@ -114,22 +118,50 @@ func runDiscover(args []string) int {
 	return 0
 }
 
-// runDoctor is read-only diagnosis. It runs discovery and triages the result;
-// it never mutates the machine and never performs hidden Apply operations.
+// runDoctor is read-only diagnosis. It runs discovery plus the bounded
+// passive network-diagnostics producers and triages the result; it never
+// mutates the machine, never performs hidden Apply operations, never runs
+// active probes or DNS queries, and passes NO routing/firewall/listener
+// expectations to the evidence assembly (v1 assumes no topology).
 func runDoctor(args []string) int {
 	timeout, rest := parseTimeout(args)
-	jsonOut := false
+	jsonOut, networkJSON := false, false
 	for _, a := range rest {
 		switch a {
 		case "--json":
 			jsonOut = true
+		case "--network-json":
+			networkJSON = true
 		default:
-			fmt.Fprintf(os.Stderr, "unknown doctor flag %q\nusage: vps-gateway doctor [--json] [--timeout DURATION]\n", a)
+			fmt.Fprintf(os.Stderr, "unknown doctor flag %q\nusage: vps-gateway doctor [--json] [--network-json] [--timeout DURATION]\n", a)
 			return 2
 		}
 	}
-	result := runDiscovery(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	col := discovery.New()
+	result := col.Discover(ctx)
+	extras := netdiag.Extras{
+		DNS:        col.CollectDNSConfig(ctx),
+		IPv6:       col.CollectIPv6Evidence(ctx, &result),
+		Services:   col.CollectServiceHealth(ctx),
+		Handshakes: col.CollectAWGHandshakes(ctx),
+	}
+	doc := netdiag.Assemble(result, extras, netdiag.Options{})
+	if networkJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(doc); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if doc.Summary.Overall == netdiag.StatusFail {
+			return 3
+		}
+		return 0
+	}
 	rep := doctor.FromDiscovery(result)
+	doctor.AppendNetworkFindings(&rep, doc)
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

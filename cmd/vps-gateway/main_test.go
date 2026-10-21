@@ -60,6 +60,25 @@ func TestCLIMutationPathIsConfined(t *testing.T) {
 // on them: 0 ok, 2 usage, 3 failure.
 func TestUsageExitCode(t *testing.T) {
 	if code := runDoctor([]string{"--nope"}); code != 2 { t.Fatalf("doctor bad flag exit=%d, want 2", code) }
+	if code := runDoctor([]string{"--network-json", "--nope"}); code != 2 { t.Fatalf("doctor --network-json with bad flag exit=%d, want 2", code) }
 	if code := runValidate([]string{"--nope"}); code != 2 { t.Fatalf("validate bad flag exit=%d, want 2", code) }
 	if code := runDiscover([]string{"--nope"}); code != 2 { t.Fatalf("discover bad flag exit=%d, want 2", code) }
+}
+
+// Source-level pin: --network-json prints ONLY the passive evidence
+// document — the flag path must never reach plan, apply or orchestration
+// surfaces, and doctor must pass no topology expectations to the assembly
+// (the CLI assumes no routing/firewall/listener policy, ZAI-91).
+func TestDoctorNetworkJSONPathIsPassiveAndExpectationFree(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil { t.Fatal(err) }
+	s := string(src)
+	if !strings.Contains(s, "netdiag.Assemble(result, extras, netdiag.Options{})") {
+		t.Fatal("doctor must assemble the evidence document with zero expectations (no topology assumptions)")
+	}
+	for _, banned := range []string{"ExpectedRouting{", "ExpectedGuard{", "ExpectedListeners:", "IPv6ForwardingForbidden: true"} {
+		if strings.Contains(s, banned) {
+			t.Fatalf("main.go must never supply a diagnostic expectation (%s)", banned)
+		}
+	}
 }

@@ -461,3 +461,59 @@ func TestNoOwnershipInferred(t *testing.T) {
 	}
 	_ = capability.CheckSysctlKey("net.ipv4.ip_forward")
 }
+
+// ZAI-91: the IPv6 forwarding observation must stay observation-only. The
+// forwarding keys are read from fixed compile-time paths and MUST remain
+// outside the compiled mutation allowlist — RuntimePath and the shared
+// capability check both reject them, so this observation can never authorize
+// a sysctl write. If a future task wants to mutate forwarding, the pin test
+// below fails first and the widening becomes an explicit owner decision.
+func TestIPv6ForwardingKeysStayOutsideMutationAllowlist(t *testing.T) {
+	for _, k := range ipv6ForwardingKeys {
+		if _, err := RuntimePath(k.Key); err == nil {
+			t.Fatalf("forwarding key %q must stay rejected by RuntimePath", k.Key)
+		}
+		if _, err := RuntimePath(k.Key); err != nil && !errors.Is(err, ErrKeyNotAllowlisted) {
+			t.Fatalf("forwarding key %q must map to ErrKeyNotAllowlisted, got %v", k.Key, err)
+		}
+		if err := capability.CheckSysctlKey(string(k.Key)); err == nil {
+			t.Fatalf("forwarding key %q must stay rejected by capability.CheckSysctlKey", k.Key)
+		}
+	}
+}
+
+func TestObserveIPv6ForwardingReadsFixedPaths(t *testing.T) {
+	var got []string
+	read := func(p string) ([]byte, error) {
+		got = append(got, p)
+		if p == "/proc/sys/net/ipv6/conf/all/forwarding" {
+			return []byte("1\n"), nil
+		}
+		return []byte("0\n"), nil
+	}
+	obs := ObserveIPv6Forwarding(read)
+	if len(obs) != 2 {
+		t.Fatalf("observations = %d, want 2", len(obs))
+	}
+	if obs[0].Key != SysctlKey("net.ipv6.conf.all.forwarding") || obs[0].Value != 1 || obs[0].Status != RuntimePresent {
+		t.Fatalf("all-forwarding observation = %+v", obs[0])
+	}
+	if obs[1].Key != SysctlKey("net.ipv6.conf.default.forwarding") || obs[1].Value != 0 || obs[1].Status != RuntimePresent {
+		t.Fatalf("default-forwarding observation = %+v", obs[1])
+	}
+	if len(got) != 2 || got[0] != "/proc/sys/net/ipv6/conf/all/forwarding" || got[1] != "/proc/sys/net/ipv6/conf/default/forwarding" {
+		t.Fatalf("unexpected read paths %v", got)
+	}
+}
+
+func TestObserveIPv6ForwardingClassifiesFailures(t *testing.T) {
+	obs := ObserveIPv6Forwarding(readFrom(nil, map[string]error{
+		"/proc/sys/net/ipv6/conf/all/forwarding": fs.ErrPermission,
+	}))
+	if obs[0].Status != RuntimeUnknownPermission {
+		t.Fatalf("permission failure classified as %s", obs[0].Status)
+	}
+	if obs[1].Status != RuntimeAbsentUnsupported {
+		t.Fatalf("absent leaf classified as %s", obs[1].Status)
+	}
+}

@@ -885,3 +885,18 @@ Discovery Schema is considered ready when:
 The central rule remains:
 
 > **Discovery tells us what exists. It does not decide what should exist.**
+
+## Network diagnostics document (network-diagnostics/v1)
+
+The doctor-facing passive diagnostic document (ZAI-91) is a separate,
+schema-versioned contract assembled FROM the discovery inventories plus five
+bounded read-only producers. It lives in `internal/netdiag` and is specified
+in [`network-doctor-v1-spec-zai-91.md`](network-doctor-v1-spec-zai-91.md):
+closed OK/FAIL/SKIPPED/INCONCLUSIVE statuses, OBSERVED/CONFIG-INFERRED/
+NOT-REQUESTED evidence levels, per-fact provenance and redacted detail,
+deterministic fact order, and an always-empty `hypotheses` collection in v1.
+The same value semantics apply there: unknown is different from absent, a
+failed command is never a failed network, and configuration is never runtime
+behavior. Expected-state comparisons (routing selector/fallback, firewall
+guard, listeners, IPv6 forwarding) run only against an explicitly supplied
+applicable policy — never against hardcoded topology values.
