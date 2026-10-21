@@ -4,16 +4,16 @@
 
 The operator is an architect who enjoys building **apparently mind-bending overall systems from many simple autonomous bricks**. Each brick does one focused job and is ignorant of the entire system; the **system-level knowledge lives in the architecture designed by the operator**, not in an omniscient process. The pattern recurs in home plumbing, a three-phase electrical distribution panel, an IP-camera→ring-buffer NVR→media adapter→CRT chain, and layered Mihomo/VPS infrastructure.
 
-For discovery, planning and operations: decompose the system into minimal owned components, map their inputs/outputs and coupling contracts, test local invariants, then the cross-layer packet path/fail-secure behavior. Do not make one service manage all others or treat apparent complexity at system scale as a reason to rewrite working independent layers. If a boundary cannot be established from evidence, mark UNKNOWN and ask the owner, not guess.
+For discovery, planning and operations: decompose the system into minimal owned components, map their inputs/outputs and coupling contracts, and test local invariants. For changes that affect forwarding, routing, egress or connector contracts, additionally verify cross-layer packet paths and fail-secure behavior. Do not make one service manage all others or treat apparent complexity at system scale as a reason to rewrite working independent layers. If a boundary cannot be established from evidence, mark UNKNOWN and ask the owner, not guess.
 
 ## Owner architecture: independent, autonomous abstraction layers (2026-10-18)
 
 The owner is an architect of **complex layered systems**, intentionally separating independently managed parts. No fleet-wide omniscient controller and no hidden fusion of service ownership:
 
 - Each VPS is independently configured and makes local decisions. SE, SE2, EE, MSK have different allowed egress tiers and local Mihomo `GLOBAL` / `EXIT_STRATEGY` / `url-test`; MSK→EE is an optional transport endpoint, **not** shared policy/configuration.
-- Inbound Xray/3x-ui, Mieru, AmneziaWG, etc. do not need to know Mihomo's outgoing strategy; Mihomo need not know what inbound applications are installed. Linux route/mark/iptables, Docker and TUN are explicit **connector contracts** between those layers.
-- Client/Keenetic is a separate decision-maker that selects an entrance VPS; the owner's currently working v1.11.1 router config is out of scope for VPS work.
-- Independently configured is **not** the same as independently reliable: a bridge/route failure can break traffic safety. Require live discovery, provenance, ownership preflight and separate fail-secure testing for packet paths before any mutation.
+- Inbound Xray (regardless of panel, e.g. LucX-UI), Mieru, AmneziaWG, etc. do not need to know Mihomo's outgoing strategy; Mihomo need not know what inbound applications are installed. Linux route/mark/iptables, Docker and TUN are explicit **connector contracts** between those layers.
+- Client/Keenetic is a separate decision-maker that selects an entrance VPS; existing router/client configuration is out of scope for VPS work unless explicitly authorized.
+- Independently configured is **not** the same as independently reliable: a bridge/route failure can break traffic safety. Require live discovery, provenance and ownership preflight for authorized live mutations; additionally require scoped fail-secure packet-path testing when the planned change affects forwarding, routing, egress or a connector contract. Unrelated service changes do not require network failure injection.
 - No unexpected user-data-plane fallback to a VPS public IP. Service/control-plane bootstrap/provider/dialer/DNS is evaluated by purpose, not an unqualified lexical `DIRECT` ban.
 
 Agent: preserve existing component ownership and autonomy; never combine or reconfigure unrelated services/hosts to meet a narrow YAML request. If changing one layer requires actions in another, produce a separate explicit plan and ask the owner (anti-monkey-paw). This is owner architectural intent, not a live inventory or authority to apply changes.
