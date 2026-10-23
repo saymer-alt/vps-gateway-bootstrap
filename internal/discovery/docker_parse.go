@@ -269,6 +269,20 @@ func displayToken(s string) string {
 	return s[:64] + "…"
 }
 
+// shortContainerID renders a parse-validated Docker container ID for
+// observation text: Docker's conventional 12-hex-character prefix plus an
+// explicit truncation marker. The full 64-character identifier is never
+// needed in diagnostic output (issue #31). The input at the attachment
+// observation site is the parser's already-validated 64-hex ID — arbitrary
+// hex strings must not take this path; anything unexpectedly short falls
+// back to the displayToken flood guard.
+func shortContainerID(id string) string {
+	if len(id) <= 12 {
+		return displayToken(id)
+	}
+	return id[:12] + "…"
+}
+
 // validDockerNetworkName reports whether name is safe to pass as one
 // argv element of `docker network inspect`: docker's own network-name
 // shape (alphanumeric plus _ . -), never option-like, never whitespace
