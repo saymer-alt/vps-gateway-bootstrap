@@ -120,10 +120,17 @@ supplies a policy (the CLI supplies none — no topology is assumed).
 
 ### Maturity status
 
-The code is unit-tested offline and built by CI on every push. **The
-live pilot on a real VPS has NOT been performed for this release at the
-time of this draft**; the pre-release checklist below requires an
-operator-authorized, read-only pilot per the runbook before publication.
+The code is unit-tested offline and built by CI on every push. A first
+operator-authorized, read-only pilot on a real VPS was performed on
+2026-10-23 and is recorded in
+[`docs/network-doctor-v1-pilot-zai96.md`](network-doctor-v1-pilot-zai96.md)
+(30-fact schema snapshot, exit 0 on all three diagnostic commands, no
+implementation bugs confirmed; INCONCLUSIVE/UNKNOWN observations matched
+the documented fail-closed contract; remaining limitations documented in
+the same record). This acknowledges the pilot report only: it does NOT
+claim that the GitHub Release is published, and it does not claim
+production readiness beyond that single passive snapshot — the
+pre-release checklist below still gates publication.
 
 ### Reproducibility statement
 
@@ -147,15 +154,25 @@ All boxes must be checked with recorded values before publication. A
 release must NOT be published with any box unchecked or any `<fill: …>`
 marker unresolved.
 
-- [ ] **E1 — PRs #29 and #30 merged.** Both documentation PRs are merged
+- [x] **E1 — PRs #29 and #30 merged.** Both documentation PRs are merged
       into `main` (order irrelevant; their changesets do not overlap),
       and the FINAL reviewed `main` HEAD after both merges is identified.
-      `<fill: PR #29 merge commit SHA>` `<fill: PR #30 merge commit SHA>`
-      `<fill: final main HEAD SHA>`
+      PR #29 merge commit `d188ab781841382b83e8ce74a676d119a17ab8e3`;
+      PR #30 merge commit `bfc7574b1c945ac61d486089f62de346b38e827b`;
+      final `main` HEAD after both merges = the PR #30 merge commit — the
+      pilot baseline. NOTE: a later docs-only merge (the
+      ZAI-97 pilot-record follow-up) advances `main` past this baseline;
+      re-identify the final HEAD immediately before tagging (E5) — do not
+      tag the stale baseline.
 - [ ] **E2 — Green exact-SHA main CI on the final HEAD.** The "Build and
       test" run for that exact final `main` HEAD is green (Test and vet +
       Build linux-amd64 + Build linux-arm64) and its `headSha` equals the
       final HEAD SHA — not any earlier intermediate merge commit.
+      Recorded baseline evidence (VALID FOR THE PILOT BASELINE ONLY):
+      run `39670554704`, headSha `bfc7574b1c945ac61d486089f62de346b38e827b`,
+      all jobs green. Because a later docs-only merge advances `main`, that
+      run cannot satisfy the final release-tag CI gate: re-verify a green
+      "Build and test" run whose `headSha` equals the HEAD that E5 tags.
       `<fill: run id>` `<fill: headSha>` — verify:
       `gh run list --repo saymer-alt/vps-gateway-bootstrap --branch main --workflow "Build and test" --limit 5`
 - [ ] **E3 — Owner release approval.** Explicit operator GO for tagging
@@ -165,7 +182,17 @@ marker unresolved.
       per `docs/network-doctor-v1-pilot.md` was performed on a
       owner-designated VPS (no remediation actions), feedback recorded
       and reviewed; no unresolved pilot findings against the release.
-      `<fill: host role/OS, date, feedback reference>`
+      Evidence recorded (2026-10-23): first read-only pilot on the
+      owner-designated VPS (inventory Saymer3, RU-MSK; Ubuntu 24.04.5
+      LTS, x86_64); three diagnostic commands, exit 0 each; no
+      remediation actions; findings reviewed — sanitized record:
+      `docs/network-doctor-v1-pilot-zai96.md` (raw evidence kept privately
+      outside the repository). Agent assessment: SUPPORTED (no
+      implementation bugs confirmed; INCONCLUSIVE/UNKNOWN observations
+      match the documented fail-closed contract). Owner acceptance is NOT
+      recorded yet — this box stays unchecked until the owner explicitly
+      records acceptance.
+      `<fill: owner acceptance reference/date>`
 - [ ] **E5 — Tag created on the final HEAD.** Annotated tag `v0.1.0` on
       the exact final `main` HEAD from E1/E2, pushed; the tag-triggered
       "Build and test" run is green. Note: pushing the tag is already a

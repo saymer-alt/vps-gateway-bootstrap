@@ -204,6 +204,30 @@ traffic. The document contains no `hypotheses` in v1 — it will never
 tell you "the ISP/TSPU/DPI is blocking you", because passive evidence
 cannot.
 
+**The `Discovery:` banner.** The line `Discovery: <status> (v<version>)`
+describes the **observation coverage of the discovery phase**, not the
+success of the CLI run and not the final verdict. Per the implementation
+(`internal/discovery`), the collector set starts at `OK`; a port/service
+conflict upgrades it to `CONFLICT`, and any discovery unknown (an
+observation gap, each surfaced with a code in the `Unknowns:` section /
+JSON `unknowns`) upgrades it to `PARTIAL`. Four different things can be
+present in one report at the same time — keep them apart:
+
+- the CLI executed successfully — that is the exit code (§4), not the
+  banner;
+- partial observation coverage — the `PARTIAL` banner plus
+  `UNKNOWN`/`WARN` lines (an unavailable or unparseable collector is
+  never reported as absence);
+- INCONCLUSIVE diagnostic facts — NETDIAG lines / `--network-json`
+  facts whose evidence could not be obtained or parsed;
+- positive FAIL findings — observed undesirable states (exit 3).
+
+Exit code 0 can therefore coexist with a `PARTIAL` banner, `WARN`
+lines and INCONCLUSIVE facts. The `(v…)` value is the discovery
+collector-set version reported by the binary; it is a code constant and
+may change between releases — do not treat any particular value as a
+permanently fixed schema version.
+
 ## 6. Privacy checklist before sharing anything
 
 The document is designed to be shareable, but verify before you post or
@@ -263,6 +287,16 @@ maintainer) with **redacted** excerpts only.
 - A handshake age is an indicator, not proof of tunnel health; config
   evidence is CONFIG-INFERRED, never a runtime claim; incomplete
   inventories are INCONCLUSIVE, never "absent".
+- Host-side `awg`/`wg` inspection only sees the host network namespace.
+  When WireGuard/AWG peers are managed inside a container (for example
+  Docker) or another namespace, the handshake producer may report
+  `SKIPPED` / "no peers" even though peers exist: a missing handshake
+  observation is never proof that no peers exist and never proof that
+  AWG is broken (and the reverse — an observed handshake never proves
+  tunnel health). Inspecting such deployments requires explicitly
+  authorized container-side commands; this read-only runbook deliberately
+  adds no automatic Docker execution, namespace traversal or extra
+  collection commands.
 - Mihomo TUN configuration evidence is deliberately not collected in v1
   (the fact `gateway.mihomo_tun_config` reports SKIPPED with the reason).
 - Expected-vs-observed routing/firewall/listener comparisons require an
