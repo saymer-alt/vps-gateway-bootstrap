@@ -1,5 +1,9 @@
 # AGENTS.md — operational and safety contract for AI agents
 
+## Owner-wide design gate — SIMPLICITY-FIRST (2026-10-24)
+
+Before adding a new subsystem, UI, installer/uninstaller, controller, watcher, multi-stage recovery mechanism, or expensive CI path, apply the [common saymer-alt simplicity rule](https://github.com/saymer-alt/saymer-alt/pull/7): compare (A) the existing/manual workflow, (B) the smallest safe solution, and (C) extended architecture. Choose A/B by default; C needs evidence of need, a maintenance/test-cost estimate and explicit owner approval. If supporting logic grows into its own platform or repeated full E2E runs add no new evidence, STOP expanding and report alternatives. Preserve existing safety invariants, user data, foreign resources and working behavior; this does not authorize refactoring stable code or changing production. [KAS uninstall #225](https://github.com/saymer-alt/keenetic-auto-setup/issues/225) is an **anti-pattern retrospective**, not a template to copy.
+
 ## Owner design style: composition-first, atomically simple components
 
 The operator is an architect who enjoys building **apparently mind-bending overall systems from many simple autonomous bricks**. Each brick does one focused job and is ignorant of the entire system; the **system-level knowledge lives in the architecture designed by the operator**, not in an omniscient process. The pattern recurs in home plumbing, a three-phase electrical distribution panel, an IP-camera→ring-buffer NVR→media adapter→CRT chain, and layered Mihomo/VPS infrastructure.
