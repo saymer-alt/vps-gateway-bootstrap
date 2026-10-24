@@ -90,7 +90,8 @@ func factFrom(t *testing.T, rec journal.Record) ownership.TransactionFact {
 
 // derive runs derivation + the MODIFY admission leg and returns all layers
 // so assertions can distinguish structural rejection, verification status,
-// verdict and admission decision.
+// verdict and admission decision. An unexpected DeriveVerdict error fails
+// the test explicitly — it is never swallowed into a zero value.
 func derive(t *testing.T, id ownership.ResourceIdentity, live ownership.LiveFact, claim *ownership.StateEvidence, resource string, candidates []ownership.TransactionFact, currentHost string) (ownership.Derivation, ownership.AdmissionDecision) {
 	t.Helper()
 	d, err := ownership.DeriveVerdict(ownership.DerivationInput{
@@ -98,7 +99,7 @@ func derive(t *testing.T, id ownership.ResourceIdentity, live ownership.LiveFact
 		JournalResource: resource, Candidates: candidates, CurrentHost: currentHost,
 	})
 	if err != nil {
-		return ownership.Derivation{}, ownership.AdmissionDecision{}
+		t.Fatalf("unexpected DeriveVerdict error (fail loudly, never a zero-value verdict): %v", err)
 	}
 	adm, admErr := ownership.Admit(ownership.OperationModify, d.Verdict, id)
 	if admErr != nil {
@@ -189,30 +190,120 @@ func TestJournalV1FailsClosed(t *testing.T) {
 	}
 }
 
-// 4 (audit): the corroboration chain binds the claim against the journal's
-// INTENDED spec hash (recorded at Begin) and never consults the journal's
-// independently observed postcondition hash (ActionRecord.ObservedSpecHash,
-// ZAI-59/J4) — the adapter drops it and nothing downstream reads it. Under
-// the existing contract this means:
-//   (a) intended hash + matching claim ⇒ VERIFIED, with no observed
-//       postcondition anywhere in the chain;
-//   (b) even an ObservedSpecHash that CONTRADICTS the intended hash cannot
-//       change the outcome, because the chain never reads it.
-// This test documents the current behavior and the intent-versus-observed
-// provenance gap; it is not an endorsement, and no fix is implemented here.
-// Mitigation for hash-observable classes: DeriveVerdict still compares the
-// LIVE representation against the claim spec below this layer.
-func TestIntendedSpecAloneVerifiesAndObservedHashIsIgnored(t *testing.T) {
+// 4 (corrected contract, ZAI-103): the journal's independently observed
+// postcondition hash (ActionRecord.ObservedSpecHash, ZAI-59/J4) is a
+// distinct meaning from the intended specification hash, and a record
+// whose observed postcondition contradicts the intended specification —
+// or the claimed one — must NEVER produce VERIFIED corroboration. The
+// pre-hardening behavior (VERIFIED despite a contradictory observed hash)
+// is preserved as history in the branch commits; these regressions pin
+// the corrected fail-closed contract and fail without the fix.
+func TestObservedPostconditionContradictionNeverVerifies(t *testing.T) {
 	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
-	rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, "")
+	// The observed postcondition contradicts the claim (and the intended
+	// specification) — the strongest form of the contradiction.
+	rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexOther)
+	v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{factFrom(t, rec)}, CurrentHost: hostA})
+	if err != nil || v.Status != ownership.VerificationMismatch {
+		t.Fatalf("a contradictory observed postcondition must never verify, got %v / %v", v, err)
+	}
+}
+
+func TestObservedPostconditionMatchVerifies(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexIntended)
 	v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{factFrom(t, rec)}, CurrentHost: hostA})
 	if err != nil || v.Status != ownership.VerificationVerified {
-		t.Fatalf("current contract: intended-hash match verifies, got %v / %v", v, err)
+		t.Fatalf("intended + observed + claim in agreement must verify, got %v / %v", v, err)
 	}
-	rec.Actions[0].ObservedSpecHash = hexOther
-	v, err = ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{factFrom(t, rec)}, CurrentHost: hostA})
+	joined := strings.Join(v.Reasons, "; ")
+	if !strings.Contains(joined, "independently observed postcondition matches the claimed specification") {
+		t.Fatalf("VERIFIED must record that the observed postcondition was checked: %v", v.Reasons)
+	}
+}
+
+func TestIntendedContradictsClaimNeverVerifies(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	// The intended specification contradicts the claim even though the
+	// observed postcondition matches it: the intent leg still binds.
+	rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexOther, hexIntended)
+	v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{factFrom(t, rec)}, CurrentHost: hostA})
+	if err != nil || v.Status != ownership.VerificationMismatch {
+		t.Fatalf("an intended specification contradicting the claim must never verify, got %v / %v", v, err)
+	}
+}
+
+func TestMalformedObservedHashFailsClosed(t *testing.T) {
+	rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, "not-hex")
+	if _, err := rec.CorroborationFact(); err == nil {
+		t.Fatal("a malformed observed postcondition hash must be structurally rejected")
+	}
+}
+
+func TestDuplicateFactsDifferingInObservedHashConflict(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	a := factFrom(t, journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexIntended))
+	b := factFrom(t, journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexOther))
+	_, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{a, b}, CurrentHost: hostA})
+	if !errors.Is(err, ownership.ErrConflictingCorroboration) {
+		t.Fatalf("duplicate facts differing in the observed hash must conflict, got %v", err)
+	}
+}
+
+func TestObservedEvidenceUnderRecoveryAndRollback(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	mk := func(mutate func(*journal.Record)) ownership.TransactionFact {
+		rec := journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexIntended)
+		mutate(&rec)
+		return factFrom(t, rec)
+	}
+	for _, tc := range []struct {
+		name string
+		fact ownership.TransactionFact
+	}{
+		{"RECOVERY_REQUIRED with observed evidence", mk(func(r *journal.Record) { r.Outcome = "RECOVERY_REQUIRED" })},
+		{"recovery latch with observed evidence", mk(func(r *journal.Record) { r.RecoveryRequired = true })},
+		{"rollback with observed evidence", mk(func(r *journal.Record) { r.RollbackAttempted = true; r.RollbackResult = "ROLLED_BACK" })},
+	} {
+		v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{tc.fact}, CurrentHost: hostA})
+		if err != nil || v.Status != ownership.VerificationMismatch {
+			t.Fatalf("%s: the terminal-state leg dominates observed evidence, got %v / %v", tc.name, v, err)
+		}
+	}
+}
+
+func TestObservedHashOrderDeterminism(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	match := factFrom(t, journalRecord(3, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, hexIntended))
+	noise := factFrom(t, journalRecord(3, "tx-synthetic-x", fingerprint, hostA, nsFile, "APPLIED", hexOther, hexOther))
+	run := func(cands []ownership.TransactionFact) ownership.VerificationStatus {
+		v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: cands, CurrentHost: hostA})
+		if err != nil {
+			t.Fatalf("determinism run failed: %v", err)
+		}
+		return v.Status
+	}
+	if s := run([]ownership.TransactionFact{noise, match}); s != ownership.VerificationVerified {
+		t.Fatalf("order must not change the outcome, got %s", s)
+	}
+	if s := run([]ownership.TransactionFact{match, noise}); s != ownership.VerificationVerified {
+		t.Fatalf("order must not change the outcome, got %s", s)
+	}
+}
+
+// Compatibility boundary (deliberately pinned, NOT silently changed):
+// records that carry no observed postcondition keep the historical
+// intent-only corroboration semantics. Requiring an observed hash in
+// every favorable case would change established compatibility semantics
+// and is reserved for a separate owner decision (v1: no hashes at all —
+// INCOMPLETE, see TestJournalV1FailsClosed; v3-without-observation is
+// covered by the positive control).
+func TestV2IntentOnlyCorroborationCompatibility(t *testing.T) {
+	claim := mintClaim(t, fileIdentity(nsFile), hexIntended, "tx-synthetic-1", fingerprint, hostA)
+	rec := journalRecord(2, "tx-synthetic-1", fingerprint, hostA, nsFile, "APPLIED", hexIntended, "")
+	v, err := ownership.Corroborate(ownership.VerificationInput{Claim: claim, JournalResource: nsFile, Candidates: []ownership.TransactionFact{factFrom(t, rec)}, CurrentHost: hostA})
 	if err != nil || v.Status != ownership.VerificationVerified {
-		t.Fatalf("current contract: the observed postcondition hash is never consulted, got %v / %v", v, err)
+		t.Fatalf("v2 intent-only corroboration is the pinned compatibility behavior, got %v / %v", v, err)
 	}
 }
 
@@ -307,19 +398,14 @@ func TestLiveUnknownIsUndetermined(t *testing.T) {
 }
 
 // 10: a positively absent birthright identity satisfies only the CREATE
-// ownership leg (through the real local collector: the sample file
-// positively does not exist on this machine — ENOENT is a positive absence,
-// not an inventory failure); GONE never counts as ABSENT; the ownership leg
-// alone is not mutation authorization.
+// ownership leg; GONE never counts as ABSENT; the ownership leg alone is
+// not mutation authorization. Absence is established by a SYNTHETIC
+// FileObservation with the explicitly constructed ABSENT status — the real
+// collector's behavior is covered by fileobs' own suite, and the offline
+// chain audit must not depend on any real filesystem path.
 func TestAbsentBirthrightSatisfiesOnlyCreateLeg(t *testing.T) {
-	id := fileIdentity("/etc/vps-gateway/p1achain-definitely-absent.conf")
-	obs, err := fileobs.ObserveFile(id, state.ActionCreateFile, nil)
-	if err != nil {
-		t.Fatalf("real local observation failed: %v", err)
-	}
-	if obs.Status != fileobs.StatusAbsent {
-		t.Fatalf("the sample path must be positively absent on the test machine, got %v", obs.Status)
-	}
+	id := fileIdentity("/etc/vps-gateway/p1achain-synthetically-absent.conf")
+	obs := fileobs.FileObservation{Identity: id, Status: fileobs.StatusAbsent}
 	live, err := obs.LiveFact()
 	if err != nil {
 		t.Fatalf("LiveFact translation failed: %v", err)

@@ -55,10 +55,16 @@ const (
 // from a v1 record carries nil and the verification caps at INCOMPLETE
 // (the spec leg is unprovable, never guessed). A future journal schema
 // that records spec hashes can supply them without changing this API.
+// ObservedSpecHash carries the INDEPENDENTLY OBSERVED postcondition hash
+// (journal v3, ZAI-59/J4) — a different meaning from the intended
+// SpecHash, never synthesized from it, and nil when the schema carries
+// none (v1/v2) or the postcondition was never observed; absence is
+// explicit absence.
 type TransactionAction struct {
-	Resource string    // exact durable resource coordinate (e.g. "file./etc/vps-gateway/x.conf")
-	Status   string    // engine action status; only TransactionActionApplied corroborates
-	SpecHash *SpecHash // spec hash recorded for this action, when the schema carries one
+	Resource         string    // exact durable resource coordinate (e.g. "file./etc/vps-gateway/x.conf")
+	Status           string    // engine action status; only TransactionActionApplied corroborates
+	SpecHash         *SpecHash // intended spec hash recorded for this action, when the schema carries one
+	ObservedSpecHash *SpecHash // independently observed postcondition hash (v3+), when recorded
 }
 
 // TransactionFact is the typed corroboration input: the security-relevant
@@ -201,26 +207,41 @@ func Corroborate(in VerificationInput) (Verification, error) {
 		return mismatch(fmt.Sprintf("claimed resource action did not durably complete (status %q)", applied.Status)), nil
 	}
 
-	// Spec leg (§10): the spec hash is opaque canonical evidence. When the
-	// corroboration carries one, it must equal the claim's; when it does
-	// not (v1 journal), the spec fidelity is unproven and the verification
-	// caps at INCOMPLETE — never guessed.
+	// Spec leg (§10): the intended and independently observed hashes are
+	// distinct meanings and are never combined. Every hash the
+	// corroboration carries must equal the claim's; a record whose
+	// observed postcondition contradicts its own intended specification is
+	// self-contradictory and fails closed. When no spec hash is durably
+	// recorded (v1 journal), spec fidelity is unproven and the verification
+	// caps at INCOMPLETE — never guessed. When only the intended hash is
+	// present (v2, or v3 without an observed postcondition), the
+	// historical intent-only binding holds: requiring an observed hash in
+	// every favorable case is a compatibility migration reserved for a
+	// separate owner decision.
 	if applied.SpecHash == nil {
 		return incomplete("spec hash is not durably recorded for the claimed action; spec fidelity cannot be proven from this history"), nil
+	}
+	if applied.ObservedSpecHash != nil && *applied.ObservedSpecHash != *applied.SpecHash {
+		return mismatch("independently observed postcondition contradicts the intended specification"), nil
 	}
 	if *applied.SpecHash != in.Claim.Spec {
 		return mismatch("corroborating spec hash does not match the claim"), nil
 	}
 
+	reasons := []string{
+		"claim is structurally valid",
+		"transaction " + fact.TxID + " is durably COMPLETED with no rollback and no recovery latch",
+		"transaction binds the claim's plan fingerprint, host identity and resource",
+		"claimed resource is durably APPLIED in the transaction with a matching spec hash",
+	}
+	if applied.ObservedSpecHash != nil {
+		reasons = append(reasons, "the independently observed postcondition matches the claimed specification")
+	}
+	reasons = append(reasons, "result is suitability for ownership admission only; it is not mutation authority")
+
 	return Verification{
-		Status: VerificationVerified,
-		Reasons: []string{
-			"claim is structurally valid",
-			"transaction " + fact.TxID + " is durably COMPLETED with no rollback and no recovery latch",
-			"transaction binds the claim's plan fingerprint, host identity and resource",
-			"claimed resource is durably APPLIED in the transaction with a matching spec hash",
-			"result is suitability for ownership admission only; it is not mutation authority",
-		},
+		Status:  VerificationVerified,
+		Reasons: reasons,
 	}, nil
 }
 
@@ -332,6 +353,9 @@ func (f TransactionFact) Validate() error {
 		if a.SpecHash != nil && a.SpecHash.IsZero() {
 			return fmt.Errorf("%w: action %d (%s) carries a zero spec hash", ErrInvalidEvidence, i, a.Resource)
 		}
+		if a.ObservedSpecHash != nil && a.ObservedSpecHash.IsZero() {
+			return fmt.Errorf("%w: action %d (%s) carries a zero observed postcondition hash", ErrInvalidEvidence, i, a.Resource)
+		}
 		if prev, dup := seen[a.Resource]; dup && !prev.equal(a) {
 			return fmt.Errorf("%w: action %d (%s) contradicts an earlier entry for the same resource", ErrInvalidEvidence, i, a.Resource)
 		}
@@ -340,19 +364,28 @@ func (f TransactionFact) Validate() error {
 	return nil
 }
 
-// equal compares two actions by value: the spec hash is dereferenced, so
-// two separately allocated but equal hashes compare equal.
+// equal compares two actions by value: the spec hashes are dereferenced,
+// so two separately allocated but equal hashes compare equal. The observed
+// postcondition hash participates: facts differing only in what was
+// independently observed contradict each other and must never be deduped.
 func (a TransactionAction) equal(b TransactionAction) bool {
 	if a.Resource != b.Resource || a.Status != b.Status {
 		return false
 	}
 	switch {
 	case a.SpecHash == nil && b.SpecHash == nil:
-		return true
 	case a.SpecHash == nil || b.SpecHash == nil:
 		return false
+	case *a.SpecHash != *b.SpecHash:
+		return false
+	}
+	switch {
+	case a.ObservedSpecHash == nil && b.ObservedSpecHash == nil:
+		return true
+	case a.ObservedSpecHash == nil || b.ObservedSpecHash == nil:
+		return false
 	default:
-		return *a.SpecHash == *b.SpecHash
+		return *a.ObservedSpecHash == *b.ObservedSpecHash
 	}
 }
 
