@@ -37,6 +37,15 @@ import (
 // retries.
 var ErrStaleObservedEvidence = errors.New("stale journal update would erase or replace recorded observed postcondition evidence")
 
+// ErrUpdateWithoutRecord classifies an Update for a transaction that has
+// no durable record: Update never creates one (ZAI-109).
+var ErrUpdateWithoutRecord = errors.New("update without a durable journal record")
+
+// ErrTransactionExists classifies a Begin for a transaction that already
+// has a durable record: Begin creates a transaction and can never replace
+// prior durable history (ZAI-109).
+var ErrTransactionExists = errors.New("transaction already has a durable journal record")
+
 // SchemaVersion is the transaction-record schema version this build
 // writes. v2 adds per-action durable evidence of intent (SpecHash, R5-A);
 // v3 adds the per-action observed postcondition SpecHash
@@ -184,9 +193,25 @@ func (j *Journal) path(txID string) string { return filepath.Join(j.Dir, txID+".
 // written atomically (file fsync + rename + directory fsync), so it
 // survives power loss at the moment it matters — including the first run,
 // when the directory itself is new.
+//
+// Begin is transaction CREATION (ZAI-109): a record for the same
+// transaction id must never be silently replaced — a repeated Begin would
+// otherwise erase observed postcondition evidence, per-action progress and
+// the terminal outcome of the prior durable transaction. A second Begin
+// therefore fails with ErrTransactionExists and the durable record stays
+// untouched. The existence check is a read-check-then-write sequence: it
+// is NOT serialized against concurrent creators (no O_EXCL fast path
+// exists in fsatomic) — serialized access to one transaction remains the
+// caller's lifecycle responsibility, and the gate closes the sequential
+// replacement hazard regardless.
 func (j *Journal) Begin(rec *Record) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
+	}
+	if _, statErr := os.Stat(j.path(rec.TransactionID)); statErr == nil {
+		return fmt.Errorf("%w: transaction %s already has a durable record; Begin creates a transaction and cannot replace it", ErrTransactionExists, rec.TransactionID)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("journal: %w", statErr)
 	}
 	rec.SchemaVersion = SchemaVersion
 	if rec.StartedAt.IsZero() {
@@ -203,48 +228,44 @@ func (j *Journal) Begin(rec *Record) error {
 	return nil
 }
 
-// Update durably rewrites an existing record (same durability contract as
+// Update durably rewrites an EXISTING record (same durability contract as
 // Begin; the directory normally exists and is then left untouched).
 //
-// Integrity gate (ZAI-108): a durably recorded ObservedSpecHash is
-// write-once proof of an independently observed postcondition. An update
-// driven by a stale in-memory snapshot must never remove or replace it:
-// the persisted record is read back first, and every recorded observed
-// hash must be retained identically by the incoming snapshot — otherwise
-// the update is refused with ErrStaleObservedEvidence and the durable
-// record stays untouched (the caller reloads and retries). Updates over a
-// corrupt persisted record also fail closed: evidence the boundary cannot
-// read is never overwritten. This gate is not a cross-process lock —
-// serialized access to one transaction remains the caller's lifecycle
-// responsibility; the gate makes the stale-snapshot hazard fail closed
+// Update is update-only (ZAI-109): a missing durable record is an error —
+// an update must never silently create an authoritative journal record
+// (that is Begin's exclusive contract).
+//
+// Integrity gates, all fail-closed with the durable record untouched:
+//
+//   - ZAI-108: a durably recorded ObservedSpecHash is write-once proof of
+//     an independently observed postcondition; an update from a stale
+//     in-memory snapshot must never remove or replace it
+//     (ErrStaleObservedEvidence), and updates over a corrupt persisted
+//     record are refused (evidence the boundary cannot read is never
+//     overwritten).
+//   - ZAI-109: the persisted body's transaction id must match the address
+//     being written (mirroring the load boundary's ZAI-J1 rule — a
+//     mismatched record is trusted as neither identity, never rewritten);
+//     observed postcondition hashes cannot exist in v1/v2 records and must
+//     be canonically formed in v3 (corrupt evidence is never preserved as
+//     valid or laundered by overwriting); observed evidence stays bound to
+//     the action it was recorded for — an update retaining the hash while
+//     changing the action's Resource, Kind or intended SpecHash is
+//     refused; duplicate persisted action ids are ambiguous and fail
+//     closed instead of choosing the first matching identity.
+//
+// None of these gates is a cross-process lock — serialized access to one
+// transaction remains the caller's lifecycle responsibility; the gates
+// make the known corruption and stale-snapshot hazards fail closed
 // regardless of which writer holds a stale copy.
 func (j *Journal) Update(rec *Record) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
-	if err := j.checkObservedEvidenceIntegrity(rec); err != nil {
-		return err
-	}
-	rec.UpdatedAt = time.Now().UTC()
-	data, err := json.MarshalIndent(rec, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := fsatomic.WriteFileSyncDir(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("journal: %w", err)
-	}
-	return nil
-}
-
-// checkObservedEvidenceIntegrity refuses an update whose incoming snapshot
-// would erase or replace a durably recorded observed postcondition hash.
-// A missing durable record is nothing to protect (Begin's predecessor);
-// a corrupt or out-of-schema durable record fails the update closed.
-func (j *Journal) checkObservedEvidenceIntegrity(rec *Record) error {
 	data, err := os.ReadFile(j.path(rec.TransactionID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return fmt.Errorf("%w: no durable record for transaction %s; Update never creates one (use Begin)", ErrUpdateWithoutRecord, rec.TransactionID)
 		}
 		return fmt.Errorf("journal: %w", err)
 	}
@@ -255,25 +276,64 @@ func (j *Journal) checkObservedEvidenceIntegrity(rec *Record) error {
 	if !readableSchemaVersions[current.SchemaVersion] {
 		return fmt.Errorf("journal: refusing to update %s over an unsupported record version %d", rec.TransactionID, current.SchemaVersion)
 	}
+	if current.TransactionID != rec.TransactionID {
+		return fmt.Errorf("journal: refusing to update %s over a record whose body carries transaction id %q (identity mismatch; the record is trusted as neither)", rec.TransactionID, current.TransactionID)
+	}
+	// Observed-hash field rules mirror the load boundary (ZAI-59): the
+	// field exists since v3, and a non-empty value must be the canonical
+	// hash form. Corrupt values are never preserved as valid or laundered
+	// by an overwrite.
 	for _, ca := range current.Actions {
 		if ca.ObservedSpecHash == "" {
-			continue // explicit absence is nothing to protect
+			continue
 		}
-		var incoming *string
+		if current.SchemaVersion < 3 {
+			return fmt.Errorf("journal: refusing to update %s: observed spec hash present in a schema version %d record (the field exists since v3)", rec.TransactionID, current.SchemaVersion)
+		}
+		if _, perr := ownership.ParseSpecHashHex(ca.ObservedSpecHash); perr != nil {
+			return fmt.Errorf("journal: refusing to update %s: corrupt observed spec hash on action %q: %v", rec.TransactionID, ca.ID, perr)
+		}
+	}
+	// Observed evidence is bound to the action it was recorded for:
+	// duplicate persisted ids are ambiguous (fail closed, never
+	// first-match), and an incoming snapshot retaining the hash while
+	// changing the action's identity fields — or dropping the action or
+	// the hash — is refused.
+	seenObserved := map[string]bool{}
+	for _, ca := range current.Actions {
+		if ca.ObservedSpecHash == "" {
+			continue
+		}
+		if seenObserved[ca.ID] {
+			return fmt.Errorf("journal: refusing to update %s: %d actions share id %q while carrying observed postcondition evidence; the target action is ambiguous", rec.TransactionID, 2, ca.ID)
+		}
+		seenObserved[ca.ID] = true
+		matches := 0
+		var incoming *ActionRecord
 		for i := range rec.Actions {
 			if rec.Actions[i].ID == ca.ID {
-				incoming = &rec.Actions[i].ObservedSpecHash
-				break
+				matches++
+				incoming = &rec.Actions[i]
 			}
 		}
 		switch {
-		case incoming == nil:
+		case matches == 0:
 			return fmt.Errorf("%w: update for transaction %s drops action %q together with its durably recorded observed postcondition hash; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
-		case *incoming == "":
-			return fmt.Errorf("%w: update for transaction %s drops the durably recorded observed postcondition hash of action %q; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
-		case *incoming != ca.ObservedSpecHash:
-			return fmt.Errorf("%w: update for transaction %s replaces the durably recorded observed postcondition hash of action %q (%s -> %s)", ErrStaleObservedEvidence, rec.TransactionID, ca.ID, ca.ObservedSpecHash, *incoming)
+		case matches > 1:
+			return fmt.Errorf("journal: refusing to update %s: %d incoming actions share id %q; the observed-evidence target is ambiguous", rec.TransactionID, matches, ca.ID)
+		case incoming.ObservedSpecHash != ca.ObservedSpecHash:
+			return fmt.Errorf("%w: update for transaction %s replaces the durably recorded observed postcondition hash of action %q (%s -> %s)", ErrStaleObservedEvidence, rec.TransactionID, ca.ID, ca.ObservedSpecHash, incoming.ObservedSpecHash)
+		case incoming.Resource != ca.Resource || incoming.Kind != ca.Kind || incoming.SpecHash != ca.SpecHash:
+			return fmt.Errorf("%w: update for transaction %s reassigns the observed postcondition evidence of action %q (resource/kind/intended specification changed); reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
 		}
+	}
+	rec.UpdatedAt = time.Now().UTC()
+	data, err = json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := fsatomic.WriteFileSyncDir(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("journal: %w", err)
 	}
 	return nil
 }

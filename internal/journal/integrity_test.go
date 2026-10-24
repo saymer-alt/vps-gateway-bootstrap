@@ -173,45 +173,47 @@ func TestLifecycleWithoutObservedEvidenceUnaffected(t *testing.T) {
 	}
 }
 
-// Legacy v1/v2 records carry no observed hashes: the gate is inert for
-// them and they remain readable and updatable.
+// Legacy v1/v2 compatibility — with GENUINE historical-format fixtures.
+// Begin stamps the current schema version, so a real v1/v2 record can only
+// come from a hand-authored historical document written directly into the
+// journal directory (as a real legacy fleet journal would contain).
 func TestLegacySchemasUnaffected(t *testing.T) {
+	const fp = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	const host = "machine-id:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	for _, tc := range []struct {
-		name   string
-		schema int
+		name       string
+		file       string
+		wantSchema int
+		body       string
 	}{
-		{"v1", 1},
-		{"v2", 2},
+		{"v1", "tx-legacy-1.json", 1, `{"schema_version":1,"transaction_id":"tx-legacy-1","plan_fingerprint":"` + fp + `","host_identity":"` + host + `","stage":"PERSIST","mutation_possible":true,"actions":[{"id":"a1","resource":"file./etc/vps-gateway/integrity-sample.conf","kind":"CREATE_FILE","retry_class":"retry-safe","status":"PENDING"}],"outcome":""}`},
+		{"v2", "tx-legacy-2.json", 2, `{"schema_version":2,"transaction_id":"tx-legacy-2","plan_fingerprint":"` + fp + `","host_identity":"` + host + `","stage":"PERSIST","mutation_possible":true,"actions":[{"id":"a1","resource":"file./etc/vps-gateway/integrity-sample.conf","kind":"CREATE_FILE","retry_class":"retry-safe","status":"PENDING","spec_hash":"` + strings.Repeat("1", 64) + `"}],"outcome":""}`},
 	} {
 		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(tc.body), 0o600); err != nil {
+			t.Fatalf("%s: write fixture: %v", tc.name, err)
+		}
 		j := &Journal{Dir: dir}
-		rec := Record{
-			SchemaVersion:    tc.schema,
-			TransactionID:    "tx-integrity-legacy",
-			HostIdentity:     integrityHost(),
-			PlanFingerprint:  integrityFingerprint(),
-			Stage:            "APPLY",
-			MutationPossible: true,
-			Actions: []ActionRecord{{
-				ID: "a1", Resource: "file./etc/vps-gateway/integrity-sample.conf", Kind: "CREATE_FILE",
-				RetryClass: RetrySafe, Status: "PENDING", SpecHash: integrityHex(1),
-			}},
-		}
-		// Begin stamps the current schema version — force the legacy one.
-		rec.SchemaVersion = tc.schema
-		if err := j.Begin(&rec); err != nil {
-			t.Fatalf("%s: Begin: %v", tc.name, err)
-		}
 		loaded, err := j.Records()
 		if err != nil || len(loaded) != 1 {
-			t.Fatalf("%s: reload: %v / %d", tc.name, err, len(loaded))
+			t.Fatalf("%s: genuine historical record must load: %v / %d", tc.name, err, len(loaded))
+		}
+		if loaded[0].SchemaVersion != tc.wantSchema {
+			t.Fatalf("%s: schema version must be preserved: %d", tc.name, loaded[0].SchemaVersion)
 		}
 		loaded[0].Actions[0].Status = "APPLIED"
 		loaded[0].Outcome = "COMPLETED"
 		if err := j.Update(&loaded[0]); err != nil {
 			t.Fatalf("%s: legacy lifecycle must keep working: %v", tc.name, err)
 		}
-		if got := persistedObservedHash(t, dir, "tx-integrity-legacy"); got != "" {
+		after, err := j.Records()
+		if err != nil || len(after) != 1 {
+			t.Fatalf("%s: reload: %v / %d", tc.name, err, len(after))
+		}
+		if after[0].SchemaVersion != loaded[0].SchemaVersion {
+			t.Fatalf("%s: update must not migrate the schema version", tc.name)
+		}
+		if got := after[0].Actions[0].ObservedSpecHash; got != "" {
 			t.Fatalf("%s: nothing may be synthesized, got %q", tc.name, got)
 		}
 	}

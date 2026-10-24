@@ -250,6 +250,10 @@ func TestFinalizeLatchesRecoveryForNoAutonomousRetryActions(t *testing.T) {
 		}},
 	}
 	out := Outcome{Stage: StageFailedTransaction, Transaction: apply.Transaction{Status: apply.StatusRolledBack}}
+	// ZAI-109: Update is update-only — finalize always operates on a
+	// durably begun record (as in the real Execute flow), so the synthetic
+	// fixtures must Begin first.
+	if err := o.Journal.Begin(rec); err != nil { t.Fatal(err) }
 	if err := o.finalizeJournal(rec, &out); err != nil { t.Fatal(err) }
 	if rec.Outcome != journal.OutcomeRecoveryRequired || !rec.RecoveryRequired {
 		t.Fatalf("no-autonomous-retry failure must latch recovery: %+v", rec)
@@ -266,6 +270,7 @@ func TestFinalizeLatchesRecoveryForNoAutonomousRetryActions(t *testing.T) {
 		}},
 	}
 	out2 := Outcome{Stage: StageFailedTransaction, Transaction: apply.Transaction{Status: apply.StatusRolledBack}}
+	if err := o.Journal.Begin(rec2); err != nil { t.Fatal(err) }
 	if err := o.finalizeJournal(rec2, &out2); err != nil { t.Fatal(err) }
 	if rec2.Outcome != journal.OutcomeFailed || rec2.RecoveryRequired {
 		t.Fatalf("retry-safe failure must not latch: %+v", rec2)
