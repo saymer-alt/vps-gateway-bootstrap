@@ -91,10 +91,28 @@ func (r Record) CorroborationFact() (ownership.TransactionFact, error) {
 				specHash = &h
 			}
 		}
+		// ObservedSpecHash: the independently observed postcondition
+		// (journal v3, ZAI-59/J4) — a different meaning from the intended
+		// SpecHash, carried verbatim and evaluated by Corroborate; a
+		// record whose observed postcondition contradicts the intended
+		// specification or the claim can never verify (ZAI-103). Absent
+		// in v1/v2 — absence is explicit absence, never synthesized; a
+		// malformed value fails closed.
+		var observedSpecHash *ownership.SpecHash
+		if r.SchemaVersion >= 3 {
+			if a.ObservedSpecHash != "" {
+				h, err := ownership.ParseSpecHashHex(a.ObservedSpecHash)
+				if err != nil {
+					return ownership.TransactionFact{}, fmt.Errorf("journal record %s action %s: %w", r.TransactionID, a.Resource, err)
+				}
+				observedSpecHash = &h
+			}
+		}
 		actions = append(actions, ownership.TransactionAction{
-			Resource: a.Resource,
-			Status:   a.Status,
-			SpecHash: specHash,
+			Resource:         a.Resource,
+			Status:           a.Status,
+			SpecHash:         specHash,
+			ObservedSpecHash: observedSpecHash,
 		})
 	}
 	fact := ownership.TransactionFact{
