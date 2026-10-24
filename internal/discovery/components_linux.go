@@ -138,7 +138,11 @@ func (c *Collector) collectDocker(ctx context.Context, r *Result) {
 				for i := range r.Docker.Networks {
 					for _, a := range r.Docker.Networks[i].Containers {
 						if !inventory[a.ContainerID] {
-							addObservation(&r.Unknowns, "DOCKER_ATTACHMENT_ID_NOT_IN_INVENTORY", "docker", fmt.Sprintf("network %q: attached container %s is absent from the container listing", r.Docker.Networks[i].Name, displayToken(a.ContainerID)))
+							// a.ContainerID is the attachment parser's
+							// validated 64-hex ID; render it in the short
+							// 12-character form (issue #31) — the full
+							// identifier stays on the typed entry only.
+							addObservation(&r.Unknowns, "DOCKER_ATTACHMENT_ID_NOT_IN_INVENTORY", "docker", fmt.Sprintf("network %q: attached container %s is absent from the container listing", r.Docker.Networks[i].Name, shortContainerID(a.ContainerID)))
 						}
 					}
 				}
