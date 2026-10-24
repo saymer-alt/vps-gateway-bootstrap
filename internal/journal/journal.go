@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,12 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
+
+// ErrStaleObservedEvidence classifies an update whose in-memory snapshot
+// would drop or replace a durably recorded observed postcondition hash
+// (ZAI-108). The durable record is left untouched; the caller reloads and
+// retries.
+var ErrStaleObservedEvidence = errors.New("stale journal update would erase or replace recorded observed postcondition evidence")
 
 // SchemaVersion is the transaction-record schema version this build
 // writes. v2 adds per-action durable evidence of intent (SpecHash, R5-A);
@@ -198,9 +205,25 @@ func (j *Journal) Begin(rec *Record) error {
 
 // Update durably rewrites an existing record (same durability contract as
 // Begin; the directory normally exists and is then left untouched).
+//
+// Integrity gate (ZAI-108): a durably recorded ObservedSpecHash is
+// write-once proof of an independently observed postcondition. An update
+// driven by a stale in-memory snapshot must never remove or replace it:
+// the persisted record is read back first, and every recorded observed
+// hash must be retained identically by the incoming snapshot — otherwise
+// the update is refused with ErrStaleObservedEvidence and the durable
+// record stays untouched (the caller reloads and retries). Updates over a
+// corrupt persisted record also fail closed: evidence the boundary cannot
+// read is never overwritten. This gate is not a cross-process lock —
+// serialized access to one transaction remains the caller's lifecycle
+// responsibility; the gate makes the stale-snapshot hazard fail closed
+// regardless of which writer holds a stale copy.
 func (j *Journal) Update(rec *Record) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
+	}
+	if err := j.checkObservedEvidenceIntegrity(rec); err != nil {
+		return err
 	}
 	rec.UpdatedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(rec, "", "  ")
@@ -209,6 +232,48 @@ func (j *Journal) Update(rec *Record) error {
 	}
 	if err := fsatomic.WriteFileSyncDir(j.path(rec.TransactionID), append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("journal: %w", err)
+	}
+	return nil
+}
+
+// checkObservedEvidenceIntegrity refuses an update whose incoming snapshot
+// would erase or replace a durably recorded observed postcondition hash.
+// A missing durable record is nothing to protect (Begin's predecessor);
+// a corrupt or out-of-schema durable record fails the update closed.
+func (j *Journal) checkObservedEvidenceIntegrity(rec *Record) error {
+	data, err := os.ReadFile(j.path(rec.TransactionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("journal: %w", err)
+	}
+	var current Record
+	if err := json.Unmarshal(data, &current); err != nil {
+		return fmt.Errorf("journal: refusing to update %s over a corrupt record: %w", rec.TransactionID, err)
+	}
+	if !readableSchemaVersions[current.SchemaVersion] {
+		return fmt.Errorf("journal: refusing to update %s over an unsupported record version %d", rec.TransactionID, current.SchemaVersion)
+	}
+	for _, ca := range current.Actions {
+		if ca.ObservedSpecHash == "" {
+			continue // explicit absence is nothing to protect
+		}
+		var incoming *string
+		for i := range rec.Actions {
+			if rec.Actions[i].ID == ca.ID {
+				incoming = &rec.Actions[i].ObservedSpecHash
+				break
+			}
+		}
+		switch {
+		case incoming == nil:
+			return fmt.Errorf("%w: update for transaction %s drops action %q together with its durably recorded observed postcondition hash; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
+		case *incoming == "":
+			return fmt.Errorf("%w: update for transaction %s drops the durably recorded observed postcondition hash of action %q; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
+		case *incoming != ca.ObservedSpecHash:
+			return fmt.Errorf("%w: update for transaction %s replaces the durably recorded observed postcondition hash of action %q (%s -> %s)", ErrStaleObservedEvidence, rec.TransactionID, ca.ID, ca.ObservedSpecHash, *incoming)
+		}
 	}
 	return nil
 }
