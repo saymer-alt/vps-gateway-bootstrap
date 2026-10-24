@@ -149,5 +149,11 @@ func TestBeginCreatesMissingDirectoryTree(t *testing.T) {
 	if len(recs) != 1 || recs[0].TransactionID != "tx-nested" { t.Fatalf("records=%+v", recs) }
 
 	// Update on the same journal must not degrade the existing directory.
-	if err := j.Update(testRecord("tx-nested")); err != nil { t.Fatal(err) }
+	// ZAI-110: the update reuses the persisted record — a fresh in-memory
+	// record carries no schema stamp, and the provenance pins correctly
+	// refuse such a silent downgrade.
+	loaded, err := j.Records()
+	if err != nil { t.Fatal(err) }
+	loaded[0].Actions[0].Status = "APPLIED"
+	if err := j.Update(&loaded[0]); err != nil { t.Fatal(err) }
 }
