@@ -96,6 +96,21 @@ type ObservedEvidenceClassification struct {
 // OWNED labels are not evidence inputs to this API at all; missing fields
 // are never manufactured — a scenario without a claim, or with an
 // intent-only history, is INSUFFICIENT.
+//
+// Provenance boundary (binding for future production admission): this
+// classifier receives TYPED FACTS, not independently loaded journal
+// records. The input does not by itself prove the journal schema version,
+// a trusted acquisition path, or record integrity — an externally
+// constructed TransactionFact is not automatically a trustworthy
+// production provenance source (the durable-record trust path lives in
+// the journal loader and its adapter, which translate v3 observed hashes
+// verbatim and never synthesize them for v1/v2; see
+// journal.CorroborationFact). A SUFFICIENT result is an evidence
+// classification only and is never authorization; any future production
+// admission wiring must preserve this trusted-source boundary —
+// caller-supplied facts alone are insufficient, and the acquisition of
+// records (and of the current host identity) must come through reviewed,
+// trusted paths (G4).
 func ClassifyObservedEvidence(in DerivationInput) (ObservedEvidenceClassification, error) {
 	d, err := DeriveVerdict(in)
 	if err != nil {
