@@ -46,6 +46,20 @@ var ErrUpdateWithoutRecord = errors.New("update without a durable journal record
 // prior durable history (ZAI-109).
 var ErrTransactionExists = errors.New("transaction already has a durable journal record")
 
+// ErrAmbiguousActionID classifies a journal update whose action identity
+// is ambiguous — duplicate persisted ids, or duplicate incoming actions
+// for one id — and must never be resolved by choosing the first match
+// (ZAI-110).
+var ErrAmbiguousActionID = errors.New("ambiguous action id in journal record")
+
+// ErrImmutableProvenance classifies an update that changes provenance
+// fields established at Begin — host identity, plan fingerprint, schema
+// version, approval evidence, start timestamp, or the action set's
+// identity fields (id, resource, kind, retry class, intended spec hash).
+// Only Stage, action Status, Outcome, rollback information and UpdatedAt
+// are legitimately mutable (ZAI-110).
+var ErrImmutableProvenance = errors.New("update changes immutable journal provenance")
+
 // SchemaVersion is the transaction-record schema version this build
 // writes. v2 adds per-action durable evidence of intent (SpecHash, R5-A);
 // v3 adds the per-action observed postcondition SpecHash
@@ -294,6 +308,57 @@ func (j *Journal) Update(rec *Record) error {
 			return fmt.Errorf("journal: refusing to update %s: corrupt observed spec hash on action %q: %v", rec.TransactionID, ca.ID, perr)
 		}
 	}
+	// Provenance pins (ZAI-110): the fields established at Begin are
+	// immutable — the lifecycle legitimately updates Stage, action Status,
+	// Outcome, rollback information and UpdatedAt only. Nothing is ever
+	// backfilled (host identity, approval evidence) or migrated (schema
+	// version) by an update.
+	if current.HostIdentity != rec.HostIdentity {
+		return fmt.Errorf("%w: update for transaction %s changes the host identity (%q -> %q); a host identity is never backfilled or re-pointed", ErrImmutableProvenance, rec.TransactionID, current.HostIdentity, rec.HostIdentity)
+	}
+	if current.PlanFingerprint != rec.PlanFingerprint {
+		return fmt.Errorf("%w: update for transaction %s changes the plan fingerprint", ErrImmutableProvenance, rec.TransactionID)
+	}
+	if current.SchemaVersion != rec.SchemaVersion {
+		return fmt.Errorf("%w: update for transaction %s changes the schema version (%d -> %d); records are never migrated by an update", ErrImmutableProvenance, rec.TransactionID, current.SchemaVersion, rec.SchemaVersion)
+	}
+	if !current.StartedAt.Equal(rec.StartedAt) {
+		return fmt.Errorf("%w: update for transaction %s changes the start timestamp", ErrImmutableProvenance, rec.TransactionID)
+	}
+	if !approvalEqual(current.Approval, rec.Approval) {
+		return fmt.Errorf("%w: update for transaction %s changes the approval evidence binding", ErrImmutableProvenance, rec.TransactionID)
+	}
+
+	// Action shape pins: every persisted action must survive with the same
+	// identity fields (id, resource, kind, retry class, intended spec
+	// hash), exactly once; no action may be added. Observed evidence is
+	// then bound to its action (below).
+	currentByID := map[string][]int{}
+	for i, ca := range current.Actions {
+		currentByID[ca.ID] = append(currentByID[ca.ID], i)
+	}
+	incomingByID := map[string][]int{}
+	for i, ia := range rec.Actions {
+		incomingByID[ia.ID] = append(incomingByID[ia.ID], i)
+	}
+	for _, ca := range current.Actions {
+		if len(incomingByID[ca.ID]) == 0 {
+			return fmt.Errorf("%w: update for transaction %s drops action %q (actions are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ca.ID)
+		}
+		if len(incomingByID[ca.ID]) > 1 {
+			return fmt.Errorf("%w: update for transaction %s carries %d actions with id %q; the action identity is ambiguous", ErrAmbiguousActionID, rec.TransactionID, len(incomingByID[ca.ID]), ca.ID)
+		}
+		ia := &rec.Actions[incomingByID[ca.ID][0]]
+		if ia.Resource != ca.Resource || ia.Kind != ca.Kind || ia.RetryClass != ca.RetryClass || ia.SpecHash != ca.SpecHash {
+			return fmt.Errorf("%w: update for transaction %s changes the identity fields of action %q (resource/kind/retry class/intended specification are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ca.ID)
+		}
+	}
+	for _, ia := range rec.Actions {
+		if len(currentByID[ia.ID]) == 0 {
+			return fmt.Errorf("%w: update for transaction %s adds action %q (actions are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ia.ID)
+		}
+	}
+
 	// Observed evidence is bound to the action it was recorded for:
 	// duplicate persisted ids are ambiguous (fail closed, never
 	// first-match), and an incoming snapshot retaining the hash while
@@ -320,7 +385,7 @@ func (j *Journal) Update(rec *Record) error {
 		case matches == 0:
 			return fmt.Errorf("%w: update for transaction %s drops action %q together with its durably recorded observed postcondition hash; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
 		case matches > 1:
-			return fmt.Errorf("journal: refusing to update %s: %d incoming actions share id %q; the observed-evidence target is ambiguous", rec.TransactionID, matches, ca.ID)
+			return fmt.Errorf("%w: update for transaction %s carries %d actions with id %q; the observed-evidence target is ambiguous", ErrAmbiguousActionID, rec.TransactionID, matches, ca.ID)
 		case incoming.ObservedSpecHash != ca.ObservedSpecHash:
 			return fmt.Errorf("%w: update for transaction %s replaces the durably recorded observed postcondition hash of action %q (%s -> %s)", ErrStaleObservedEvidence, rec.TransactionID, ca.ID, ca.ObservedSpecHash, incoming.ObservedSpecHash)
 		case incoming.Resource != ca.Resource || incoming.Kind != ca.Kind || incoming.SpecHash != ca.SpecHash:
@@ -336,6 +401,19 @@ func (j *Journal) Update(rec *Record) error {
 		return fmt.Errorf("journal: %w", err)
 	}
 	return nil
+}
+
+// approvalEqual compares approval evidence bindings by value; the binding
+// is immutable provenance once established at Begin.
+func approvalEqual(a, b *ApprovalEvidence) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
 }
 
 // loadAll reads every record. A corrupt record is an error, never skipped:
