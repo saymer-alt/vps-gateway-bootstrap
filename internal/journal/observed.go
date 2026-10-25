@@ -39,6 +39,16 @@ package journal
 //     mismatch, and a legacy or v3 record without the field gains
 //     nothing from later live observations (no retroactive provenance).
 //
+// Designated writer (ZAI-111): RecordObservedSpecHash is the ONLY path
+// that can introduce an observed postcondition hash into a durable record
+// — Begin refuses one outright and ordinary Updates can never add it to a
+// previously unobserved action. The designated writer enforces the
+// application's persistence protocol (identity, action, resource,
+// terminal state, hash validity, write-once); it does NOT independently
+// attest that a caller actually observed the live resource — that
+// guarantee requires a verified post-mutation observation path, which is
+// future work.
+//
 // Like the rest of this package, this is an OPERATIONAL recovery and
 // evidence mechanism, not an authority mechanism: recording a fact
 // enables no mutation, no ownership verdict and no admission.
@@ -117,5 +127,8 @@ func (j *Journal) RecordObservedSpecHash(txID, actionID, resource string, observ
 		return fmt.Errorf("journal: action %s of transaction %s already carries observed spec hash %s; rewriting recorded proof as %s is refused (write-once)", actionID, rec.TransactionID, a.ObservedSpecHash, observed.Hex())
 	}
 	a.ObservedSpecHash = observed.Hex()
-	return j.Update(rec)
+	// The designated writer persists through the internal path with the
+	// observed-introduction privilege (ZAI-111); every other caller keeps
+	// the restricted Update.
+	return j.updateRecord(rec, true)
 }

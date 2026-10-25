@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,42 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/ownership"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
+
+// ErrStaleObservedEvidence classifies an update whose in-memory snapshot
+// would drop or replace a durably recorded observed postcondition hash
+// (ZAI-108). The durable record is left untouched; the caller reloads and
+// retries.
+var ErrStaleObservedEvidence = errors.New("stale journal update would erase or replace recorded observed postcondition evidence")
+
+// ErrUpdateWithoutRecord classifies an Update for a transaction that has
+// no durable record: Update never creates one (ZAI-109).
+var ErrUpdateWithoutRecord = errors.New("update without a durable journal record")
+
+// ErrTransactionExists classifies a Begin for a transaction that already
+// has a durable record: Begin creates a transaction and can never replace
+// prior durable history (ZAI-109).
+var ErrTransactionExists = errors.New("transaction already has a durable journal record")
+
+// ErrAmbiguousActionID classifies a journal update whose action identity
+// is ambiguous — duplicate persisted ids, or duplicate incoming actions
+// for one id — and must never be resolved by choosing the first match
+// (ZAI-110).
+var ErrAmbiguousActionID = errors.New("ambiguous action id in journal record")
+
+// ErrObservedEvidenceDirectWrite classifies a Begin or Update that would
+// introduce an observed postcondition hash outside the designated
+// RecordObservedSpecHash API (ZAI-111): Begin records intent, ordinary
+// updates change lifecycle fields — neither can manufacture an
+// independently observed postcondition.
+var ErrObservedEvidenceDirectWrite = errors.New("observed postcondition evidence can only be recorded through RecordObservedSpecHash")
+
+// ErrImmutableProvenance classifies an update that changes provenance
+// fields established at Begin — host identity, plan fingerprint, schema
+// version, approval evidence, start timestamp, or the action set's
+// identity fields (id, resource, kind, retry class, intended spec hash).
+// Only Stage, action Status, Outcome, rollback information and UpdatedAt
+// are legitimately mutable (ZAI-110).
+var ErrImmutableProvenance = errors.New("update changes immutable journal provenance")
 
 // SchemaVersion is the transaction-record schema version this build
 // writes. v2 adds per-action durable evidence of intent (SpecHash, R5-A);
@@ -177,9 +214,34 @@ func (j *Journal) path(txID string) string { return filepath.Join(j.Dir, txID+".
 // written atomically (file fsync + rename + directory fsync), so it
 // survives power loss at the moment it matters — including the first run,
 // when the directory itself is new.
+//
+// Begin is transaction CREATION (ZAI-109): a record for the same
+// transaction id must never be silently replaced — a repeated Begin would
+// otherwise erase observed postcondition evidence, per-action progress and
+// the terminal outcome of the prior durable transaction. A second Begin
+// therefore fails with ErrTransactionExists and the durable record stays
+// untouched. The existence check is a read-check-then-write sequence: it
+// is NOT serialized against concurrent creators (no O_EXCL fast path
+// exists in fsatomic) — serialized access to one transaction remains the
+// caller's lifecycle responsibility, and the gate closes the sequential
+// replacement hazard regardless.
 func (j *Journal) Begin(rec *Record) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
+	}
+	if _, statErr := os.Stat(j.path(rec.TransactionID)); statErr == nil {
+		return fmt.Errorf("%w: transaction %s already has a durable record; Begin creates a transaction and cannot replace it", ErrTransactionExists, rec.TransactionID)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("journal: %w", statErr)
+	}
+	// Begin records INTENT (ZAI-111): an observed postcondition hash can
+	// enter the journal only through the designated RecordObservedSpecHash
+	// API while the transaction is nonterminal. A Begin carrying one is a
+	// manufactured observation — refused, never persisted.
+	for i := range rec.Actions {
+		if rec.Actions[i].ObservedSpecHash != "" {
+			return fmt.Errorf("%w: Begin for transaction %s carries an observed postcondition hash on action %q; Begin records intent, and observations enter only through RecordObservedSpecHash", ErrObservedEvidenceDirectWrite, rec.TransactionID, rec.Actions[i].ID)
+		}
 	}
 	rec.SchemaVersion = SchemaVersion
 	if rec.StartedAt.IsZero() {
@@ -196,14 +258,177 @@ func (j *Journal) Begin(rec *Record) error {
 	return nil
 }
 
-// Update durably rewrites an existing record (same durability contract as
+// Update durably rewrites an EXISTING record (same durability contract as
 // Begin; the directory normally exists and is then left untouched).
+//
+// Update is update-only (ZAI-109): a missing durable record is an error —
+// an update must never silently create an authoritative journal record
+// (that is Begin's exclusive contract).
+//
+// Integrity gates, all fail-closed with the durable record untouched:
+//
+//   - ZAI-108: a durably recorded ObservedSpecHash is write-once proof of
+//     an independently observed postcondition; an update from a stale
+//     in-memory snapshot must never remove or replace it
+//     (ErrStaleObservedEvidence), and updates over a corrupt persisted
+//     record are refused (evidence the boundary cannot read is never
+//     overwritten).
+//   - ZAI-111: an update can never INTRODUCE an observed postcondition
+//     hash on a previously unobserved action — observed evidence enters
+//     the journal only through RecordObservedSpecHash
+//     (ErrObservedEvidenceDirectWrite). The designated writer enforces the
+//     application's persistence protocol; it does not independently
+//     attest that a caller actually observed the live resource — that
+//     guarantee requires a verified post-mutation observation path.
+//   - ZAI-109: the persisted body's transaction id must match the address
+//     being written (mirroring the load boundary's ZAI-J1 rule — a
+//     mismatched record is trusted as neither identity, never rewritten);
+//     observed postcondition hashes cannot exist in v1/v2 records and must
+//     be canonically formed in v3 (corrupt evidence is never preserved as
+//     valid or laundered by overwriting); observed evidence stays bound to
+//     the action it was recorded for — an update retaining the hash while
+//     changing the action's Resource, Kind or intended SpecHash is
+//     refused; duplicate persisted action ids are ambiguous and fail
+//     closed instead of choosing the first matching identity.
+//
+// None of these gates is a cross-process lock — serialized access to one
+// transaction remains the caller's lifecycle responsibility; the gates
+// make the known corruption and stale-snapshot hazards fail closed
+// regardless of which writer holds a stale copy.
 func (j *Journal) Update(rec *Record) error {
+	return j.updateRecord(rec, false)
+}
+
+// updateRecord is the single durable persistence path for an existing
+// record. allowObservedIntroduce is an UNEXPORTED privilege: true only
+// from RecordObservedSpecHash (the designated writer for observed
+// postcondition evidence, ZAI-111) — no exported boolean, configuration
+// option or permissive fallback exists for other callers.
+func (j *Journal) updateRecord(rec *Record, allowObservedIntroduce bool) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
+	data, err := os.ReadFile(j.path(rec.TransactionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: no durable record for transaction %s; Update never creates one (use Begin)", ErrUpdateWithoutRecord, rec.TransactionID)
+		}
+		return fmt.Errorf("journal: %w", err)
+	}
+	var current Record
+	if err := json.Unmarshal(data, &current); err != nil {
+		return fmt.Errorf("journal: refusing to update %s over a corrupt record: %w", rec.TransactionID, err)
+	}
+	if !readableSchemaVersions[current.SchemaVersion] {
+		return fmt.Errorf("journal: refusing to update %s over an unsupported record version %d", rec.TransactionID, current.SchemaVersion)
+	}
+	if current.TransactionID != rec.TransactionID {
+		return fmt.Errorf("journal: refusing to update %s over a record whose body carries transaction id %q (identity mismatch; the record is trusted as neither)", rec.TransactionID, current.TransactionID)
+	}
+	// Observed-hash field rules mirror the load boundary (ZAI-59): the
+	// field exists since v3, and a non-empty value must be the canonical
+	// hash form. Corrupt values are never preserved as valid or laundered
+	// by an overwrite.
+	for _, ca := range current.Actions {
+		if ca.ObservedSpecHash == "" {
+			continue
+		}
+		if current.SchemaVersion < 3 {
+			return fmt.Errorf("journal: refusing to update %s: observed spec hash present in a schema version %d record (the field exists since v3)", rec.TransactionID, current.SchemaVersion)
+		}
+		if _, perr := ownership.ParseSpecHashHex(ca.ObservedSpecHash); perr != nil {
+			return fmt.Errorf("journal: refusing to update %s: corrupt observed spec hash on action %q: %v", rec.TransactionID, ca.ID, perr)
+		}
+	}
+	// Provenance pins (ZAI-110): the fields established at Begin are
+	// immutable — the lifecycle legitimately updates Stage, action Status,
+	// Outcome, rollback information and UpdatedAt only. Nothing is ever
+	// backfilled (host identity, approval evidence) or migrated (schema
+	// version) by an update.
+	if current.HostIdentity != rec.HostIdentity {
+		return fmt.Errorf("%w: update for transaction %s changes the host identity (%q -> %q); a host identity is never backfilled or re-pointed", ErrImmutableProvenance, rec.TransactionID, current.HostIdentity, rec.HostIdentity)
+	}
+	if current.PlanFingerprint != rec.PlanFingerprint {
+		return fmt.Errorf("%w: update for transaction %s changes the plan fingerprint", ErrImmutableProvenance, rec.TransactionID)
+	}
+	if current.SchemaVersion != rec.SchemaVersion {
+		return fmt.Errorf("%w: update for transaction %s changes the schema version (%d -> %d); records are never migrated by an update", ErrImmutableProvenance, rec.TransactionID, current.SchemaVersion, rec.SchemaVersion)
+	}
+	if !current.StartedAt.Equal(rec.StartedAt) {
+		return fmt.Errorf("%w: update for transaction %s changes the start timestamp", ErrImmutableProvenance, rec.TransactionID)
+	}
+	if !approvalEqual(current.Approval, rec.Approval) {
+		return fmt.Errorf("%w: update for transaction %s changes the approval evidence binding", ErrImmutableProvenance, rec.TransactionID)
+	}
+
+	// Action shape pins: every persisted action must survive with the same
+	// identity fields (id, resource, kind, retry class, intended spec
+	// hash), exactly once; no action may be added. Observed evidence is
+	// then bound to its action (below).
+	currentByID := map[string][]int{}
+	for i, ca := range current.Actions {
+		currentByID[ca.ID] = append(currentByID[ca.ID], i)
+	}
+	incomingByID := map[string][]int{}
+	for i, ia := range rec.Actions {
+		incomingByID[ia.ID] = append(incomingByID[ia.ID], i)
+	}
+	for _, ca := range current.Actions {
+		if len(incomingByID[ca.ID]) == 0 {
+			return fmt.Errorf("%w: update for transaction %s drops action %q (actions are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ca.ID)
+		}
+		if len(incomingByID[ca.ID]) > 1 {
+			return fmt.Errorf("%w: update for transaction %s carries %d actions with id %q; the action identity is ambiguous", ErrAmbiguousActionID, rec.TransactionID, len(incomingByID[ca.ID]), ca.ID)
+		}
+		ia := &rec.Actions[incomingByID[ca.ID][0]]
+		if ia.Resource != ca.Resource || ia.Kind != ca.Kind || ia.RetryClass != ca.RetryClass || ia.SpecHash != ca.SpecHash {
+			return fmt.Errorf("%w: update for transaction %s changes the identity fields of action %q (resource/kind/retry class/intended specification are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ca.ID)
+		}
+		if ca.ObservedSpecHash == "" && ia.ObservedSpecHash != "" && !allowObservedIntroduce {
+			return fmt.Errorf("%w: update for transaction %s introduces an observed postcondition hash on action %q; observed evidence enters the journal only through RecordObservedSpecHash", ErrObservedEvidenceDirectWrite, rec.TransactionID, ca.ID)
+		}
+	}
+	for _, ia := range rec.Actions {
+		if len(currentByID[ia.ID]) == 0 {
+			return fmt.Errorf("%w: update for transaction %s adds action %q (actions are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ia.ID)
+		}
+	}
+
+	// Observed evidence is bound to the action it was recorded for:
+	// duplicate persisted ids are ambiguous (fail closed, never
+	// first-match), and an incoming snapshot retaining the hash while
+	// changing the action's identity fields — or dropping the action or
+	// the hash — is refused.
+	seenObserved := map[string]bool{}
+	for _, ca := range current.Actions {
+		if ca.ObservedSpecHash == "" {
+			continue
+		}
+		if seenObserved[ca.ID] {
+			return fmt.Errorf("journal: refusing to update %s: %d actions share id %q while carrying observed postcondition evidence; the target action is ambiguous", rec.TransactionID, 2, ca.ID)
+		}
+		seenObserved[ca.ID] = true
+		matches := 0
+		var incoming *ActionRecord
+		for i := range rec.Actions {
+			if rec.Actions[i].ID == ca.ID {
+				matches++
+				incoming = &rec.Actions[i]
+			}
+		}
+		switch {
+		case matches == 0:
+			return fmt.Errorf("%w: update for transaction %s drops action %q together with its durably recorded observed postcondition hash; reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
+		case matches > 1:
+			return fmt.Errorf("%w: update for transaction %s carries %d actions with id %q; the observed-evidence target is ambiguous", ErrAmbiguousActionID, rec.TransactionID, matches, ca.ID)
+		case incoming.ObservedSpecHash != ca.ObservedSpecHash:
+			return fmt.Errorf("%w: update for transaction %s replaces the durably recorded observed postcondition hash of action %q (%s -> %s)", ErrStaleObservedEvidence, rec.TransactionID, ca.ID, ca.ObservedSpecHash, incoming.ObservedSpecHash)
+		case incoming.Resource != ca.Resource || incoming.Kind != ca.Kind || incoming.SpecHash != ca.SpecHash:
+			return fmt.Errorf("%w: update for transaction %s reassigns the observed postcondition evidence of action %q (resource/kind/intended specification changed); reload the record and retry", ErrStaleObservedEvidence, rec.TransactionID, ca.ID)
+		}
+	}
 	rec.UpdatedAt = time.Now().UTC()
-	data, err := json.MarshalIndent(rec, "", "  ")
+	data, err = json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -211,6 +436,19 @@ func (j *Journal) Update(rec *Record) error {
 		return fmt.Errorf("journal: %w", err)
 	}
 	return nil
+}
+
+// approvalEqual compares approval evidence bindings by value; the binding
+// is immutable provenance once established at Begin.
+func approvalEqual(a, b *ApprovalEvidence) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
 }
 
 // loadAll reads every record. A corrupt record is an error, never skipped:
