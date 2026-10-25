@@ -1,5 +1,9 @@
 # AGENTS.md — operational and safety contract for AI agents
 
+## Owner-wide design gate — SIMPLICITY-FIRST (2026-10-24)
+
+Before adding a new subsystem, UI, installer/uninstaller, controller, watcher, multi-stage recovery mechanism, or expensive CI path, apply the [common saymer-alt simplicity rule](https://github.com/saymer-alt/saymer-alt/pull/7): compare (A) the existing/manual workflow, (B) the smallest safe solution, and (C) extended architecture. Choose A/B by default; C needs evidence of need, a maintenance/test-cost estimate and explicit owner approval. If supporting logic grows into its own platform or repeated full E2E runs add no new evidence, STOP expanding and report alternatives. Preserve existing safety invariants, user data, foreign resources and working behavior; this does not authorize refactoring stable code or changing production. [KAS uninstall #225](https://github.com/saymer-alt/keenetic-auto-setup/issues/225) is an **anti-pattern retrospective**, not a template to copy.
+
 ## Owner motive: threat-driven resilience, not accidental complexity (2026-10-25)
 
 **Mandatory reading before proposing to remove VPS, tiers, transports, or ENTRY/TRANSIT/EXIT:** [docs/OWNER-THREAT-DRIVEN-RESILIENCE.md](docs/OWNER-THREAT-DRIVEN-RESILIENCE.md). The owner built four autonomous VPS and multi-protocol/tiered local egress deliberately to survive *different classes* of ISP, protocol, IP/ASN and path failures, not for hobby complexity. Do not ask again why multiple servers/protocols exist or flatten working paths to one VPN merely for cosmetic simplicity. Conversely, the rule is **not** permission to add unneeded infrastructure; simplicity-first applies *inside* each autonomous component. Preserve fail-closed user egress, service-plane bootstrap, manual selection, independent configs and truthful multi-vantage diagnostics. This is motivation, **not** permission to modify production.
