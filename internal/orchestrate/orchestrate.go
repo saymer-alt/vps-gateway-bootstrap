@@ -776,8 +776,18 @@ func (o Orchestrator) acquireHostIdentity() (string, error) {
 	if !strings.HasPrefix(id, machineid.HostIdentityPrefix) {
 		return "", fmt.Errorf("host identity %q must be in the canonical %q namespace", id, machineid.HostIdentityPrefix)
 	}
-	if _, err := machineid.Normalize(strings.TrimPrefix(id, machineid.HostIdentityPrefix)); err != nil {
-		return "", fmt.Errorf("host identity %q is not a canonical machine-id: %v", id, err)
+	// ZAI-113: Normalize() canonicalizes (trims, lowercases), so a passing
+	// Normalize alone would accept non-canonical input and this method
+	// would return the ORIGINAL non-canonical string. The invariant is
+	// strict instead: the input must already equal its canonical form —
+	// non-canonical identities are refused, never silently rewritten.
+	raw := strings.TrimPrefix(id, machineid.HostIdentityPrefix)
+	canonical, nerr := machineid.Normalize(raw)
+	if nerr != nil {
+		return "", fmt.Errorf("host identity %q is not a canonical machine-id: %v", id, nerr)
+	}
+	if canonical != raw {
+		return "", fmt.Errorf("host identity %q is not canonically formatted (%q is the canonical form); refusing non-canonical input instead of silently rewriting it", id, machineid.HostIdentityPrefix+canonical)
 	}
 	return id, nil
 }

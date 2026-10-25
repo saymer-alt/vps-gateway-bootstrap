@@ -307,3 +307,81 @@ func TestG4AAcquisitionAddsNoMutationAuthority(t *testing.T) {
 		}
 	}
 }
+
+// ZAI-113: the canonical identity boundary is STRICT — the injected
+// identity must already be canonically formatted ("machine-id:" + 32
+// lowercase hex). Normalize() canonicalizes, so validation must reject any
+// input whose canonical form differs from the input itself, instead of
+// silently rewriting caller-provided strings. Refusal happens in
+// acquireHostIdentity — before Begin and before any executor call.
+func TestG4AAcquireIdentityCanonicalStrictness(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		accept bool
+	}{
+		{"canonical lowercase", "machine-id:" + strings.Repeat("7", 32), true},
+		{"uppercase hex", "machine-id:" + strings.ToUpper(strings.Repeat("a", 32)), false},
+		{"leading whitespace", "machine-id:  " + strings.Repeat("7", 32), false},
+		{"trailing whitespace+newline", "machine-id:" + strings.Repeat("7", 32) + " \n", false},
+		{"malformed", "machine-id:not-a-machine-id", false},
+		{"no prefix", strings.Repeat("7", 32), false},
+	}
+	for _, tc := range cases {
+		o, _ := newOrchestrator(t, nil, apply.Registry{}, nil)
+		o.AcquireHostIdentity = func() (string, error) { return tc.in, nil }
+		id, err := o.acquireHostIdentity()
+		if tc.accept {
+			if err != nil {
+				t.Fatalf("%s: canonical identity must be accepted, got %v", tc.name, err)
+			}
+			if id != "machine-id:" + strings.Repeat("7", 32) {
+				t.Fatalf("%s: the returned identity must equal the canonical form, got %q", tc.name, id)
+			}
+		} else if err == nil {
+			t.Fatalf("%s: non-canonical identity must be refused (never rewritten), got %q", tc.name, id)
+		}
+	}
+}
+
+// The production fixed-source acquisition (discovery.AcquireMachineID with
+// an injected reader) emits canonical identities and they are accepted by
+// the strict gate — chaining the real adapter shape hermetically.
+func TestG4AFixedSourceAcquisitionFeedsStrictGate(t *testing.T) {
+	c := &discovery.Collector{ReadFile: func(path string) ([]byte, error) {
+		if path != "/etc/machine-id" {
+			t.Fatalf("unexpected path %q", path)
+		}
+		return []byte(strings.Repeat("7", 32) + "\n"), nil
+	}}
+	obs := c.AcquireMachineID()
+	if obs.Status != "present" {
+		t.Fatalf("fixture must be present, got %q", obs.Status)
+	}
+	o, _ := newOrchestrator(t, nil, apply.Registry{}, nil)
+	o.AcquireHostIdentity = func() (string, error) { return obs.HostIdentity, nil }
+	id, err := o.acquireHostIdentity()
+	if err != nil || id != obs.HostIdentity {
+		t.Fatalf("the production acquisition output must be accepted verbatim, got %q / %v", id, err)
+	}
+}
+
+// Execute-level: a non-canonical injected identity blocks the transaction
+// before Begin and before any executor mutation (same boundary as the
+// other refusal classes).
+func TestG4ANonCanonicalIdentityBlocksBeforeBegin(t *testing.T) {
+	rec, o := g4aOrchestrator(t, func() (string, error) {
+		return "machine-id:" + strings.ToUpper(strings.Repeat("a", 32)), nil
+	}, apply.Registry{})
+	stage, blockers := g4aExecute(t, o)
+	if stage != StageBlocked || len(blockers) == 0 || !strings.Contains(blockers[0], "host identity") {
+		t.Fatalf("a non-canonical identity must block, got %s %v", stage, blockers)
+	}
+	entries, err := os.ReadDir(o.Journal.Dir)
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("no journal file may exist, found %d", len(entries))
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("no executor mutation may run: %v", rec.calls)
+	}
+}
