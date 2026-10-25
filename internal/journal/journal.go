@@ -52,6 +52,13 @@ var ErrTransactionExists = errors.New("transaction already has a durable journal
 // (ZAI-110).
 var ErrAmbiguousActionID = errors.New("ambiguous action id in journal record")
 
+// ErrObservedEvidenceDirectWrite classifies a Begin or Update that would
+// introduce an observed postcondition hash outside the designated
+// RecordObservedSpecHash API (ZAI-111): Begin records intent, ordinary
+// updates change lifecycle fields — neither can manufacture an
+// independently observed postcondition.
+var ErrObservedEvidenceDirectWrite = errors.New("observed postcondition evidence can only be recorded through RecordObservedSpecHash")
+
 // ErrImmutableProvenance classifies an update that changes provenance
 // fields established at Begin — host identity, plan fingerprint, schema
 // version, approval evidence, start timestamp, or the action set's
@@ -227,6 +234,15 @@ func (j *Journal) Begin(rec *Record) error {
 	} else if !os.IsNotExist(statErr) {
 		return fmt.Errorf("journal: %w", statErr)
 	}
+	// Begin records INTENT (ZAI-111): an observed postcondition hash can
+	// enter the journal only through the designated RecordObservedSpecHash
+	// API while the transaction is nonterminal. A Begin carrying one is a
+	// manufactured observation — refused, never persisted.
+	for i := range rec.Actions {
+		if rec.Actions[i].ObservedSpecHash != "" {
+			return fmt.Errorf("%w: Begin for transaction %s carries an observed postcondition hash on action %q; Begin records intent, and observations enter only through RecordObservedSpecHash", ErrObservedEvidenceDirectWrite, rec.TransactionID, rec.Actions[i].ID)
+		}
+	}
 	rec.SchemaVersion = SchemaVersion
 	if rec.StartedAt.IsZero() {
 		rec.StartedAt = time.Now().UTC()
@@ -257,6 +273,13 @@ func (j *Journal) Begin(rec *Record) error {
 //     (ErrStaleObservedEvidence), and updates over a corrupt persisted
 //     record are refused (evidence the boundary cannot read is never
 //     overwritten).
+//   - ZAI-111: an update can never INTRODUCE an observed postcondition
+//     hash on a previously unobserved action — observed evidence enters
+//     the journal only through RecordObservedSpecHash
+//     (ErrObservedEvidenceDirectWrite). The designated writer enforces the
+//     application's persistence protocol; it does not independently
+//     attest that a caller actually observed the live resource — that
+//     guarantee requires a verified post-mutation observation path.
 //   - ZAI-109: the persisted body's transaction id must match the address
 //     being written (mirroring the load boundary's ZAI-J1 rule — a
 //     mismatched record is trusted as neither identity, never rewritten);
@@ -273,6 +296,15 @@ func (j *Journal) Begin(rec *Record) error {
 // make the known corruption and stale-snapshot hazards fail closed
 // regardless of which writer holds a stale copy.
 func (j *Journal) Update(rec *Record) error {
+	return j.updateRecord(rec, false)
+}
+
+// updateRecord is the single durable persistence path for an existing
+// record. allowObservedIntroduce is an UNEXPORTED privilege: true only
+// from RecordObservedSpecHash (the designated writer for observed
+// postcondition evidence, ZAI-111) — no exported boolean, configuration
+// option or permissive fallback exists for other callers.
+func (j *Journal) updateRecord(rec *Record, allowObservedIntroduce bool) error {
 	if err := fsatomic.EnsureDir(j.Dir, 0o700); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
@@ -351,6 +383,9 @@ func (j *Journal) Update(rec *Record) error {
 		ia := &rec.Actions[incomingByID[ca.ID][0]]
 		if ia.Resource != ca.Resource || ia.Kind != ca.Kind || ia.RetryClass != ca.RetryClass || ia.SpecHash != ca.SpecHash {
 			return fmt.Errorf("%w: update for transaction %s changes the identity fields of action %q (resource/kind/retry class/intended specification are fixed at Begin)", ErrImmutableProvenance, rec.TransactionID, ca.ID)
+		}
+		if ca.ObservedSpecHash == "" && ia.ObservedSpecHash != "" && !allowObservedIntroduce {
+			return fmt.Errorf("%w: update for transaction %s introduces an observed postcondition hash on action %q; observed evidence enters the journal only through RecordObservedSpecHash", ErrObservedEvidenceDirectWrite, rec.TransactionID, ca.ID)
 		}
 	}
 	for _, ia := range rec.Actions {

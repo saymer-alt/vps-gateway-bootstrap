@@ -222,7 +222,7 @@ func TestDurableChainMalformedPersistedRecordFailsClosed(t *testing.T) {
 	host := acquireSyntheticHostIdentity(t, syntheticMachineID+"\n", nil)
 	dir := filepath.Join(t.TempDir(), "journal")
 	j := &journal.Journal{Dir: dir}
-	rec := journalRecord(3, "tx-durable-1", fingerprint, host.HostIdentity, durableResource, "APPLIED", hexIntended, hexIntended)
+	rec := journalRecord(3, "tx-durable-1", fingerprint, host.HostIdentity, durableResource, "APPLIED", hexIntended, "")
 	rec.MutationPossible = true
 	rec.Stage = "PERSIST"
 	rec.Outcome = "COMPLETED"

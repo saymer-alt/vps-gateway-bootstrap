@@ -382,12 +382,31 @@ func TestObservedHashBlockingUnaffected(t *testing.T) {
 	if err := j.RecordObservedSpecHash("tx-inprog", "a1", "", observedHash(hashX)); err != nil {
 		t.Fatal(err)
 	}
+	// ZAI-111: the observed hash enters through the designated writer
+	// while the record is nonterminal; the latch is applied afterwards
+	// through a FRESH reload (a stale pre-observation snapshot would be
+	// refused by the integrity gate). A latched record that already
+	// carries recorded proof must still block.
 	latched := observedTestRecord("tx-latch")
-	latched.Outcome = OutcomeRecoveryRequired
-	latched.RecoveryRequired = true
-	latched.Actions[0].ObservedSpecHash = hashX
 	if err := j.Begin(latched); err != nil {
 		t.Fatal(err)
+	}
+	if err := j.RecordObservedSpecHash("tx-latch", "a1", "", observedHash(hashX)); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := j.Records()
+	if err != nil || len(loaded) != 2 {
+		t.Fatalf("reload: %v / %d", err, len(loaded))
+	}
+	for i := range loaded {
+		if loaded[i].TransactionID != "tx-latch" {
+			continue
+		}
+		loaded[i].Outcome = OutcomeRecoveryRequired
+		loaded[i].RecoveryRequired = true
+		if err := j.Update(&loaded[i]); err != nil {
+			t.Fatalf("latch update: %v", err)
+		}
 	}
 	blockers, err := j.BlockingRecords()
 	if err != nil {
