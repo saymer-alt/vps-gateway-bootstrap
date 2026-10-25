@@ -423,8 +423,18 @@ func TestAdapterSameHashReplayAccepted(t *testing.T) {
 func TestAdapterDifferentHashConflictFailsClosed(t *testing.T) {
 	act := adapterAction(t)
 	rec := journalRecord(t)
-	rec.Actions[0].ObservedSpecHash = strings.Repeat("2", 64)
 	j, _ := newJournal(t, rec)
+	// ZAI-111: the contradicting observed hash enters through the
+	// designated writer while the transaction is nonterminal — the
+	// adapter's later recording of the intended hash then conflicts
+	// (write-once) and the proven execution still fails closed.
+	contradicting, err := ownership.ParseSpecHashHex(strings.Repeat("2", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.RecordObservedSpecHash(testTx, testAction, testRes, contradicting); err != nil {
+		t.Fatalf("pre-recording the contradicting hash: %v", err)
+	}
 	ad := &Adapter{
 		Ensurer: newEnsurer(&fakeRunner{}, &snapSource{queue: []discovery.Firewall{mangleWith(), mangleWith(clampRule(testSource, testTag))}}),
 		Journal: j,
