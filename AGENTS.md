@@ -1,5 +1,9 @@
 # AGENTS.md — operational and safety contract for AI agents
 
+## Owner motive: threat-driven resilience, not accidental complexity (2026-10-25)
+
+**Mandatory reading before proposing to remove VPS, tiers, transports, or ENTRY/TRANSIT/EXIT:** [docs/OWNER-THREAT-DRIVEN-RESILIENCE.md](docs/OWNER-THREAT-DRIVEN-RESILIENCE.md). The owner built four autonomous VPS and multi-protocol/tiered local egress deliberately to survive *different classes* of ISP, protocol, IP/ASN and path failures, not for hobby complexity. Do not ask again why multiple servers/protocols exist or flatten working paths to one VPN merely for cosmetic simplicity. Conversely, the rule is **not** permission to add unneeded infrastructure; simplicity-first applies *inside* each autonomous component. Preserve fail-closed user egress, service-plane bootstrap, manual selection, independent configs and truthful multi-vantage diagnostics. This is motivation, **not** permission to modify production.
+
 ## Owner design style: composition-first, atomically simple components
 
 The operator is an architect who enjoys building **apparently mind-bending overall systems from many simple autonomous bricks**. Each brick does one focused job and is ignorant of the entire system; the **system-level knowledge lives in the architecture designed by the operator**, not in an omniscient process. The pattern recurs in home plumbing, a three-phase electrical distribution panel, an IP-camera→ring-buffer NVR→media adapter→CRT chain, and layered Mihomo/VPS infrastructure.
