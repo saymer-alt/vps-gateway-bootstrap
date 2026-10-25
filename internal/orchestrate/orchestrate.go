@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/lock"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/probe"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
@@ -47,6 +49,21 @@ type Orchestrator struct {
 	LockPath  string
 	StatePath string
 	Now       func() time.Time
+
+	// AcquireHostIdentity supplies the current host's canonical machine-id
+	// identity ("machine-id:<32 hex>") for journal provenance (G4-A,
+	// ZAI-112). It must come from the FIXED local source (/etc/machine-id
+	// through the discovery collector) — never from configuration,
+	// persisted state, plan ownership labels or caller input. A mutating
+	// execution whose identity is absent, invalid, unreadable or simply
+	// unconfigured fails closed BEFORE Journal.Begin and before any
+	// executor mutation: a hostless journal record can never corroborate
+	// (the corroboration adapter refuses it), and neither the hostname nor
+	// any other identity is a substitute. Nil means no source is
+	// configured — the same fail-closed refusal; production wiring
+	// (defaultApplyOrchestrator) supplies the real fixed-source
+	// acquisition.
+	AcquireHostIdentity func() (string, error)
 
 	// ApprovalVerifier, when non-nil, switches the confirmation boundary to
 	// operator-signed approval artifacts: legacy confirmations are refused.
@@ -447,9 +464,24 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 			Stage:            "MUTATING",
 			MutationPossible: true,
 		}
-		if o.ApprovalVerifier != nil {
-			rec.HostIdentity = o.ApprovalVerifier.HostIdentity
+		// G4-A (ZAI-112): the journal host identity is acquired fresh from
+		// the fixed local source while the orchestration lock is held, and
+		// must be a PRESENT, canonical machine-id. Any failure blocks the
+		// transaction before Journal.Begin and before any executor
+		// mutation: no hostless record is created, the hostname is never a
+		// substitute, and /etc/machine-id is never initialized or repaired.
+		hostIdentity, herr := o.acquireHostIdentity()
+		if herr != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "host identity: "+herr.Error())
+			return out, nil
 		}
+		if o.ApprovalVerifier != nil && o.ApprovalVerifier.HostIdentity != "" && o.ApprovalVerifier.HostIdentity != hostIdentity {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, fmt.Sprintf("host identity mismatch: the configured approval verifier is bound to %s while the local machine reports %s; failing closed (never silently overwritten)", o.ApprovalVerifier.HostIdentity, hostIdentity))
+			return out, nil
+		}
+		rec.HostIdentity = hostIdentity
 		if c.Approval != nil {
 			sum := sha256.Sum256(c.Approval.Payload)
 			rec.Approval = &journal.ApprovalEvidence{Mode: "artifact", Reference: hex.EncodeToString(sum[:])}
@@ -725,6 +757,39 @@ func planSpecHashes(p state.Plan) (map[string]string, error) {
 		out[a.ID] = h.Hex()
 	}
 	return out, nil
+}
+
+// acquireHostIdentity resolves the canonical machine-id identity for one
+// mutating execution. Fail-closed: an unconfigured source, a non-PRESENT
+// observation or a non-canonical identity is an error — never a hostname
+// substitution, never an empty identity, never a synthesized value. The
+// returned identity is validated against the canonical machine-id contract
+// (internal/machineid) so the journal can never persist a malformed one.
+func (o Orchestrator) acquireHostIdentity() (string, error) {
+	if o.AcquireHostIdentity == nil {
+		return "", errors.New("no host-identity source configured; a mutating transaction requires a canonical machine-id from the fixed local source (/etc/machine-id) and cannot proceed hostless (G4-A)")
+	}
+	id, err := o.AcquireHostIdentity()
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(id, machineid.HostIdentityPrefix) {
+		return "", fmt.Errorf("host identity %q must be in the canonical %q namespace", id, machineid.HostIdentityPrefix)
+	}
+	// ZAI-113: Normalize() canonicalizes (trims, lowercases), so a passing
+	// Normalize alone would accept non-canonical input and this method
+	// would return the ORIGINAL non-canonical string. The invariant is
+	// strict instead: the input must already equal its canonical form —
+	// non-canonical identities are refused, never silently rewritten.
+	raw := strings.TrimPrefix(id, machineid.HostIdentityPrefix)
+	canonical, nerr := machineid.Normalize(raw)
+	if nerr != nil {
+		return "", fmt.Errorf("host identity %q is not a canonical machine-id: %v", id, nerr)
+	}
+	if canonical != raw {
+		return "", fmt.Errorf("host identity %q is not canonically formatted (%q is the canonical form); refusing non-canonical input instead of silently rewriting it", id, machineid.HostIdentityPrefix+canonical)
+	}
+	return id, nil
 }
 
 // progressSink returns the durable per-action progress writer for one
