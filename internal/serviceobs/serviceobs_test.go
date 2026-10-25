@@ -255,3 +255,118 @@ func TestNRestartsNeverEvidence(t *testing.T) {
 		t.Fatalf("NRestarts growth must not become restart evidence, got %s", ev)
 	}
 }
+
+// ZAI-114 false-positive regressions: a runtime field changing is NOT a
+// new invocation. RESTART_OBSERVED requires independent positive evidence
+// (InvocationID change, a start from no process, or a full identity-pair
+// change on an active unit); a stopping/failing service must never be
+// classified as a restart, and a PID-only change on an active unit is
+// insufficient.
+func TestCompareActiveToInactiveIsNotARestart(t *testing.T) {
+	before := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T10:00:00+0000", "0"))
+	after := observeOK(t, showOutput("inactive", "dead", "0", "", "0"))
+	ev, reasons := Compare(before, after)
+	if ev == RestartObserved {
+		t.Fatalf("active→inactive must never be RESTART_OBSERVED (%v)", reasons)
+	}
+}
+
+func TestCompareActiveToFailedIsNotARestart(t *testing.T) {
+	before := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T10:00:00+0000", "0"))
+	after := observeOK(t, showOutput("failed", "failed", "0", "", "3"))
+	ev, reasons := Compare(before, after)
+	if ev == RestartObserved {
+		t.Fatalf("active→failed must never be RESTART_OBSERVED (%v)", reasons)
+	}
+}
+
+func TestComparePIDOnlyChangeInsufficient(t *testing.T) {
+	before := observeOK(t, showOutput("active", "running", "1111", "2026-10-25T09:00:00+0000", "0"))
+	after := observeOK(t, showOutput("active", "running", "2222", "2026-10-25T09:00:00+0000", "0"))
+	ev, reasons := Compare(before, after)
+	if ev == RestartObserved {
+		t.Fatalf("a PID-only change must not infer a new invocation (%v)", reasons)
+	}
+}
+
+// ZAI-114 continued: the strongest signal (InvocationID), malformed data,
+// transitional post-states, and the direct-construction boundary.
+
+// The strongest evidence: both snapshots carry a systemd InvocationID and
+// it changed → the manager itself established a new invocation.
+func TestCompareInvocationIDChangeObserved(t *testing.T) {
+	before := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T09:00:00+0000", "0")+"InvocationID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1\n")
+	after := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T09:00:00+0000", "0")+"InvocationID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2\n")
+	ev, reasons := Compare(before, after)
+	if ev != RestartObserved {
+		t.Fatalf("want RESTART_OBSERVED via InvocationID, got %s (%v)", ev, reasons)
+	}
+	if !strings.Contains(strings.Join(reasons, "; "), "new invocation") {
+		t.Fatalf("the reason must say systemd established a new invocation: %v", reasons)
+	}
+	// Same InvocationID with an otherwise identical snapshot → the ID
+	// confirms NOT_PROVEN (no new invocation between the snapshots).
+	ev2, _ := Compare(before, before)
+	if ev2 != RestartNotProven {
+		t.Fatalf("an unchanged InvocationID must not become evidence, got %s", ev2)
+	}
+}
+
+// A malformed (non-numeric) MainPID fails closed: UNKNOWN at observation,
+// and no favorable conclusion may rest on it in a comparison.
+func TestObserveMalformedPIDUnknown(t *testing.T) {
+	o := observeOK(t, showOutput("active", "running", "not-a-pid", "2026-10-25T10:00:00+0000", "0"))
+	if o.Status != StatusUnknown {
+		t.Fatalf("a malformed MainPID must be UNKNOWN, got %s (%v)", o.Status, o.Reasons)
+	}
+	if !strings.Contains(strings.Join(o.Reasons, "; "), "malformed") && !strings.Contains(strings.Join(o.Reasons, "; "), "not a usable process id") {
+		t.Fatalf("the reason must name the malformed PID: %v", o.Reasons)
+	}
+	// And a comparison against it can never reach a favorable verdict.
+	good := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T10:00:00+0000", "0"))
+	ev, _ := Compare(good, o)
+	if ev == RestartObserved {
+		t.Fatal("a malformed post-PID must never yield OBSERVED")
+	}
+}
+
+// A transitional post-state (activating/reloading) cannot produce restart
+// evidence.
+func TestCompareTransitionalPostStateUnprovable(t *testing.T) {
+	before := observeOK(t, showOutput("active", "running", "1234", "2026-10-25T09:00:00+0000", "0"))
+	after := observeOK(t, showOutput("activating", "start", "0", "", "0"))
+	ev, _ := Compare(before, after)
+	if ev != RestartUnprovable {
+		t.Fatalf("a transitional post-state must be UNPROVABLE, got %s", ev)
+	}
+}
+
+// Phase 5: Unit is an exported string — directly constructed values are
+// validated INSIDE Observe before any runner call; an invalid coordinate
+// must fail with zero queries.
+func TestObserveValidatesDirectlyConstructedUnits(t *testing.T) {
+	calls := 0
+	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		return []byte(showOutput("active", "running", "1", "t", "0")), nil
+	}
+	for _, bad := range []Unit{
+		Unit("--system"),
+		Unit("../bad.service"),
+		Unit("white space.service"),
+		Unit(""),
+		Unit("no-suffix"),
+		Unit("-x.service"),
+	} {
+		if _, err := Observe(context.Background(), runner, bad); err == nil {
+			t.Fatalf("directly constructed Unit %q must be refused", bad)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("invalid units must fail without any runner call, got %d", calls)
+	}
+	// A valid directly constructed unit still works.
+	if _, err := Observe(context.Background(), runner, Unit("fail2ban.service")); err != nil {
+		t.Fatalf("a valid directly constructed unit must be accepted: %v", err)
+	}
+}
