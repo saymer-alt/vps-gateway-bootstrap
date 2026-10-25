@@ -60,6 +60,7 @@ func TestApprovalModeRefusesLegacyConfirmation(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	p := o.Prepare(fail2banConfig(), rootOn())
 	if !p.Ready { t.Fatalf("plan not ready: %v", p.Blockers) }
 	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "cli:user", At: time.Now().UTC()}
@@ -76,6 +77,7 @@ func TestExecuteWithValidApprovalArtifact(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	p := o.Prepare(fail2banConfig(), rootOn())
 	if !p.Ready { t.Fatalf("plan not ready: %v", p.Blockers) }
 
@@ -102,6 +104,7 @@ func TestApprovalArtifactForWrongPlanIsRejected(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	p := o.Prepare(fail2banConfig(), rootOn())
 
 	conf := Confirmation{Approval: signApproval(t, "deadbeef-not-this-plan")}
@@ -134,6 +137,7 @@ func TestExpiredApprovalArtifactIsRejected(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	p := o.Prepare(fail2banConfig(), rootOn())
 
 	past := approval.Payload{

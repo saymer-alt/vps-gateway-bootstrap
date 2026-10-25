@@ -120,6 +120,11 @@ func applyTestOrchestrator(t *testing.T, states []discovery.Result, reg apply.Re
 		StatePath: filepath.Join(t.TempDir(), "state.json"),
 		Journal:   &journal.Journal{Dir: filepath.Join(t.TempDir(), "journal")},
 		Now:       func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
+		// G4-A (ZAI-112): a valid SYNTHETIC fixed-source identity for CLI
+		// lifecycle tests — never the CI runner's real /etc/machine-id.
+		AcquireHostIdentity: func() (string, error) {
+			return "machine-id:" + strings.Repeat("a", 32), nil
+		},
 	}
 	return o, rec, &calls
 }

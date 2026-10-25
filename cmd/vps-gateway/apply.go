@@ -3,10 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	osUser "os/user"
 	"os"
+	osUser "os/user"
 	"strings"
 	"time"
 
@@ -68,6 +69,26 @@ func firstExperimentGuard(p orchestrate.Plan) error {
 	return nil
 }
 
+// acquireFixedHostIdentity observes the machine's canonical host identity
+// from the fixed local source (/etc/machine-id, through the discovery
+// collector — the same acquisition the discovery layer uses) and fails
+// closed on everything else: the hostname is never a substitute, and a
+// hostless journal record can never corroborate. /etc/machine-id is never
+// initialized or repaired here.
+func acquireFixedHostIdentity() (string, error) {
+	obs := (&discovery.Collector{}).AcquireMachineID()
+	switch obs.Status {
+	case discovery.MachineIDPresent:
+		return obs.HostIdentity, nil
+	case discovery.MachineIDAbsent:
+		return "", errors.New("host identity absent: /etc/machine-id does not exist on this machine (failing closed; the file is never initialized or repaired automatically)")
+	case discovery.MachineIDInvalid:
+		return "", errors.New("host identity invalid: /etc/machine-id is not a canonical 32-hex machine-id (failing closed)")
+	default:
+		return "", errors.New("host identity unreadable: /etc/machine-id exists but cannot be read (failing closed)")
+	}
+}
+
 func defaultApplyOrchestrator(timeout time.Duration) *orchestrate.Orchestrator {
 	return &orchestrate.Orchestrator{
 		Discover: func() discovery.Result {
@@ -81,6 +102,14 @@ func defaultApplyOrchestrator(timeout time.Duration) *orchestrate.Orchestrator {
 		LockPath:  orchestrate.DefaultLockPath,
 		StatePath: orchestrate.DefaultStatePath,
 		Journal:   journal.Default(),
+		// G4-A (ZAI-112): the journal host identity is acquired from the
+		// fixed local source (/etc/machine-id through the discovery
+		// collector — the same acquisition the discovery layer uses), never
+		// from configuration, persisted state, plan ownership labels or
+		// caller input. Absent, invalid and unreadable identities fail
+		// closed before Journal.Begin; /etc/machine-id is never initialized
+		// or repaired here.
+		AcquireHostIdentity: acquireFixedHostIdentity,
 	}
 }
 
@@ -104,11 +133,17 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		case "--dry-run":
 			dryRun = true
 		case "--config":
-			if i+1 >= len(rest) { fmt.Fprintln(stderr, "--config requires a file path"); return 2 }
+			if i+1 >= len(rest) {
+				fmt.Fprintln(stderr, "--config requires a file path")
+				return 2
+			}
 			i++
 			configPath = rest[i]
 		case "--confirm":
-			if i+1 >= len(rest) { fmt.Fprintln(stderr, "--confirm requires the plan fingerprint prefix"); return 2 }
+			if i+1 >= len(rest) {
+				fmt.Fprintln(stderr, "--confirm requires the plan fingerprint prefix")
+				return 2
+			}
 			i++
 			confirmPrefix = rest[i]
 		default:
@@ -120,9 +155,15 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	cfg := firstExperimentConfig()
 	if configPath != "" {
 		b, err := os.ReadFile(configPath)
-		if err != nil { fmt.Fprintln(stderr, "read config:", err); return 1 }
+		if err != nil {
+			fmt.Fprintln(stderr, "read config:", err)
+			return 1
+		}
 		parsed, err := pipeline.ParseConfig(b)
-		if err != nil { fmt.Fprintln(stderr, err); return 1 }
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		cfg = parsed
 	}
 
@@ -140,7 +181,9 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	p := o.Prepare(cfg, opts)
 	if !p.Ready {
 		fmt.Fprintln(stderr, "apply blocked before mutation:")
-		for _, b := range p.Blockers { fmt.Fprintln(stderr, "  - "+b) }
+		for _, b := range p.Blockers {
+			fmt.Fprintln(stderr, "  - "+b)
+		}
 		return 3
 	}
 	// Scenario guard: this build executes only the first production experiment.
@@ -204,7 +247,9 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		}
 	}
 	if len(out.Blockers) > 0 {
-		for _, b := range out.Blockers { fmt.Fprintln(stderr, "  - "+b) }
+		for _, b := range out.Blockers {
+			fmt.Fprintln(stderr, "  - "+b)
+		}
 	}
 	if out.ReDiscovery != nil {
 		fmt.Fprintf(stdout, "Re-discovery: %s\n", out.ReDiscovery.Status)

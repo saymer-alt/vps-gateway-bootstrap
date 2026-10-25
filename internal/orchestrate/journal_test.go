@@ -132,6 +132,7 @@ func TestApprovalCannotBypassRecovery(t *testing.T) {
 		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
 	}, nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 
 	// Run 1 latches recovery (artifact-approved, rollback fails).
 	p := o.Prepare(fail2banConfig(), rootOn())

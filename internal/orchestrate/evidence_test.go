@@ -391,6 +391,7 @@ func TestExecuteTerminalJournalBeforeStatePersistence(t *testing.T) {
 	}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(true), makeDiscovery(true), makeDiscovery(true)}, applyRegistryFiles(), nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	p := o.Prepare(cfg, pipeline.Options{Root: &yes, InspectFile: inspect})
 	if !p.Ready {
 		t.Fatalf("plan not ready: %v", p.Blockers)
@@ -482,6 +483,7 @@ func TestExecuteJournalTerminalFailurePreventsPersistence(t *testing.T) {
 	brk := &finalizeBreaker{}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(true), makeDiscovery(true), makeDiscovery(true)}, applyRegistryFilesWith(brk), nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	brk.journalDir = o.Journal.Dir
 	// The breaker swaps the record for a directory at the executor's
 	// Validate boundary: every progress write succeeded, and the explicit
@@ -554,6 +556,7 @@ func TestExecuteStateSaveFailureKeepsTerminalCompleted(t *testing.T) {
 	}
 	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(true), makeDiscovery(true), makeDiscovery(true)}, applyRegistryFiles(), nil)
 	o.ApprovalVerifier = approvalTestVerifier()
+	o.AcquireHostIdentity = func() (string, error) { return evHost, nil }
 	// SaveModel fails: the state path is a directory.
 	o.StatePath = filepath.Join(o.StatePath, "state.json")
 	if err := os.MkdirAll(o.StatePath, 0o700); err != nil {

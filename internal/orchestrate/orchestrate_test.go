@@ -96,6 +96,14 @@ func newOrchestrator(t *testing.T, states []discovery.Result, reg apply.Registry
 		StatePath: filepath.Join(t.TempDir(), "state.json"),
 		Journal:   &journal.Journal{Dir: filepath.Join(t.TempDir(), "journal")},
 		Now:       func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
+		// G4-A (ZAI-112): every mutating execution requires a canonical
+		// host identity from the fixed local source. Tests inject a valid
+		// SYNTHETIC identity here — never the CI runner's real
+		// /etc/machine-id; dedicated host-identity tests exercise the
+		// fail-closed paths with their own injected sources.
+		AcquireHostIdentity: func() (string, error) {
+			return "machine-id:" + strings.Repeat("a", 32), nil
+		},
 	}
 	_ = now
 	return o, &calls
