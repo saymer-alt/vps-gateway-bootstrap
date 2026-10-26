@@ -258,6 +258,21 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		fmt.Fprintf(stdout, "Final validation: %s\n", out.FinalValidate.Status)
 	}
 	fmt.Fprintf(stdout, "Persisted last-known-good state: %v\n", out.Persisted)
+	// Report-only SERVICE observation (ZAI-115): surface the diagnostic when
+	// an observer was configured for this run. Production wiring leaves the
+	// observer unconfigured, so this block is inert on the real path; it
+	// never influences the exit code or any other decision.
+	if obs := out.ServiceObservation; obs != nil {
+		fmt.Fprintf(stdout, "Service observation (report-only): resource=%s unit=%s verdict=%s attempt_applied=%v\n",
+			obs.Resource, obs.Unit, obs.Verdict, obs.AttemptApplied)
+		for _, n := range obs.Notes {
+			fmt.Fprintf(stdout, "  note: %s\n", n)
+		}
+		for _, r := range obs.VerdictReasons {
+			fmt.Fprintf(stdout, "  %s\n", r)
+		}
+		fmt.Fprintf(stdout, "  window: %s\n", obs.Window)
+	}
 
 	switch out.Stage {
 	case orchestrate.StageCompleted:

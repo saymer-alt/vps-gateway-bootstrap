@@ -14,6 +14,7 @@
 package orchestrate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/machineid"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/probe"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/serviceobs"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/validate"
 )
@@ -83,6 +85,20 @@ type Orchestrator struct {
 	// valid approval does not bypass it, and no code path clears the latch
 	// (operator action; reset authority is a separate decision).
 	Journal *journal.Journal
+
+	// ObserveService, when non-nil, enables the OPTIONAL report-only
+	// SERVICE observation window around the Engine execution attempt
+	// (ZAI-115; see serviceobservation.go for the full contract). Only the
+	// pinned single fail2ban SERVICE plan is eligible; the diagnostic is
+	// attached to Outcome.ServiceObservation and never influences any
+	// authorization, status, persistence or recovery decision. The
+	// production default is nil — DISABLED; no CLI flag activates it.
+	ObserveService func(ctx context.Context, unit string) (serviceobs.Observation, error)
+
+	// ServiceObservationTimeout bounds each read-only observation call
+	// when ObserveService is configured; zero selects the package default.
+	// An exceeded budget becomes an informational note in the report.
+	ServiceObservationTimeout time.Duration
 }
 
 // Plan is the read-only planning product handed to the operator for review.
@@ -266,6 +282,14 @@ type Outcome struct {
 	FinalValidate *validate.Report
 	PersistedPath string
 	Persisted     bool
+
+	// ServiceObservation is the optional REPORT-ONLY diagnostic from the
+	// SERVICE observation window (ZAI-115, serviceobservation.go): nil
+	// unless an observer is configured AND the plan is the single eligible
+	// pinned fail2ban action AND the run reached the engine attempt. It is
+	// plain operator-facing data — no code path may read it back for any
+	// authorization, persistence or recovery decision.
+	ServiceObservation *ServiceObservationReport
 }
 
 // Stage names, ordered by lifecycle position.
@@ -549,8 +573,16 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	// sink persists per-action lifecycle transitions durably (R5-A) — an
 	// APPLIED whose persistence fails fails the transaction (the engine
 	// rolls the action back rather than continuing without evidence).
+	//
+	// Report-only SERVICE observation window (ZAI-115): when an observer is
+	// configured AND the plan is the single eligible pinned fail2ban
+	// action, a read-only before-snapshot is taken immediately before this
+	// attempt and a read-only after-snapshot immediately after it returns;
+	// the diagnostic is attached to the Outcome and changes nothing else.
+	obsWindow := o.beginServiceObservation(p, rec)
 	tr := (apply.Engine{Executor: reg, Progress: o.progressSink(rec)}).Apply(p.Plan, preflightGate{pf: p.Preflight})
 	out.Transaction = tr
+	out.ServiceObservation = o.endServiceObservation(obsWindow, tr)
 	if tr.Status != apply.StatusApplied {
 		out.Stage = StageFailedTransaction
 		return out, nil

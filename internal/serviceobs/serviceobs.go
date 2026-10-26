@@ -2,18 +2,50 @@
 // observation component (ZAI-113): typed, hermetically testable facts
 // about one systemd unit's live state and invocation identity.
 //
-// What it proves: a PRESENT snapshot of the unit's reported state
-// (ActiveState/SubState/MainPID/ExecMainEnterTimestamp/NRestarts) and —
-// by comparing two PRESENT snapshots — whether systemd established a NEW
-// invocation between them (MainPID or ExecMainEnterTimestamp changed).
+// What one snapshot proves: a PRESENT set of the unit's reported facts
+// (ActiveState/SubState/MainPID/ExecMainStartTimestamp(+Monotonic)/
+// NRestarts/InvocationID). What a comparison of two PRESENT snapshots can
+// prove, in decreasing strength (ZAI-115 semantics, grounded in the
+// authoritative systemd sources):
 //
-// What it does NOT prove: that a specific `systemctl restart` caused the
-// change (the observer sees machine state, not the act), and — critically
-// — `ActiveState=active` alone is NEVER restart evidence: an
-// active-before/active-after pair with identical invocation identity is
-// RestartNotProven. Where systemd reports no invocation identity, restart
-// occurrence is RestartUnprovable. NRestarts counts automatic restarts
-// only and is carried as an informational fact, never as evidence.
+//   - InvocationID channel (the manager's own identity): systemd acquires
+//     a fresh random 128-bit invocation identifier on EVERY unit start
+//     (service_enter_start → unit_acquire_invocation_id) and keeps it for
+//     the lifetime of that invocation. Equal IDs on both sides therefore
+//     positively prove that NO new invocation occurred between the
+//     snapshots; different IDs positively prove that a new invocation
+//     DID occur — regardless of the reported post-state (a unit may start
+//     and fail again inside the window). The channel is used only when
+//     both values are present and well-formed (32 hexadecimal
+//     characters); a malformed value can never support a favorable
+//     verdict.
+//
+//   - Start from a not-running state: a unit reported inactive/failed
+//     with a terminated main process that later reports active with a
+//     main process MUST have been started (inactive→active requires a
+//     start job), and every start is a new invocation.
+//
+//   - Main-process replacement: a changed main-process identity (PID
+//     and/or start timestamp) without invocation-ID guidance is evidence
+//     that the main process was replaced — never proof of a new unit
+//     invocation: service_set_main_pid refreshes the recorded start
+//     timestamp for an in-invocation MAINPID= handoff (sd_notify), so a
+//     restart and a handoff produce the same pattern. MAIN_PROCESS_CHANGED
+//     deliberately does not answer the invocation question.
+//
+// What none of this proves: that a specific `systemctl restart` command
+// caused the change — the observer sees machine state, not the act.
+// NRestarts counts automatic restarts only and is carried as an
+// informational fact, never as evidence.
+//
+// Property provenance: `ExecMainEnterTimestamp` does not exist in systemd
+// (the ZAI-114 research note claiming it did was wrong); the
+// BUS_EXEC_STATUS_VTABLE("ExecMain", …) expansion (verified in the v255
+// sources) exposes ExecMainStartTimestamp(+Monotonic),
+// ExecMainExitTimestamp(+Monotonic), ExecMainPID, ExecMainCode and
+// ExecMainStatus. The observer queries the REAL start-identity properties
+// (formatted timestamp as the human-readable fact, monotonic microseconds
+// as the machine-comparable identity).
 //
 // Boundary: read-only by construction — the only command shape is
 // `systemctl show <unit> --property=…`; no mutation verbs exist here. The
@@ -97,31 +129,36 @@ const (
 // systemd's verbatim property values (no normalization, no synthesis —
 // absence stays absent).
 type Observation struct {
-	Unit                   Unit
-	Status                 Status
-	ActiveState            string
-	SubState               string
-	MainPID                string
-	ExecMainEnterTimestamp string
-	InvocationID           string
-	NRestarts              string
-	Reasons                []string
+	Unit                            Unit
+	Status                          Status
+	ActiveState                     string
+	SubState                        string
+	MainPID                         string
+	ExecMainStartTimestamp          string
+	ExecMainStartTimestampMonotonic string
+	InvocationID                    string
+	NRestarts                       string
+	Reasons                         []string
 }
 
 // showProperties is the exact read-only query surface. Every observation
 // runs exactly this command shape — no other command exists in this
-// package, and no mutation verb can be constructed.
+// package, and no mutation verb can be constructed. The properties are
+// the REAL systemd ExecMain identity facts (see the package
+// documentation for the BUS_EXEC_STATUS_VTABLE provenance);
+// ExecMainStartTimestampMonotonic is the machine-comparable start-time
+// identity, ExecMainStartTimestamp its human-readable counterpart.
+// InvocationID (systemd-managed 128-bit per-invocation identifier, the
+// manager acquires a fresh one on every unit start) is the strongest
+// invocation marker; its absence is a normal, fail-closed case — the
+// comparison then falls back to the strictly weaker signals.
 func showProperties(ctx context.Context, runner Runner, unit Unit) ([]byte, error) {
-	// InvocationID (systemd-managed 128-bit per-invocation identifier,
-	// exposed by `systemctl show` since the v230s; present on the
-	// supported systemd 252/255 targets) is the strongest invocation
-	// marker: it changes on every unit start. Its absence is a normal,
-	// fail-closed case — the comparison falls back to weaker signals.
 	return runner(ctx, "systemctl", "show", string(unit),
 		"--property=ActiveState",
 		"--property=SubState",
 		"--property=MainPID",
-		"--property=ExecMainEnterTimestamp",
+		"--property=ExecMainStartTimestamp",
+		"--property=ExecMainStartTimestampMonotonic",
 		"--property=InvocationID",
 		"--property=NRestarts",
 	)
@@ -169,7 +206,7 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 	active, hasActive := props["ActiveState"]
 	if !hasActive || strings.TrimSpace(active) == "" {
 		missing := []string{"ActiveState"}
-		for _, k := range []string{"SubState", "MainPID", "ExecMainEnterTimestamp", "NRestarts"} {
+		for _, k := range []string{"SubState", "MainPID", "ExecMainStartTimestamp", "NRestarts"} {
 			if _, ok := props[k]; !ok {
 				missing = append(missing, k)
 			}
@@ -180,14 +217,15 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 		}, nil
 	}
 	o := Observation{
-		Unit:                   unit,
-		Status:                 StatusPresent,
-		ActiveState:            props["ActiveState"],
-		SubState:               props["SubState"],
-		MainPID:                props["MainPID"],
-		ExecMainEnterTimestamp: props["ExecMainEnterTimestamp"],
-		InvocationID:           props["InvocationID"],
-		NRestarts:              props["NRestarts"],
+		Unit:                            unit,
+		Status:                          StatusPresent,
+		ActiveState:                     props["ActiveState"],
+		SubState:                        props["SubState"],
+		MainPID:                         props["MainPID"],
+		ExecMainStartTimestamp:          props["ExecMainStartTimestamp"],
+		ExecMainStartTimestampMonotonic: props["ExecMainStartTimestampMonotonic"],
+		InvocationID:                    props["InvocationID"],
+		NRestarts:                       props["NRestarts"],
 	}
 	// A malformed MainPID is corrupt evidence: fail closed to Unknown —
 	// optimistic restart conclusions must never rest on unparseable data.
@@ -196,6 +234,19 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 			o.Status = StatusUnknown
 			o.Reasons = append(o.Reasons, fmt.Sprintf("MainPID=%q is not a usable process id; refusing to build evidence on malformed data", o.MainPID))
 			return o, nil
+		}
+	}
+	// A malformed nonempty InvocationID is carried verbatim with a reason:
+	// the other reported facts stay usable, but the value can never
+	// support a favorable verdict (Compare re-validates the channel).
+	if o.InvocationID != "" && !validInvocationID(o.InvocationID) {
+		o.Reasons = append(o.Reasons, fmt.Sprintf("InvocationID=%q is not a well-formed 32-hex invocation identifier; it cannot support any favorable verdict", o.InvocationID))
+	}
+	// A malformed monotonic start value is carried verbatim with a reason:
+	// the start-time identity falls back to the formatted timestamp.
+	if m := o.ExecMainStartTimestampMonotonic; m != "" {
+		if v, err := strconv.ParseInt(m, 10, 64); err != nil || v < 0 {
+			o.Reasons = append(o.Reasons, fmt.Sprintf("ExecMainStartTimestampMonotonic=%q is not a usable microsecond value; the start-time identity falls back to the formatted timestamp", m))
 		}
 	}
 	// NRestarts is informational only: it counts automatic restarts and is
@@ -209,126 +260,229 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 	return o, nil
 }
 
-// RestartEvidence is the closed comparison vocabulary across two PRESENT
-// snapshots of the same unit.
-type RestartEvidence string
+// InvocationEvidence is the closed comparison vocabulary across two
+// PRESENT snapshots of the same unit. The names state exactly what each
+// verdict proves — no verdict claims that a restart COMMAND ran or
+// caused anything.
+type InvocationEvidence string
 
 const (
-	// RestartObserved: systemd's invocation identity changed between the
-	// snapshots (MainPID or ExecMainEnterTimestamp) — a new invocation was
-	// established. This is evidence of a new invocation, not proof that a
-	// particular restart COMMAND caused it.
-	RestartObserved RestartEvidence = "RESTART_OBSERVED"
-	// RestartNotProven: the unit was present and comparable with identical
-	// invocation identity — active==active alone never proves a restart.
-	RestartNotProven RestartEvidence = "RESTART_NOT_PROVEN"
-	// RestartUnprovable: invocation identity is missing on either side —
-	// restart occurrence cannot be established (fail closed, never guessed).
-	RestartUnprovable RestartEvidence = "RESTART_UNPROVABLE"
-	// NoNewInvocation: the post-observation positively shows the unit is
-	// not running (inactive/failed with a terminated main process) — no
-	// new invocation happened, as far as the observed facts go.
-	NoNewInvocation RestartEvidence = "NO_NEW_INVOCATION"
-	// RestartNotComparable: at least one snapshot is not PRESENT, or the
-	// units differ — no comparison is possible.
-	RestartNotComparable RestartEvidence = "RESTART_NOT_COMPARABLE"
+	// InvocationObserved: a NEW unit invocation was positively established
+	// — either the manager itself (both InvocationIDs present and
+	// different) or a start from a not-running state (inactive→active
+	// requires a start, and every start is a new invocation). This is
+	// machine-state evidence, never proof that a particular restart
+	// command caused the invocation.
+	InvocationObserved InvocationEvidence = "NEW_INVOCATION_OBSERVED"
+	// MainProcessChanged: the main process was replaced (PID and/or
+	// start-time identity changed) while no usable InvocationID pair is
+	// available. An in-invocation MAINPID= handoff (sd_notify) refreshes
+	// the recorded start timestamp, so this pattern never decides the
+	// invocation question — it is process-level evidence only.
+	MainProcessChanged InvocationEvidence = "MAIN_PROCESS_CHANGED"
+	// NoNewInvocation: positively proven absence of a new invocation —
+	// both snapshots carry the same well-formed InvocationID, and the
+	// manager assigns a fresh random identifier on every unit start.
+	NoNewInvocation InvocationEvidence = "NO_NEW_INVOCATION"
+	// InvocationNotProven: identical main-process identity with no usable
+	// InvocationID pair — the observation supports neither claim (a
+	// restart within the timestamp resolution plus PID reuse would look
+	// identical).
+	InvocationNotProven InvocationEvidence = "INVOCATION_NOT_PROVEN"
+	// InvocationUnprovable: the invocation question cannot be answered —
+	// missing or malformed identity, a transitional post-state, or a
+	// not-running post-state without invocation-ID guidance (the unit
+	// could have restarted and stopped again inside the window).
+	InvocationUnprovable InvocationEvidence = "INVOCATION_UNPROVABLE"
+	// NotComparable: at least one snapshot is not PRESENT, or the units
+	// differ — no comparison is possible.
+	NotComparable InvocationEvidence = "NOT_COMPARABLE"
 )
 
-// Compare classifies restart evidence across two PRESENT snapshots of the
-// SAME unit. RESTART_OBSERVED means a NEW unit invocation was
-// independently established — it requires the post-observation to be
-// non-transitional and running, AND one of:
+// validInvocationID reports whether s has the exact systemctl-show shape
+// of a systemd invocation identifier: 32 hexadecimal characters
+// (sd_id128_to_string). Anything else — including uppercase-insensitive
+// look-alikes of the wrong length — is malformed and can never support a
+// favorable verdict.
+func validInvocationID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// Compare classifies the invocation evidence across two PRESENT snapshots
+// of the SAME unit. The decision procedure, in authoritative-signal
+// order:
 //
-//   - the systemd InvocationID changed (both present, different values) —
-//     the manager itself identified a new invocation; or
-//   - a start from no process (MainPID "0"/empty → a positive PID with a
-//     newly appearing ExecMainEnterTimestamp); or
-//   - an active→active transition where BOTH MainPID and
-//     ExecMainEnterTimestamp changed (a PID-only change is insufficient:
-//     it cannot distinguish a restart from PID reuse or an in-invocation
-//     main-PID handoff).
+//  1. InvocationID channel (both values well-formed): EQUAL proves no new
+//     invocation occurred (NO_NEW_INVOCATION); DIFFERENT proves a new
+//     invocation occurred (NEW_INVOCATION_OBSERVED) — regardless of the
+//     reported post-state, which the reason reports alongside. The
+//     manager's own identifier decides; nothing else is consulted.
+//  2. Without a usable InvocationID pair, only strictly weaker signals
+//     apply, and only a settled `active` post-state can carry a favorable
+//     conclusion: a start from a not-running state
+//     (inactive/failed + no main process → active + main process) proves
+//     a new invocation; a changed main-process identity proves only
+//     MAIN_PROCESS_CHANGED; a PID-only change, identical identity,
+//     incomplete identity and everything else fail closed.
+//  3. A not-running or transitional post-state without invocation-ID
+//     guidance is INVOCATION_UNPROVABLE — it must NOT claim that no
+//     invocation occurred (the unit may have restarted and stopped again
+//     inside the window).
 //
-// The post-observation being inactive or failed is NO_NEW_INVOCATION (a
-// terminated main process is the opposite of a new invocation); a
-// transitional post-state (activating/reloading) is UNPROVABLE; malformed
-// or incomplete identity never yields a favorable result; NRestarts is
-// never evidence. Deterministic, fail-closed, and never falling back to
-// any intended specification. OBSERVED is evidence of a new invocation —
+// Malformed nonempty InvocationIDs are named in the reasons and can never
+// support a favorable verdict; malformed MainPIDs never reach Compare
+// (Observe fails them to UNKNOWN). NRestarts is never evidence.
+// Deterministic, fail-closed, and never falling back to any intended
+// specification. NEW_INVOCATION_OBSERVED is evidence of a new invocation —
 // it neither proves that a restart COMMAND ran nor that it caused the
 // invocation.
-func Compare(before, after Observation) (RestartEvidence, []string) {
+func Compare(before, after Observation) (InvocationEvidence, []string) {
 	if before.Unit != after.Unit || before.Unit == "" {
-		return RestartNotComparable, []string{"comparison requires two snapshots of the same validated unit"}
+		return NotComparable, []string{"comparison requires two snapshots of the same validated unit"}
 	}
 	if before.Status != StatusPresent || after.Status != StatusPresent {
-		return RestartNotComparable, []string{
+		return NotComparable, []string{
 			fmt.Sprintf("comparison requires PRESENT snapshots, got before=%s after=%s", before.Status, after.Status),
 		}
 	}
-	// Post-state classification: a stopping or failing service is the
-	// opposite of a restart; a transitional state cannot be judged.
-	switch after.ActiveState {
-	case "active":
-	case "inactive", "failed":
+	var notes []string
+	// Channel 1: the manager's own invocation identity.
+	beforeID, beforeOK := usableInvocationID(before)
+	afterID, afterOK := usableInvocationID(after)
+	if before.InvocationID != "" && !beforeOK {
+		notes = append(notes, fmt.Sprintf("the pre-observation InvocationID %q is malformed (want 32 hexadecimal characters); it cannot support any favorable verdict", before.InvocationID))
+	}
+	if after.InvocationID != "" && !afterOK {
+		notes = append(notes, fmt.Sprintf("the post-observation InvocationID %q is malformed (want 32 hexadecimal characters); it cannot support any favorable verdict", after.InvocationID))
+	}
+	if beforeOK && afterOK {
+		if beforeID == afterID {
+			return NoNewInvocation, append(notes, fmt.Sprintf(
+				"the invocation persisted: both snapshots carry the same systemd InvocationID %q, and the manager assigns a fresh random 128-bit identifier on every unit start — no new invocation occurred between the snapshots (MainPID %q -> %q, post-state %q)",
+				beforeID, before.MainPID, after.MainPID, after.ActiveState))
+		}
+		return InvocationObserved, append(notes, fmt.Sprintf(
+			"systemd established a new invocation: InvocationID changed %q -> %q (the manager assigns a fresh identifier on every unit start; post-state %q). This is machine-state evidence, not proof that a particular restart command caused it",
+			beforeID, afterID, after.ActiveState))
+	}
+	if beforeOK != afterOK {
+		notes = append(notes, "the InvocationID is available on only one side; the authoritative identity channel is unusable and the weaker signals below apply")
+	}
+	// Channel 2: weaker signals. First the post-state gate — only a
+	// settled active post-state can carry a favorable weaker-signal
+	// conclusion.
+	switch {
+	case after.ActiveState == "active":
+	case after.ActiveState == "inactive" || after.ActiveState == "failed":
 		if after.MainPID == "0" || after.MainPID == "" {
-			return NoNewInvocation, []string{
-				fmt.Sprintf("the unit is %q after the observation with no running main process (MainPID=%q); no new invocation occurred", after.ActiveState, after.MainPID),
-			}
+			return InvocationUnprovable, append(notes, fmt.Sprintf(
+				"the unit is %q after the observation with no running main process (MainPID=%q); a new invocation could have occurred and ended before the after-snapshot, and without InvocationID evidence the invocation question cannot be answered",
+				after.ActiveState, after.MainPID))
 		}
-		return RestartUnprovable, []string{
-			fmt.Sprintf("the unit is %q with a non-terminated main process; restart occurrence cannot be established from this state", after.ActiveState),
-		}
+		return InvocationUnprovable, append(notes, fmt.Sprintf(
+			"the unit is %q with a non-terminated main process; the invocation question cannot be answered from this state", after.ActiveState))
 	default:
-		// activating/reloading/unknown post-states are transitional or
-		// unusable — never a favorable restart conclusion.
-		return RestartUnprovable, []string{
-			fmt.Sprintf("the post-observation state %q is transitional or unusable; restart evidence requires a settled %q state", after.ActiveState, "active"),
-		}
+		return InvocationUnprovable, append(notes, fmt.Sprintf(
+			"the post-observation state %q is transitional or unusable; favorable invocation evidence requires a settled %q post-state when no InvocationID pair is available",
+			after.ActiveState, "active"))
 	}
 	if !validPositivePID(after.MainPID) {
-		return RestartUnprovable, []string{
-			fmt.Sprintf("the post-observation MainPID %q is not a usable process id; no favorable conclusion may rest on it", after.MainPID),
-		}
+		return InvocationUnprovable, append(notes, fmt.Sprintf(
+			"the post-observation MainPID %q is not a usable process id; no favorable conclusion may rest on it", after.MainPID))
 	}
-	// Strongest signal: the manager changed the unit's invocation.
-	if before.InvocationID != "" && after.InvocationID != "" && before.InvocationID != after.InvocationID {
-		return RestartObserved, []string{
-			fmt.Sprintf("systemd established a new invocation: InvocationID changed %q -> %q", before.InvocationID, after.InvocationID),
-		}
-	}
-	// Start-from-nothing: no main process before, a real process with a
-	// newly appearing enter timestamp after.
+	// Start from a not-running state: the unit cannot move from
+	// inactive/failed with no main process to active with a main process
+	// without a start job, and every start acquires a fresh invocation.
 	started := func(o Observation) bool { return o.MainPID != "0" && o.MainPID != "" }
-	if !started(before) && started(after) && before.ExecMainEnterTimestamp == "" && after.ExecMainEnterTimestamp != "" {
-		return RestartObserved, []string{
-			fmt.Sprintf("the unit started from no process: MainPID %q -> %q with a newly appearing ExecMainEnterTimestamp", before.MainPID, after.MainPID),
+	wasDown := func(o Observation) bool {
+		return (o.ActiveState == "inactive" || o.ActiveState == "failed") && !started(o)
+	}
+	if wasDown(before) && started(after) {
+		reason := fmt.Sprintf("the unit started from a not-running state (%q, MainPID %q) into an active state with a main process (MainPID %q): every unit start is a new invocation. This is machine-state evidence, not proof that a particular restart command caused it",
+			before.ActiveState, before.MainPID, after.MainPID)
+		if id, ok := startIdentity(after); ok {
+			reason += fmt.Sprintf(" (start identity %s)", id)
+		}
+		return InvocationObserved, append(notes, reason)
+	}
+	// Main-process identity change: without invocation-ID guidance this is
+	// evidence of process replacement only — service_set_main_pid
+	// refreshes the recorded start timestamp for an in-invocation MAINPID=
+	// handoff, so the same pattern covers restarts and handoffs alike.
+	pidChanged := before.MainPID != after.MainPID
+	identityChanged, identityKnown := startIdentityChanged(before, after)
+	switch {
+	case identityKnown && identityChanged:
+		return MainProcessChanged, append(notes, fmt.Sprintf(
+			"the main process was replaced (MainPID %q -> %q, start identity changed) while no usable InvocationID pair is available: a new invocation may have occurred, but an in-invocation main-PID handoff produces the same pattern, so the invocation question is not decided",
+			before.MainPID, after.MainPID))
+	case pidChanged:
+		return InvocationUnprovable, append(notes, fmt.Sprintf(
+			"only MainPID changed (%q -> %q) with an unusable or identical start-time identity; a restart cannot be distinguished from PID reuse or an in-invocation main-PID handoff",
+			before.MainPID, after.MainPID))
+	case identityKnown:
+		return InvocationNotProven, append(notes, fmt.Sprintf(
+			"identical main-process identity across snapshots (MainPID %q, start identity %s) with no usable InvocationID pair: active==active alone never proves or disproves a restart, and identity equality cannot rule out a restart within the timestamp resolution",
+			before.MainPID, mustStartIdentity(after)))
+	default:
+		return InvocationUnprovable, append(notes,
+			"no invocation identity is usable on either side and nothing observable changed; the invocation question cannot be answered")
+	}
+}
+
+// usableInvocationID returns the lowercased invocation identifier when s
+// is well-formed; malformed values are unusable and can never support a
+// favorable verdict.
+func usableInvocationID(o Observation) (string, bool) {
+	if !validInvocationID(o.InvocationID) {
+		return "", false
+	}
+	return strings.ToLower(o.InvocationID), true
+}
+
+// startIdentity returns the machine-comparable start-time identity of the
+// main process: the monotonic microseconds value when usable, else the
+// formatted timestamp. ok=false when neither component is usable.
+func startIdentity(o Observation) (string, bool) {
+	if m := o.ExecMainStartTimestampMonotonic; m != "" {
+		if v, err := strconv.ParseInt(m, 10, 64); err == nil && v >= 0 {
+			return "mono:" + strconv.FormatInt(v, 10), true
 		}
 	}
-	// Active→active with BOTH the PID and the enter timestamp changed: the
-	// unit re-entered running for a new main process — sufficient evidence
-	// of a new invocation. A PID-only change is NOT: PID reuse or an
-	// in-invocation main-PID handoff would look identical.
-	if before.MainPID != after.MainPID && before.ExecMainEnterTimestamp != after.ExecMainEnterTimestamp {
-		return RestartObserved, []string{
-			fmt.Sprintf("the unit re-entered running for a new main process: MainPID %q -> %q, ExecMainEnterTimestamp %q -> %q", before.MainPID, after.MainPID, before.ExecMainEnterTimestamp, after.ExecMainEnterTimestamp),
+	if t := o.ExecMainStartTimestamp; t != "" {
+		return "ts:" + t, true
+	}
+	return "", false
+}
+
+// startIdentityChanged compares the two snapshots' start-time identity
+// component-wise: monotonic values when usable on both sides, else the
+// formatted timestamps when present on both sides. A mixed or missing
+// identity is reported as unknown — never guessed.
+func startIdentityChanged(before, after Observation) (changed, known bool) {
+	if bm, ok := startIdentity(before); ok {
+		if am, ok := startIdentity(after); ok {
+			if strings.HasPrefix(bm, "mono:") != strings.HasPrefix(am, "mono:") {
+				return false, false // different identity kinds are not comparable
+			}
+			return bm != am, true
 		}
 	}
-	if before.MainPID != after.MainPID {
-		return RestartUnprovable, []string{
-			fmt.Sprintf("only MainPID changed (%q -> %q) with an identical enter timestamp; a restart cannot be distinguished from PID reuse or an in-invocation main-PID handoff", before.MainPID, after.MainPID),
-		}
-	}
-	// Identical snapshots. Only a complete identity pair can rule a
-	// restart out; a partial pair fails closed.
-	complete := func(o Observation) bool { return o.MainPID != "" && o.ExecMainEnterTimestamp != "" }
-	if !complete(before) || !complete(after) {
-		return RestartUnprovable, []string{
-			"invocation identity is incomplete (MainPID/ExecMainEnterTimestamp missing on at least one side) and nothing observable changed; restart occurrence cannot be established",
-		}
-	}
-	return RestartNotProven, []string{
-		fmt.Sprintf("identical invocation identity across snapshots (MainPID %q, ExecMainEnterTimestamp %q, InvocationID %q); the unit is reported %q in both, and active==active alone never proves a restart", before.MainPID, before.ExecMainEnterTimestamp, before.InvocationID, after.ActiveState),
-	}
+	return false, false
+}
+
+func mustStartIdentity(o Observation) string {
+	id, _ := startIdentity(o)
+	return id
 }
 
 // validPositivePID reports whether s parses as a usable (positive) main
