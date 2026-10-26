@@ -42,6 +42,24 @@ import (
 //     unavailable properties surface as informational notes inside the
 //     report — never hidden, never misreported as successful evidence.
 //
+//   - Failure containment (ZAI-116): a nil Runner is a controlled
+//     StatusError (guarded inside serviceobs.Observe), and a synchronous
+//     PANIC from an injected observation callback is recovered and
+//     converted into an informational note — optional diagnostics can
+//     never crash the orchestration run or leave the journal unfinished.
+//
+//   - Timeout semantics, stated precisely (ZAI-116): the observation
+//     budget cancels the context; it CANNOT forcibly terminate a Go
+//     callback. A cooperating runner (one that honors ctx, e.g. by
+//     awaiting ctx.Done or executing through exec.CommandContext) is
+//     bounded by the budget; a runner that ignores its context returns
+//     only when it returns and delays the run accordingly. ACTIVATION
+//     PRECONDITION (blocker for runtime activation until satisfied): the
+//     production runner must be genuinely cancellable — exec.CommandContext
+//     with the fixed read-only systemctl argument vector — so the budget
+//     is real; an arbitrary non-cooperating callback must not be wired in
+//     production.
+//
 //   - The production default is DISABLED: Orchestrator.ObserveService is
 //     nil in every production wiring, and no CLI flag or environment
 //     switch activates it. Enabling the observer on the real fail2ban
@@ -66,6 +84,14 @@ const defaultServiceObservationTimeout = 30 * time.Second
 // `systemctl show <unit> --property=…` per call through the given runner;
 // nothing else exists on this path. Production wiring deliberately never
 // installs it.
+//
+// Runner contract (ZAI-116): a runner supplied here must honor its
+// context (the observation budget only bounds cooperating runners — a
+// context deadline cannot forcibly terminate a Go callback) and must be
+// read-only. A future REAL command runner must execute through a
+// genuinely cancellable path — exec.CommandContext with the fixed
+// read-only systemctl argument vector — never an unbounded exec.Command
+// and never a plan- or caller-supplied command line.
 func ObserveServiceFromRunner(runner serviceobs.Runner) func(ctx context.Context, unit string) (serviceobs.Observation, error) {
 	return func(ctx context.Context, unit string) (serviceobs.Observation, error) {
 		return serviceobs.Observe(ctx, runner, serviceobs.Unit(unit))
@@ -138,6 +164,22 @@ func reportableServiceAction(p state.Plan) (state.Action, bool) {
 	return a, true
 }
 
+// observeSafely runs one read-only observation call with panic
+// containment (ZAI-116): a synchronous panic from the injected callback
+// is recovered and converted into an error that the window reports as an
+// informational note. Optional diagnostics must never crash the
+// orchestration run or leave the journal mid-flight; the recover is
+// deliberately scoped to the callback invocation — nothing else in the
+// observation path is shielded.
+func observeSafely(fn func(ctx context.Context, unit string) (serviceobs.Observation, error), ctx context.Context, unit string) (obs serviceobs.Observation, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("observation callback panicked: %v", r)
+		}
+	}()
+	return fn(ctx, unit)
+}
+
 // beginServiceObservation opens the observation window: it validates the
 // coordinate and takes the read-only before-snapshot. It returns nil when
 // the observer is unconfigured (the production default) or the plan is
@@ -167,7 +209,7 @@ func (o Orchestrator) beginServiceObservation(p Plan, rec *journal.Record) *serv
 	w.unit = unit
 	ctx, cancel := o.observationContext()
 	defer cancel()
-	obs, oerr := o.ObserveService(ctx, string(unit))
+	obs, oerr := observeSafely(o.ObserveService, ctx, string(unit))
 	w.beforeAt = o.now()
 	w.beforeErr = oerr
 	if oerr == nil {
@@ -194,7 +236,7 @@ func (o Orchestrator) endServiceObservation(w *serviceObservationWindow, tr appl
 	if w.unit != "" {
 		report.Unit = string(w.unit)
 		ctx, cancel := o.observationContext()
-		after, aerr := o.ObserveService(ctx, string(w.unit))
+		after, aerr := observeSafely(o.ObserveService, ctx, string(w.unit))
 		cancel()
 		report.AfterAt = o.now()
 		if aerr != nil {

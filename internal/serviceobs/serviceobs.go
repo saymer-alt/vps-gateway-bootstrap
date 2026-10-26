@@ -17,8 +17,17 @@
 //     DID occur — regardless of the reported post-state (a unit may start
 //     and fail again inside the window). The channel is used only when
 //     both values are present and well-formed (32 hexadecimal
-//     characters); a malformed value can never support a favorable
-//     verdict.
+//     characters). A MALFORMED nonempty value makes the channel unusable
+//     for that comparison — channel containment, not snapshot poisoning
+//     (ZAI-116): the value itself is never compared, never treated as
+//     identity evidence and never selects a branch; the degradation is
+//     named in the verdict's reasons; and independently sufficient
+//     weaker signals (which never consult the channel) still classify on
+//     their own merits. No favorable branch is reachable through a
+//     malformed value, so containment adds no false-favorable path — a
+//     lying source can emit well-formed values just as easily; the
+//     security boundary is the read-only command shape, not value
+//     validation.
 //
 //   - Start from a not-running state: a unit reported inactive/failed
 //     with a terminated main process that later reports active with a
@@ -61,6 +70,7 @@ package serviceobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -174,6 +184,15 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 	// invalid coordinate never reaches systemctl.
 	if !validUnitName(string(unit)) {
 		return Observation{}, fmt.Errorf("service observation requires a valid systemd unit name (use UnitForResource), got %q", string(unit))
+	}
+	// ZAI-116: a nil Runner is a wiring defect, not a machine fact — it
+	// must produce a controlled error (StatusError), never a nil-function
+	// panic at the call boundary.
+	if runner == nil {
+		return Observation{
+			Unit: unit, Status: StatusError,
+			Reasons: []string{"no read-only runner configured for the service observation"},
+		}, errors.New("service observation requires a non-nil Runner")
 	}
 	out, err := showProperties(ctx, runner, unit)
 	if err != nil {
@@ -302,8 +321,12 @@ const (
 // validInvocationID reports whether s has the exact systemctl-show shape
 // of a systemd invocation identifier: 32 hexadecimal characters
 // (sd_id128_to_string). Anything else — including uppercase-insensitive
-// look-alikes of the wrong length — is malformed and can never support a
-// favorable verdict.
+// look-alikes of the wrong length — is malformed: the value marks the
+// identity channel unusable for the comparison (never compared, never
+// identity evidence, never branch-selecting; the degradation is named in
+// the verdict's reasons) — it does NOT poison the snapshot, and
+// independently sufficient weaker signals still classify on their own
+// merits (ZAI-116, channel containment).
 func validInvocationID(s string) bool {
 	if len(s) != 32 {
 		return false
@@ -338,9 +361,15 @@ func validInvocationID(s string) bool {
 //     invocation occurred (the unit may have restarted and stopped again
 //     inside the window).
 //
-// Malformed nonempty InvocationIDs are named in the reasons and can never
-// support a favorable verdict; malformed MainPIDs never reach Compare
-// (Observe fails them to UNKNOWN). NRestarts is never evidence.
+// Malformed nonempty InvocationIDs invoke channel containment (ZAI-116):
+// the value is never compared, never identity evidence and never
+// branch-selecting; the degradation is named in the verdict's reasons,
+// and independently sufficient weaker signals (e.g. a start from a
+// not-running state, which never consults the channel) still classify on
+// their own merits. A malformed value therefore cannot create a
+// favorable verdict — and cannot destroy independently sufficient
+// evidence either. Malformed MainPIDs never reach Compare (Observe fails
+// them to UNKNOWN). NRestarts is never evidence.
 // Deterministic, fail-closed, and never falling back to any intended
 // specification. NEW_INVOCATION_OBSERVED is evidence of a new invocation —
 // it neither proves that a restart COMMAND ran nor that it caused the

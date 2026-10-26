@@ -97,7 +97,11 @@ type Orchestrator struct {
 
 	// ServiceObservationTimeout bounds each read-only observation call
 	// when ObserveService is configured; zero selects the package default.
-	// An exceeded budget becomes an informational note in the report.
+	// Precision (ZAI-116): the budget CANCELS the context — it cannot
+	// forcibly terminate a Go callback. A cooperating runner (honoring
+	// ctx; a real command runner must use exec.CommandContext) is bounded
+	// by the budget and an overrun becomes an informational note; a
+	// runner that ignores its context returns only when it returns.
 	ServiceObservationTimeout time.Duration
 }
 

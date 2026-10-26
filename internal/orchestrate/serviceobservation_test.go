@@ -339,6 +339,103 @@ func TestObservationAcrossFailedAttempt(t *testing.T) {
 	}
 }
 
+// ZAI-116: a synchronous panic from the injected observation callback is
+// contained — the run completes, the journal finalizes normally, and the
+// panic surfaces only as an informational note. Callback panics on BOTH
+// sides must not skip the terminal journal write.
+func TestObservationCallbackPanicIsContained(t *testing.T) {
+	svc := &recordingExecutor{}
+	o, _ := newOrchestrator(t, []discovery.Result{
+		makeDiscovery(false), makeDiscovery(false), makeDiscovery(true),
+	}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
+	}, nil)
+	o.ObserveService = func(ctx context.Context, unit string) (serviceobs.Observation, error) {
+		panic("injected observation panic")
+	}
+	p := o.Prepare(fail2banConfig(), rootOn())
+	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	out, err := o.Execute(p, conf, nil)
+	if err != nil {
+		t.Fatalf("a panicking callback must not fail the run: %v", err)
+	}
+	if out.Stage != StageCompleted || out.Transaction.Status != apply.StatusApplied {
+		t.Fatalf("the transaction must be unaffected: stage=%s status=%s", out.Stage, out.Transaction.Status)
+	}
+	rep := out.ServiceObservation
+	if rep == nil {
+		t.Fatal("the report must exist even when the callback panicked")
+	}
+	if rep.Before != nil || rep.After != nil || rep.Verdict != "" {
+		t.Fatalf("panicked observations must produce no facts: %+v", rep)
+	}
+	joined := strings.Join(rep.Notes, "; ")
+	if got := strings.Count(joined, "panicked"); got != 2 {
+		t.Fatalf("both callback panics must surface as notes, got %d: %v", got, rep.Notes)
+	}
+	records, rerr := o.Journal.Records()
+	if rerr != nil || len(records) != 1 {
+		t.Fatalf("journal records: %v (%d)", rerr, len(records))
+	}
+	if records[0].Outcome != journal.OutcomeCompleted || records[0].RecoveryRequired {
+		t.Fatalf("the journal must finalize normally despite the panics: %+v", records[0])
+	}
+}
+
+// ZAI-116: callback panics across a FAILED attempt change nothing about
+// the failure outcome or the recovery latch — diagnostics stay
+// informational even when they themselves crash.
+func TestObservationCallbackPanicAcrossFailedAttempt(t *testing.T) {
+	svcPlain := &recordingExecutor{failApply: true}
+	oPlain, _ := newOrchestrator(t, []discovery.Result{
+		makeDiscovery(false), makeDiscovery(false),
+	}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svcPlain},
+	}, nil)
+	pPlain := oPlain.Prepare(fail2banConfig(), rootOn())
+	confPlain := Confirmation{PlanFingerprint: Fingerprint(pPlain.Plan), ApprovedBy: "operator", At: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	if _, err := oPlain.Execute(pPlain, confPlain, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &recordingExecutor{failApply: true}
+	o, _ := newOrchestrator(t, []discovery.Result{
+		makeDiscovery(false), makeDiscovery(false),
+	}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
+	}, nil)
+	o.ObserveService = func(ctx context.Context, unit string) (serviceobs.Observation, error) {
+		panic("injected observation panic")
+	}
+	p := o.Prepare(fail2banConfig(), rootOn())
+	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	out, err := o.Execute(p, conf, nil)
+	if err != nil {
+		t.Fatalf("a panicking callback must not fail the run: %v", err)
+	}
+	if out.Stage != StageFailedTransaction {
+		t.Fatalf("stage=%s", out.Stage)
+	}
+	rep := out.ServiceObservation
+	if rep == nil || rep.AttemptApplied {
+		t.Fatalf("the failed attempt must be reported as not applied: %+v", rep)
+	}
+	if !strings.Contains(strings.Join(rep.Notes, "; "), "panicked") {
+		t.Fatalf("the panic must surface as a note: %v", rep.Notes)
+	}
+	records, rerr := o.Journal.Records()
+	if rerr != nil || len(records) != 1 {
+		t.Fatalf("journal records: %v (%d)", rerr, len(records))
+	}
+	plainRecords, perr := oPlain.Journal.Records()
+	if perr != nil || len(plainRecords) != 1 {
+		t.Fatalf("plain journal records: %v (%d)", perr, len(plainRecords))
+	}
+	if records[0].RecoveryRequired != plainRecords[0].RecoveryRequired || records[0].Outcome != plainRecords[0].Outcome {
+		t.Fatalf("recovery latch changed by a panicking observer: %+v vs %+v", records[0], plainRecords[0])
+	}
+}
+
 // 10: refusals BEFORE the engine (bad confirmation, hostless identity,
 // recovery latch) never reach the observer.
 func TestObservationNeverRunsBeforeTheEngine(t *testing.T) {

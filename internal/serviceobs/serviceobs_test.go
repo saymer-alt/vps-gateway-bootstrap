@@ -316,6 +316,95 @@ func TestCompareNoInvocationEvidenceFailsClosed(t *testing.T) {
 	}
 }
 
+// ZAI-116 malformed-InvocationID policy (channel containment, decision B):
+// a malformed nonempty value makes the identity channel unusable for the
+// comparison — never compared, never identity evidence, never
+// branch-selecting — while independently sufficient weaker signals still
+// classify on their own merits, with the degraded channel named in the
+// verdict's reasons. Snapshot poisoning (decision A) is rejected: no
+// favorable branch is reachable through a malformed value, and voiding
+// the comparison would only blind the observer.
+func TestCompareMalformedInvocationIDChannelIsContainedNotPoisoning(t *testing.T) {
+	const bad = "not-a-valid-invocation-id!!"
+	const good = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	start := func(badID string) (Observation, Observation) {
+		before := observeOK(t, withInvocation(showOutput("inactive", "dead", "0", "", "0", "0"), badID))
+		after := observeOK(t, withInvocation(showOutput("active", "running", "1234", "Wed 2026-10-25 10:00:01 UTC", "5000", "0"), good))
+		return before, after
+	}
+
+	// The owner's exact case: malformed pre-identity, valid post-identity,
+	// inactive→active — the start-from-not-running ground decides on its
+	// own merits, with the degraded channel named.
+	before, after := start(bad)
+	ev, reasons := Compare(before, after)
+	if ev != InvocationObserved {
+		t.Fatalf("the independently sufficient start ground must still classify, got %s (%v)", ev, reasons)
+	}
+	joined := strings.Join(reasons, "; ")
+	if !strings.Contains(joined, "malformed") || !strings.Contains(joined, "not-running state") {
+		t.Fatalf("the reasons must name both the degraded channel and the start ground: %v", reasons)
+	}
+	// The malformed string must never appear as a compared identity.
+	if strings.Contains(joined, "InvocationID changed") {
+		t.Fatalf("a malformed value must never be compared as an identity: %v", reasons)
+	}
+
+	// Malformed on BOTH sides: the same containment, both degradations named.
+	before = observeOK(t, withInvocation(showOutput("inactive", "dead", "0", "", "0", "0"), bad))
+	after = observeOK(t, withInvocation(showOutput("active", "running", "1234", "Wed 2026-10-25 10:00:01 UTC", "5000", "0"), strings.ToUpper(bad)))
+	ev, reasons = Compare(before, after)
+	if ev != InvocationObserved {
+		t.Fatalf("both-malformed must still classify on the start ground, got %s (%v)", ev, reasons)
+	}
+	if got := strings.Count(strings.Join(reasons, "; "), "malformed"); got < 2 {
+		t.Fatalf("both malformed channels must be named: %v", reasons)
+	}
+
+	// Malformed on the pre-side must not unlock identity-comparison
+	// evidence: active→active with a changed process and a valid
+	// different post-ID stays process-level.
+	before = observeOK(t, withInvocation(showOutput("active", "running", "1111", "Wed 2026-10-25 09:00:00 UTC", "1000", "0"), bad))
+	after = observeOK(t, withInvocation(showOutput("active", "running", "2222", "Wed 2026-10-25 09:00:05 UTC", "5000", "0"), good))
+	ev, _ = Compare(before, after)
+	if ev != MainProcessChanged {
+		t.Fatalf("a malformed pre-ID must not reach the identity-comparison branch, got %s", ev)
+	}
+
+	// Mirror: valid pre-ID, malformed post-ID, identical identity — no
+	// favorable verdict either way.
+	before = observeOK(t, withInvocation(showOutput("active", "running", "1234", "Wed 2026-10-25 09:00:00 UTC", "1000", "0"), good))
+	after = observeOK(t, withInvocation(showOutput("active", "running", "1234", "Wed 2026-10-25 09:00:00 UTC", "1000", "0"), bad))
+	ev, _ = Compare(before, after)
+	if ev != InvocationNotProven {
+		t.Fatalf("a malformed post-ID with identical identity must stay NOT_PROVEN, got %s", ev)
+	}
+
+	// Malformed values are never NO_NEW_INVOCATION evidence: the positive
+	// absence proof requires both values well-formed and equal.
+	before = observeOK(t, withInvocation(showOutput("active", "running", "1111", "Wed 2026-10-25 09:00:00 UTC", "1000", "0"), good))
+	after = observeOK(t, withInvocation(showOutput("active", "running", "2222", "Wed 2026-10-25 09:00:05 UTC", "5000", "0"), bad))
+	ev, _ = Compare(before, after)
+	if ev == NoNewInvocation || ev == InvocationObserved {
+		t.Fatalf("a malformed post-ID must decide nothing favorable, got %s", ev)
+	}
+}
+
+// ZAI-116: a nil Runner is a wiring defect — a controlled StatusError,
+// never a panic.
+func TestObserveNilRunnerControlledError(t *testing.T) {
+	o, err := Observe(context.Background(), nil, testUnit)
+	if err == nil {
+		t.Fatal("a nil Runner must be reported as an error")
+	}
+	if o.Status != StatusError || len(o.Reasons) == 0 {
+		t.Fatalf("want a controlled ERROR snapshot, got %+v", o)
+	}
+	if !strings.Contains(strings.Join(o.Reasons, "; "), "no read-only runner") {
+		t.Fatalf("the reason must name the wiring defect: %v", o.Reasons)
+	}
+}
+
 // A query failure is StatusError with the error propagated — no
 // fabricated snapshot.
 func TestObserveQueryFailureIsError(t *testing.T) {
