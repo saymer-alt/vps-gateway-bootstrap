@@ -88,10 +88,12 @@ const defaultServiceObservationTimeout = 30 * time.Second
 // Runner contract (ZAI-116): a runner supplied here must honor its
 // context (the observation budget only bounds cooperating runners — a
 // context deadline cannot forcibly terminate a Go callback) and must be
-// read-only. A future REAL command runner must execute through a
-// genuinely cancellable path — exec.CommandContext with the fixed
-// read-only systemctl argument vector — never an unbounded exec.Command
-// and never a plan- or caller-supplied command line.
+// read-only. The reference production runner is
+// serviceobs.ProductionCommandRunner (ZAI-118): exec.CommandContext over
+// the fixed read-only systemctl argument vector, argv-validated against
+// the package's shared query constants. Never an unbounded exec.Command
+// and never a plan- or caller-supplied command line. The wiring remains
+// nil in production until a separate owner decision.
 func ObserveServiceFromRunner(runner serviceobs.Runner) func(ctx context.Context, unit string) (serviceobs.Observation, error) {
 	return func(ctx context.Context, unit string) (serviceobs.Observation, error) {
 		return serviceobs.Observe(ctx, runner, serviceobs.Unit(unit))
