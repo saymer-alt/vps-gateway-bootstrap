@@ -603,3 +603,41 @@ The same change shape can be safe on one machine and wrong on another.
 
 See `docs/live-maintenance-wrong-host-incident-2026-10-05.md` for the full
 evidence.
+
+## 34. `systemctl show` never fails for a missing unit — not-found arrives as a synthesized PRESENT-shaped snapshot
+
+Field validation of the service observer on `Saymer3` (Ubuntu 24.04.5,
+systemd 255.4-1ubuntu8.18, 2026-10-27) showed that
+`systemctl show <missing>.service --property=…` exits 0 and prints a
+complete synthetic property set (`ActiveState=inactive`,
+`SubState=dead`, `MainPID=0`, empty `ExecMainStartTimestamp`/empty
+`InvocationID`, monotonic `0`) — the existence fact is visible only as
+`LoadState=not-found` in the queried properties, and the seven identity
+facts are byte-identical to a real never-run loaded unit. The
+runtime-validation procedure had predicted a nonzero exit and an
+ERROR-path mapping. The initial read-only mapping classified the
+synthesis as PRESENT (safe against favorable verdicts — every
+comparison degraded to INVOCATION_UNPROVABLE — but misstating
+existence: an absent unit posed as an existing stopped service). Per
+the owner's addendum decision, the observer now queries
+`--property=LoadState`, classifies the synthesis as UNKNOWN with the
+not-found fact in its reason, and keeps every non-not-found LoadState
+on the unchanged PRESENT path; comparisons involving it are
+NOT_COMPARABLE. The fix is regression-pinned against the real bytes
+and verified to fail on the pre-fix code.
+
+**Rules:**
+- Do not assume `systemctl` exit-code semantics transfer across verbs:
+  `status` reports missing units as errors, `show` synthesizes state
+  for them.
+- A PRESENT machine-fact shape must mean the unit exists. When
+  synthesized output can mimic an existing unit's shape byte-for-byte,
+  add and query the discriminator property; classify the synthesis as
+  no-evidence, never as facts.
+- When a read-only component's semantics depend on tool behavior
+  (exit codes, output shapes), validate against the real tool version
+  before relying on an error path, and pin the real output as a
+  fixture.
+
+See `docs/serviceobs-live-validation-saymer3-2026-10-27.md` for the
+full evidence.
