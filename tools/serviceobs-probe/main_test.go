@@ -76,7 +76,7 @@ func TestProbeFullBatteryPasses(t *testing.T) {
 		"[SKIP] existing-unit check",
 		"[PASS] nonexistent " + string(notFoundUnit) + " is UNKNOWN",
 		"[PASS] untouched running pair is NO_NEW_INVOCATION",
-		"[PASS] timeout cancellation of the exec path",
+		"[PASS] cancellation of the exec path (pre-expired budget)",
 		"probe verdict: PASS",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -177,7 +177,7 @@ func TestProbeDetectsNonCancellablePath(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("a non-cancellable path must fail the probe, code=%d", code)
 	}
-	if !strings.Contains(out.String(), "[FAIL] timeout cancellation of the exec path") {
+	if !strings.Contains(out.String(), "[FAIL] cancellation of the exec path (pre-expired budget)") {
 		t.Fatalf("the cancellation failure must be reported:\n%s", out.String())
 	}
 }

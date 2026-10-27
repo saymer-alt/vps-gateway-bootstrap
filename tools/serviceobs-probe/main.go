@@ -45,8 +45,12 @@ const (
 	notFoundUnit = serviceobs.Unit("serviceobs-probe-not-found.service")
 	// snapshotGap separates the two defaultUnit snapshots (check 4).
 	snapshotGap = 2 * time.Second
-	// timeoutBudget is deliberately far below any real query duration so
-	// check 5 proves the exec path is cancellable.
+	// timeoutBudget feeds the pre-expired cancellation check: the budget
+	// is created and allowed to lapse BEFORE the query starts, so the
+	// cancellation is deterministic. (Live finding, ZAI-118 Saymer3 run 1:
+	// the real eight-property query completes in under 100 ms on a
+	// healthy host, so racing a fast query with a short budget is a flaky
+	// check — the runner was CORRECT to succeed within the budget.)
 	timeoutBudget = 100 * time.Millisecond
 )
 
@@ -191,13 +195,17 @@ func (p *probe) expectNoNewInvocation(before, after serviceobs.Observation, err 
 	return check{Name: name, OK: true, Detail: strings.Join(reasons, "; ")}
 }
 
-// expectTimeoutCancellation proves the exec path honors its context: a
-// far-too-short budget yields StatusError with the context deadline in
-// the error — the runner is cancellable, not runaway.
+// expectTimeoutCancellation proves the exec path honors its context.
+// The budget is pre-expired (created, then allowed to lapse before the
+// query starts) so the cancellation is deterministic: the child is
+// killed at once and the runner reports the context error as StatusError.
+// A budget that outlives the query on a fast host is a legitimate
+// success, not a defect (live finding, Saymer3 run 1).
 func (p *probe) expectTimeoutCancellation() check {
-	name := "timeout cancellation of the exec path"
+	name := "cancellation of the exec path (pre-expired budget)"
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutBudget)
 	defer cancel()
+	time.Sleep(2 * timeoutBudget) // guarantee the deadline has fired
 	o, err := p.observe(ctx, defaultUnit)
 	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		return check{Name: name, OK: false, Detail: fmt.Sprintf("want a context-deadline failure, got err=%v obs=%s", err, describe(o))}
@@ -205,5 +213,5 @@ func (p *probe) expectTimeoutCancellation() check {
 	if o.Status != serviceobs.StatusError {
 		return check{Name: name, OK: false, Detail: fmt.Sprintf("a cancelled query must classify as ERROR, got %s", o.Status)}
 	}
-	return check{Name: name, OK: true, Detail: fmt.Sprintf("the %s budget cancelled the real exec path: %v", timeoutBudget, err)}
+	return check{Name: name, OK: true, Detail: fmt.Sprintf("the pre-expired %s budget cancelled the real exec path: %v", timeoutBudget, err)}
 }
