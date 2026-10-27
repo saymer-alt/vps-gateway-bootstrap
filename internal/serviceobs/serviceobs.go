@@ -150,7 +150,13 @@ type Observation struct {
 	ExecMainStartTimestampMonotonic string
 	InvocationID                    string
 	NRestarts                       string
-	Reasons                         []string
+	// LoadState carries the existence discriminator verbatim (ZAI-117):
+	// "loaded", "masked", "not-found", … It is a diagnostic fact only —
+	// the not-found classification happens at Observe (the snapshot is
+	// never PRESENT for a missing unit); the field exists so reports and
+	// probes can show what systemd said about the unit's existence.
+	LoadState string
+	Reasons   []string
 }
 
 // showProperties is the exact read-only query surface. Every observation
@@ -169,17 +175,31 @@ type Observation struct {
 // show` synthesizes a full inactive/dead property set for it and exits 0,
 // byte-identical in the seven identity facts to a real never-run unit.
 // Only LoadState separates "does not exist" from "exists, never ran".
+// queryVerb, queryBinary and queryProperties define the ONE command shape
+// this package may ever execute. They are shared by showProperties (the
+// query builder) and ProductionCommandRunner (the argv validator), so the
+// production runner refuses anything but this exact shape — even if a
+// future edit changed the query builder, the runner would refuse to
+// execute the widened argv until both are deliberately updated together.
+const (
+	queryBinary = "systemctl"
+	queryVerb   = "show"
+)
+
+var queryProperties = []string{
+	"--property=ActiveState",
+	"--property=SubState",
+	"--property=MainPID",
+	"--property=ExecMainStartTimestamp",
+	"--property=ExecMainStartTimestampMonotonic",
+	"--property=InvocationID",
+	"--property=NRestarts",
+	"--property=LoadState",
+}
+
 func showProperties(ctx context.Context, runner Runner, unit Unit) ([]byte, error) {
-	return runner(ctx, "systemctl", "show", string(unit),
-		"--property=ActiveState",
-		"--property=SubState",
-		"--property=MainPID",
-		"--property=ExecMainStartTimestamp",
-		"--property=ExecMainStartTimestampMonotonic",
-		"--property=InvocationID",
-		"--property=NRestarts",
-		"--property=LoadState",
-	)
+	argv := append([]string{queryVerb, string(unit)}, queryProperties...)
+	return runner(ctx, queryBinary, argv...)
 }
 
 // Observe takes one read-only snapshot of the unit. A failed query is an
@@ -245,7 +265,7 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 	// nothing.
 	if props["LoadState"] == "not-found" {
 		return Observation{
-			Unit: unit, Status: StatusUnknown,
+			Unit: unit, Status: StatusUnknown, LoadState: "not-found",
 			Reasons: []string{"systemd reports LoadState=not-found: the unit does not exist on this machine; the synthesized inactive/dead property set is systemctl synthesis, not evidence of an existing service"},
 		}, nil
 	}
@@ -271,6 +291,7 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 		ExecMainStartTimestamp:          props["ExecMainStartTimestamp"],
 		ExecMainStartTimestampMonotonic: props["ExecMainStartTimestampMonotonic"],
 		InvocationID:                    props["InvocationID"],
+		LoadState:                       props["LoadState"],
 		NRestarts:                       props["NRestarts"],
 	}
 	// A malformed MainPID is corrupt evidence: fail closed to Unknown —
