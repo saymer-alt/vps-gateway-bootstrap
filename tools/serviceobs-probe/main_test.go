@@ -76,7 +76,7 @@ func TestProbeFullBatteryPasses(t *testing.T) {
 		"[SKIP] existing-unit check",
 		"[PASS] nonexistent " + string(notFoundUnit) + " is UNKNOWN",
 		"[PASS] untouched running pair is NO_NEW_INVOCATION",
-		"[PASS] cancellation of the exec path (pre-expired budget)",
+		"[PASS] cancellation reporting of the exec path (pre-expired budget)",
 		"probe verdict: PASS",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -157,8 +157,8 @@ func TestProbeDetectsUnexpectedRestart(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("an unexpected restart must fail the probe, code=%d", code)
 	}
-	if !strings.Contains(out.String(), "want NO_NEW_INVOCATION, got NEW_INVOCATION_OBSERVED") {
-		t.Fatalf("the honest restart report is missing:\n%s", out.String())
+	if !strings.Contains(out.String(), "detected a NEW unit invocation between the snapshots") {
+		t.Fatalf("the honest new-invocation report is missing:\n%s", out.String())
 	}
 }
 
@@ -177,8 +177,64 @@ func TestProbeDetectsNonCancellablePath(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("a non-cancellable path must fail the probe, code=%d", code)
 	}
-	if !strings.Contains(out.String(), "[FAIL] cancellation of the exec path (pre-expired budget)") {
+	if !strings.Contains(out.String(), "[FAIL] cancellation reporting of the exec path (pre-expired budget)") {
 		t.Fatalf("the cancellation failure must be reported:\n%s", out.String())
+	}
+}
+
+// An UNDETERMINED comparison (the after-snapshot lost its invocation
+// identity, so Compare cannot answer) is reported as undetermined —
+// never inflated into either the new-invocation or the no-change claim.
+func TestProbeReportsUndeterminedComparison(t *testing.T) {
+	var out bytes.Buffer
+	calls := 0
+	observe := slowObserve(func(unit serviceobs.Unit) (serviceobs.Observation, error) {
+		if unit == notFoundUnit {
+			return notFoundSnapshot(), nil
+		}
+		calls++
+		o := presentFail2ban()
+		if calls >= 2 { // second snapshot: identity facts missing
+			o.ExecMainStartTimestamp = ""
+			o.ExecMainStartTimestampMonotonic = ""
+			o.InvocationID = ""
+		}
+		return o, nil
+	})
+	code := run(nil, &out, observe)
+	if code != 1 {
+		t.Fatalf("an undetermined comparison must fail the probe, code=%d", code)
+	}
+	if !strings.Contains(out.String(), "undetermined: the comparison could not answer the invocation question (INVOCATION_UNPROVABLE)") {
+		t.Fatalf("the undetermined report is missing:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "the unit really did start") {
+		t.Fatalf("an undetermined comparison must not claim the unit started:\n%s", out.String())
+	}
+}
+
+// An OBSERVATION error (the second snapshot is not PRESENT → the pair is
+// not comparable) is reported as an observation error — never as a
+// detected invocation and never as undetermined semantics.
+func TestProbeReportsObservationError(t *testing.T) {
+	var out bytes.Buffer
+	calls := 0
+	observe := slowObserve(func(unit serviceobs.Unit) (serviceobs.Observation, error) {
+		if unit == notFoundUnit {
+			return notFoundSnapshot(), nil
+		}
+		calls++
+		if calls >= 2 { // second snapshot: the query answered UNKNOWN
+			return serviceobs.Observation{Unit: unit, Status: serviceobs.StatusUnknown, Reasons: []string{"injected unusable answer"}}, nil
+		}
+		return presentFail2ban(), nil
+	})
+	code := run(nil, &out, observe)
+	if code != 1 {
+		t.Fatalf("an observation error must fail the probe, code=%d", code)
+	}
+	if !strings.Contains(out.String(), "observation error: the pair is not comparable") {
+		t.Fatalf("the observation-error report is missing:\n%s", out.String())
 	}
 }
 
