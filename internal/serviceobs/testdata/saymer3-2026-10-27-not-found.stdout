@@ -2,6 +2,7 @@ MainPID=0
 NRestarts=0
 ExecMainStartTimestamp=
 ExecMainStartTimestampMonotonic=0
+LoadState=not-found
 ActiveState=inactive
 SubState=dead
 InvocationID=

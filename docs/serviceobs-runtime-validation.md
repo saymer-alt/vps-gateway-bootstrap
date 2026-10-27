@@ -29,14 +29,16 @@ to touch, and record the outputs in the session evidence directory.
 ```sh
 systemctl --version
 # The observer's EXACT command shape (one line, wrap for reading):
-P="--property=ActiveState --property=SubState --property=MainPID --property=ExecMainStartTimestamp --property=ExecMainStartTimestampMonotonic --property=InvocationID --property=NRestarts"
+P="--property=ActiveState --property=SubState --property=MainPID --property=ExecMainStartTimestamp --property=ExecMainStartTimestampMonotonic --property=InvocationID --property=NRestarts --property=LoadState"
 systemctl show ssh.service $P
 ```
 
 PASS criteria:
 
-- All seven properties appear; `InvocationID` is present (32 hex) on a
-  started unit; `ExecMainStartTimestampMonotonic` is an integer (µs).
+- All eight properties appear (the seven identity facts + LoadState);
+  `InvocationID` is present (32 hex) on a started unit;
+  `ExecMainStartTimestampMonotonic` is an integer (µs); `LoadState=loaded`
+  on an existing unit.
 - `ExecMainEnterTimestamp` must NOT exist: `systemctl show ssh.service
   --property=ExecMainEnterTimestamp` prints nothing for it (the ZAI-114
   phantom-property correction — if it ever prints a value, the target
@@ -92,7 +94,10 @@ PASS criteria:
 - A never-started unit reports `MainPID=0` and empty/zero
   `ExecMainStartTimestamp(Monotonic)`; `InvocationID` may be empty or
   carry the last invocation — both are legal observer inputs (absent
-  channel → weaker signals only).
+  channel → weaker signals only). The unit still reports
+  `LoadState=loaded`: it EXISTS. That is exactly what separates this
+  shape from the synthesized not-found set of a missing unit name
+  (§5a) — without LoadState the two are byte-identical.
 - An EMPTY InvocationID never produces an identity verdict by itself
   (fail-closed fallback).
 
@@ -115,17 +120,19 @@ timeout 0.001s systemctl show ssh.service $P > /dev/null; echo "exit=$?"  # expe
 
 PASS criteria:
 
-- 5a (corrected against the field, ZAI-117): on systemd 255 a missing
-  unit name is NOT a query failure — `systemctl show` exits 0 and
-  synthesizes a full property set (`ActiveState=inactive`,
+- 5a (field-corrected, ZAI-117 + owner addendum): on systemd 255 a
+  missing unit name is NOT a query failure — `systemctl show` exits 0
+  and synthesizes a full property set (`ActiveState=inactive`,
   `SubState=dead`, `MainPID=0`, empty `ExecMainStartTimestamp`
-  start identity and `InvocationID`, monotonic `0`; the unfiltered
-  show reveals `LoadState=not-found`). The observer maps this to a
-  PRESENT snapshot with an EMPTY invocation channel; comparisons
-  involving it fail closed to INVOCATION_UNPROVABLE — never
-  StatusError, never a favorable verdict. The ERROR path belongs to
-  genuine command failures (runner errors) and stays covered
-  synthetically.
+  start identity and `InvocationID`, monotonic `0`, `LoadState=not-found`).
+  The seven identity facts are byte-identical to a real never-run
+  loaded unit; `LoadState` is the ONLY discriminator. The observer
+  classifies the synthesis as UNKNOWN — never PRESENT (that would
+  make an absent unit pose as an existing stopped service), never
+  StatusError (the tool answered truthfully) — with the not-found fact
+  in its reason; comparisons involving it are NOT_COMPARABLE. The
+  ERROR path belongs to genuine command failures (runner errors) and
+  stays covered synthetically.
 - 5b: `timeout 1` exits 0 (a fast read-only query comfortably fits the
   default 30 s budget); `timeout 0.001s` forcibly kills the client —
   demonstrating that a ctx-honoring runner (exec.CommandContext class)
@@ -144,7 +151,7 @@ Record in the evidence file:
 | InvocationID 32-hex lowercase | yes/no |
 | untouched-running pair keeps InvocationID | yes/no |
 | never-started unit empty/zero start identity | yes/no |
-| missing-unit query → synthesized inactive/dead set, exit 0; observer fails closed (UNPROVABLE) | yes/no |
+| missing-unit query → synthesized inactive/dead set, exit 0; observer classifies UNKNOWN, never PRESENT | yes/no |
 | exec bounded-kill works (timeout semantics) | yes/no |
 
 **Overall verdict `COMPATIBLE`** only when every row passes. Any `no`

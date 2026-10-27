@@ -4,7 +4,9 @@
 //
 // What one snapshot proves: a PRESENT set of the unit's reported facts
 // (ActiveState/SubState/MainPID/ExecMainStartTimestamp(+Monotonic)/
-// NRestarts/InvocationID). What a comparison of two PRESENT snapshots can
+// NRestarts/InvocationID, with LoadState as the existence discriminator —
+// a synthesized not-found property set is never PRESENT). What a
+// comparison of two PRESENT snapshots can
 // prove, in decreasing strength (ZAI-115 semantics, grounded in the
 // authoritative systemd sources):
 //
@@ -162,6 +164,11 @@ type Observation struct {
 // manager acquires a fresh one on every unit start) is the strongest
 // invocation marker; its absence is a normal, fail-closed case — the
 // comparison then falls back to the strictly weaker signals.
+// LoadState is the existence discriminator (ZAI-117 field evidence): on
+// systemd 255 a missing unit name is not a query failure — `systemctl
+// show` synthesizes a full inactive/dead property set for it and exits 0,
+// byte-identical in the seven identity facts to a real never-run unit.
+// Only LoadState separates "does not exist" from "exists, never ran".
 func showProperties(ctx context.Context, runner Runner, unit Unit) ([]byte, error) {
 	return runner(ctx, "systemctl", "show", string(unit),
 		"--property=ActiveState",
@@ -171,6 +178,7 @@ func showProperties(ctx context.Context, runner Runner, unit Unit) ([]byte, erro
 		"--property=ExecMainStartTimestampMonotonic",
 		"--property=InvocationID",
 		"--property=NRestarts",
+		"--property=LoadState",
 	)
 }
 
@@ -221,6 +229,25 @@ func Observe(ctx context.Context, runner Runner, unit Unit) (Observation, error)
 			}, nil
 		}
 		props[k] = v
+	}
+	// Existence discrimination (ZAI-117 addendum, field evidence): on
+	// systemd 255 a missing unit name does not fail the query — systemctl
+	// SYNTHESIZES a full inactive/dead property set for it (exit 0,
+	// LoadState=not-found), byte-identical in the seven identity facts to
+	// a real never-run loaded unit. The synthesized facts are not machine
+	// observations: reporting them as PRESENT would make an absent unit
+	// pose as an existing (stopped) service. The snapshot therefore fails
+	// to Unknown — a machine fact with no usable evidence, never an ERROR
+	// (the tool answered truthfully), carrying the not-found fact in its
+	// reason. Any LoadState other than exactly "not-found" (loaded, masked,
+	// error, stub — a unit that exists) keeps the PRESENT path unchanged;
+	// an absent LoadState property (a shape that did not query it) changes
+	// nothing.
+	if props["LoadState"] == "not-found" {
+		return Observation{
+			Unit: unit, Status: StatusUnknown,
+			Reasons: []string{"systemd reports LoadState=not-found: the unit does not exist on this machine; the synthesized inactive/dead property set is systemctl synthesis, not evidence of an existing service"},
+		}, nil
 	}
 	active, hasActive := props["ActiveState"]
 	if !hasActive || strings.TrimSpace(active) == "" {

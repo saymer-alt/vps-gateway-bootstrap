@@ -1,14 +1,16 @@
 package serviceobs
 
-// Live stdout fixtures (ZAI-117, 2026-10-27): verbatim bytes of the
-// observer's exact read-only command shape, captured on the real field
-// target Saymer3 (Ubuntu 24.04.5 LTS, systemd 255.4-1ubuntu8.18) during an
-// owner-authorized READ-ONLY session — no restart, no stop, no install, no
-// configuration change. The files carry systemctl's own property lines in
-// systemctl's native emission order (which differs from the query order;
-// the parser is order-independent by construction). These tests run the
-// REAL Observe/Compare implementation against those bytes — the real code
-// on real machine output, with no production binary ever installed on the
+// Live stdout fixtures (ZAI-117, 2026-10-27, incl. the owner's addendum
+// probe): verbatim bytes of the observer's exact read-only command shape
+// — the seven identity facts plus LoadState, the existence discriminator
+// — captured on the real field target Saymer3 (Ubuntu 24.04.5 LTS,
+// systemd 255.4-1ubuntu8.18) during an owner-authorized READ-ONLY
+// session — no restart, no stop, no install, no configuration change.
+// The files carry systemctl's own property lines in systemctl's native
+// emission order (which differs from the query order; the parser is
+// order-independent by construction). These tests run the REAL
+// Observe/Compare implementation against those bytes — the real code on
+// real machine output, with no production binary ever installed on the
 // target. Field evidence and the verdict matrix:
 // docs/serviceobs-live-validation-saymer3-2026-10-27.md.
 
@@ -70,34 +72,40 @@ func TestLiveFixtureSaymer3Fail2banRunningPair(t *testing.T) {
 	}
 }
 
-// Field finding (procedure §5a, corrected 2026-10-27): on systemd 255 a
-// missing unit name never produces a command failure — `systemctl show`
-// exits 0 with a SYNTHESIZED property set (ActiveState=inactive,
-// SubState=dead, MainPID=0, empty start identity and InvocationID; the
-// unfiltered show reports LoadState=not-found). The observer maps this to
-// a PRESENT snapshot with an empty invocation channel, and a comparison
-// involving it fails closed to INVOCATION_UNPROVABLE — never StatusError,
-// never a favorable verdict. (auditd.service, a referenced-but-absent
-// unit on the same host, produces byte-identical output.)
+// Field finding (procedure §5a, ZAI-117 + owner addendum 2026-10-27): on
+// systemd 255 a missing unit name never produces a command failure —
+// `systemctl show` exits 0 with a SYNTHESIZED property set whose seven
+// identity facts are byte-identical to a real never-run loaded unit; only
+// `LoadState=not-found` separates "does not exist" from "exists, never
+// ran". The observer must therefore NEVER classify the synthesized set as
+// PRESENT (that would make an absent unit pose as an existing stopped
+// service): the snapshot is Unknown with the not-found fact named in its
+// reason, and comparisons involving it are NOT_COMPARABLE — never an
+// error, never favorable evidence. (auditd.service, a referenced-but-
+// absent unit on the same host, produces byte-identical output; the
+// owner's 3-property probe — ActiveState/MainPID/InvocationID, exit 0 —
+// confirmed the same synthesis.)
 func TestLiveFixtureSaymer3NotFoundUnitIsSynthesizedAndFailClosed(t *testing.T) {
-	o := observeFixture(t, "saymer3-2026-10-27-not-found.stdout", Unit("does-not-exist-12345.service"))
-	if o.Status != StatusPresent {
-		t.Fatalf("a not-found unit's synthesized output must still parse as PRESENT on systemd 255, got %s (%v)", o.Status, o.Reasons)
+	o, err := Observe(context.Background(), okRunner(liveFixture(t, "saymer3-2026-10-27-not-found.stdout")), Unit("does-not-exist-12345.service"))
+	if err != nil {
+		t.Fatalf("a not-found unit is a machine fact, not a query error: %v", err)
 	}
-	if o.ActiveState != "inactive" || o.SubState != "dead" || o.MainPID != "0" ||
-		o.ExecMainStartTimestamp != "" || o.InvocationID != "" {
-		t.Fatalf("the synthesized snapshot must carry the not-found shape: %+v", o)
+	if o.Status != StatusUnknown {
+		t.Fatalf("a synthesized not-found property set must be UNKNOWN, never PRESENT, got %s (%v)", o.Status, o.Reasons)
+	}
+	if !strings.Contains(strings.Join(o.Reasons, "; "), "LoadState=not-found") {
+		t.Fatalf("the reason must name the not-found discrimination: %v", o.Reasons)
+	}
+	if o.ActiveState != "" || o.SubState != "" || o.MainPID != "" || o.ExecMainStartTimestamp != "" || o.InvocationID != "" {
+		t.Fatalf("synthesized facts of an absent unit must not be carried as observed facts: %+v", o)
 	}
 	ev, reasons := Compare(o, o)
-	if ev != InvocationUnprovable {
-		t.Fatalf("a not-found-unit pair must fail closed to UNPROVABLE, got %s (%v)", ev, reasons)
+	if ev != NotComparable {
+		t.Fatalf("not-found snapshots must not be comparable, got %s (%v)", ev, reasons)
 	}
 	joined := strings.Join(reasons, "; ")
-	if strings.Contains(joined, "no invocation occurred") || strings.Contains(joined, "no new invocation") {
-		t.Fatalf("the not-found pair must not claim absence of an invocation: %v", reasons)
-	}
-	if !strings.Contains(joined, "could have occurred and ended") {
-		t.Fatalf("the reason must state the restart-and-stop possibility: %v", reasons)
+	if !strings.Contains(joined, "PRESENT") {
+		t.Fatalf("the refusal must state that PRESENT snapshots are required: %v", reasons)
 	}
 }
 
@@ -129,9 +137,11 @@ func TestLiveFixtureSaymer3StoppedUnitKeepsLastInvocation(t *testing.T) {
 
 // Procedure §4, never-started branch (real unit emergency.service, which
 // has not run since boot): all start-identity facts are empty/zero and the
-// invocation channel is absent. The snapshot still parses as PRESENT, and
-// a comparison over it fails closed to INVOCATION_UNPROVABLE — an absent
-// channel never produces an identity verdict by itself.
+// invocation channel is absent — and the unit EXISTS (LoadState=loaded),
+// which is exactly what separates it from the synthesized not-found shape
+// above. The snapshot still parses as PRESENT, and a comparison over it
+// fails closed to INVOCATION_UNPROVABLE — an absent channel never
+// produces an identity verdict by itself.
 func TestLiveFixtureSaymer3NeverRanUnitFailsClosed(t *testing.T) {
 	o := observeFixture(t, "saymer3-2026-10-27-emergency-never-ran.stdout", Unit("emergency.service"))
 	if o.Status != StatusPresent {

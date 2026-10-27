@@ -101,7 +101,7 @@ func TestObserveCommandSurfaceReadOnly(t *testing.T) {
 	if strings.Contains(joined, "ExecMainEnterTimestamp") {
 		t.Fatalf("the command surface must not query the nonexistent ExecMainEnterTimestamp property: %v", calls[0])
 	}
-	for _, want := range []string{"--property=ActiveState", "--property=MainPID", "--property=ExecMainStartTimestamp", "--property=ExecMainStartTimestampMonotonic", "--property=InvocationID"} {
+	for _, want := range []string{"--property=ActiveState", "--property=MainPID", "--property=ExecMainStartTimestamp", "--property=ExecMainStartTimestampMonotonic", "--property=InvocationID", "--property=LoadState"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("the command surface must query %s: %v", want, calls[0])
 		}
@@ -449,12 +449,56 @@ func TestObserveContradictoryPropertiesUnknown(t *testing.T) {
 	}
 }
 
+// ZAI-117 addendum regression: the systemd-255 not-found synthesis (exit
+// 0, full inactive/dead property set for a MISSING unit) must classify as
+// UNKNOWN — never PRESENT, which would make an absent unit pose as an
+// existing stopped service — and the discrimination is EXACT: only
+// "not-found" degrades; loaded/masked/error/stub (units that exist) and
+// an output without any LoadState property keep the PRESENT path
+// unchanged. Fails without the fix: the synthesized set parsed as
+// PRESENT before.
+func TestObserveNotFoundDiscriminationIsExact(t *testing.T) {
+	notFound := "LoadState=not-found\n" + showOutput("inactive", "dead", "0", "", "0", "0")
+	o, err := Observe(context.Background(), okRunner(notFound), testUnit)
+	if err != nil {
+		t.Fatalf("not-found is a machine fact, not a query error: %v", err)
+	}
+	if o.Status != StatusUnknown {
+		t.Fatalf("the synthesized not-found set must be UNKNOWN, got %s (%v)", o.Status, o.Reasons)
+	}
+	if !strings.Contains(strings.Join(o.Reasons, "; "), "LoadState=not-found") {
+		t.Fatalf("the reason must name the not-found discrimination: %v", o.Reasons)
+	}
+	if o.ActiveState != "" || o.MainPID != "" || o.InvocationID != "" {
+		t.Fatalf("synthesized facts of an absent unit must not be carried: %+v", o)
+	}
+	// A unit that existed before and was removed inside the window: the
+	// comparison is impossible — never favorable, never an identity claim.
+	before := observeOK(t, withInvocation(showOutput("active", "running", "1234", "Wed 2026-10-25 10:00:00 UTC", "1000", "0"), invA))
+	ev, reasons := Compare(before, o)
+	if ev != NotComparable {
+		t.Fatalf("PRESENT → not-found must be NOT_COMPARABLE, got %s (%v)", ev, reasons)
+	}
+	// The discriminator is exact: every other LoadState (a unit that
+	// exists) and an absent LoadState property keep PRESENT.
+	for _, ls := range []string{"loaded", "masked", "error", "stub", "merged", ""} {
+		out := showOutput("inactive", "dead", "0", "", "0", "0")
+		if ls != "" {
+			out = "LoadState=" + ls + "\n" + out
+		}
+		existing := observeOK(t, out)
+		if existing.Status != StatusPresent {
+			t.Fatalf("LoadState=%q (existing unit) must stay PRESENT, got %s (%v)", ls, existing.Status, existing.Reasons)
+		}
+	}
+}
+
 // An unparseable line or a missing ActiveState property is an UNKNOWN
 // machine fact with reasons — never Present, never guessed.
 func TestObservePartialOutputUnknown(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		out  string
+		name   string
+		out    string
 	}{
 		{"unparseable line", "ActiveState=active\nthis is not a property\n"},
 		{"missing ActiveState", "SubState=running\nMainPID=5\n"},

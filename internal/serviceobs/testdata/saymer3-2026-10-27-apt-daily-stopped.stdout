@@ -2,6 +2,7 @@ MainPID=0
 NRestarts=0
 ExecMainStartTimestamp=Tue 2026-10-27 10:31:02 MSK
 ExecMainStartTimestampMonotonic=135926799176
+LoadState=loaded
 ActiveState=inactive
 SubState=dead
 InvocationID=01c407ba79be4bd8ab4a2ebf16a7fb19
