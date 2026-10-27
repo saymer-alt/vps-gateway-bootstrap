@@ -102,7 +102,8 @@ These bound the runner, not the machine — both paths are what the
 observer's StatusError/UNKNOWN classification expects:
 
 ```sh
-# 5a. Query failure (nonzero exit → StatusError):
+# 5a. Missing unit name (field-corrected 2026-10-27, ZAI-117 — see the
+#     PASS criterion below):
 systemctl show does-not-exist-12345.service $P; echo "exit=$?"
 
 # 5b. Bounded, genuinely cancellable execution (the contract any real
@@ -114,7 +115,17 @@ timeout 0.001s systemctl show ssh.service $P > /dev/null; echo "exit=$?"  # expe
 
 PASS criteria:
 
-- 5a: nonzero exit and no property set → the observer's ERROR path.
+- 5a (corrected against the field, ZAI-117): on systemd 255 a missing
+  unit name is NOT a query failure — `systemctl show` exits 0 and
+  synthesizes a full property set (`ActiveState=inactive`,
+  `SubState=dead`, `MainPID=0`, empty `ExecMainStartTimestamp`
+  start identity and `InvocationID`, monotonic `0`; the unfiltered
+  show reveals `LoadState=not-found`). The observer maps this to a
+  PRESENT snapshot with an EMPTY invocation channel; comparisons
+  involving it fail closed to INVOCATION_UNPROVABLE — never
+  StatusError, never a favorable verdict. The ERROR path belongs to
+  genuine command failures (runner errors) and stays covered
+  synthetically.
 - 5b: `timeout 1` exits 0 (a fast read-only query comfortably fits the
   default 30 s budget); `timeout 0.001s` forcibly kills the client —
   demonstrating that a ctx-honoring runner (exec.CommandContext class)
@@ -133,7 +144,7 @@ Record in the evidence file:
 | InvocationID 32-hex lowercase | yes/no |
 | untouched-running pair keeps InvocationID | yes/no |
 | never-started unit empty/zero start identity | yes/no |
-| nonexistent-unit query exits nonzero | yes/no |
+| missing-unit query → synthesized inactive/dead set, exit 0; observer fails closed (UNPROVABLE) | yes/no |
 | exec bounded-kill works (timeout semantics) | yes/no |
 
 **Overall verdict `COMPATIBLE`** only when every row passes. Any `no`
@@ -141,6 +152,11 @@ means: do NOT activate the report-only wiring on that target until the
 deviation is analyzed against the observer's fail-closed semantics
 (every deviation above degrades toward UNPROVABLE/UNKNOWN, never toward
 a favorable verdict — but the analysis is mandatory).
+
+Field results for Saymer3 (Ubuntu 24.04.5, systemd 255.4-1ubuntu8.18,
+2026-10-27, ZAI-117), including the corrected §5a evidence, the verdict
+matrix and the real-output fixtures:
+[docs/serviceobs-live-validation-saymer3-2026-10-27.md](serviceobs-live-validation-saymer3-2026-10-27.md).
 
 ## Cleanup
 

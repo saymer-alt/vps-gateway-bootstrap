@@ -603,3 +603,31 @@ The same change shape can be safe on one machine and wrong on another.
 
 See `docs/live-maintenance-wrong-host-incident-2026-10-05.md` for the full
 evidence.
+
+## 34. `systemctl show` never fails for a missing unit — not-found arrives as a synthesized PRESENT-shaped snapshot
+
+Field validation of the service observer on `Saymer3` (Ubuntu 24.04.5,
+systemd 255.4-1ubuntu8.18, 2026-10-27) showed that
+`systemctl show <missing>.service --property=…` exits 0 and prints a
+complete synthetic property set (`ActiveState=inactive`,
+`SubState=dead`, `MainPID=0`, empty `ExecMainStartTimestamp`/empty
+`InvocationID`, monotonic `0`) — the existence fact is visible only as
+`LoadState=not-found` in the unfiltered show. The runtime-validation
+procedure had predicted a nonzero exit and an ERROR-path mapping; the
+real mapping is a PRESENT snapshot with an empty invocation channel,
+and every comparison involving it fails closed (INVOCATION_UNPROVABLE).
+No favorable verdict is reachable through a missing unit, so the
+observer needed no code change — only corrected expectations, regression
+fixtures and this lesson.
+
+**Rules:**
+- Do not assume `systemctl` exit-code semantics transfer across verbs:
+  `status` reports missing units as errors, `show` synthesizes state
+  for them.
+- When a read-only component's semantics depend on tool behavior
+  (exit codes, output shapes), validate against the real tool version
+  before relying on an error path, and pin the real output as a
+  fixture.
+
+See `docs/serviceobs-live-validation-saymer3-2026-10-27.md` for the
+full evidence.
