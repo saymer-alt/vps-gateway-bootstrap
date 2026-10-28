@@ -16,6 +16,7 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/orchestrate"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/pipeline"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/serviceobs"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
@@ -127,11 +128,14 @@ func runApply(args []string, o *orchestrate.Orchestrator, stdin io.Reader, stdou
 func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Options, stdin io.Reader, stdout, stderr io.Writer) int {
 	timeout, rest := parseTimeout(args)
 	dryRun := false
+	observeReport := false
 	configPath, confirmPrefix := "", ""
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
 		case "--dry-run":
 			dryRun = true
+		case "--observe-service-report":
+			observeReport = true
 		case "--config":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(stderr, "--config requires a file path")
@@ -147,7 +151,7 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 			i++
 			confirmPrefix = rest[i]
 		default:
-			fmt.Fprintf(stderr, "unknown apply flag %q\nusage: vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--timeout DURATION]\n", rest[i])
+			fmt.Fprintf(stderr, "unknown apply flag %q\nusage: vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--observe-service-report] [--timeout DURATION]\n", rest[i])
 			return 2
 		}
 	}
@@ -170,6 +174,11 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	if o == nil {
 		o = defaultApplyOrchestrator(timeout)
 	}
+	// --observe-service-report (ZAI-119): opt-in report-only observation.
+	// The flag ONLY adds diagnostics around the already-authorized engine
+	// attempt — it never authorizes or initiates execution, and the
+	// production default stays nil (no flag → no observer).
+	wireServiceObservation(o, observeReport)
 	// Lifecycle paths (state and lock) are deliberately not caller-
 	// configurable: no CLI flag may redirect them, so every apply run uses
 	// the compiled project locations (/etc/vps-gateway/state.json via
@@ -203,6 +212,9 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 
 	if dryRun {
 		fmt.Fprintln(stdout, "DRY-RUN: stopping before confirmation; nothing was asked of the operator and nothing can execute.")
+		if observeReport {
+			fmt.Fprintln(stdout, "service observation skipped: --dry-run never observes (no snapshot is taken and nothing executes)")
+		}
 		return 0
 	}
 
@@ -258,13 +270,27 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		fmt.Fprintf(stdout, "Final validation: %s\n", out.FinalValidate.Status)
 	}
 	fmt.Fprintf(stdout, "Persisted last-known-good state: %v\n", out.Persisted)
-	// Report-only SERVICE observation (ZAI-115): surface the diagnostic when
-	// an observer was configured for this run. Production wiring leaves the
-	// observer unconfigured, so this block is inert on the real path; it
-	// never influences the exit code or any other decision.
+	// Report-only SERVICE observation (ZAI-115/119): surface the diagnostic
+	// when an observer was configured for this run. Without the opt-in flag
+	// the production wiring never configures one, so this block is inert on
+	// the default path; it never influences the exit code or any other
+	// decision. The verdict classes are stated as FACTS; nothing here ever
+	// claims that the restart command caused an invocation change.
 	if obs := out.ServiceObservation; obs != nil {
-		fmt.Fprintf(stdout, "Service observation (report-only): resource=%s unit=%s verdict=%s attempt_applied=%v\n",
-			obs.Resource, obs.Unit, obs.Verdict, obs.AttemptApplied)
+		fmt.Fprintf(stdout, "Service observation (report-only): resource=%s unit=%s transaction=%s attempt_applied=%v\n",
+			obs.Resource, obs.Unit, obs.TransactionID, obs.AttemptApplied)
+		for _, side := range []struct {
+			name string
+			o    *serviceobs.Observation
+		}{{"before", obs.Before}, {"after", obs.After}} {
+			if side.o == nil {
+				fmt.Fprintf(stdout, "  %s: unavailable (see notes)\n", side.name)
+				continue
+			}
+			fmt.Fprintf(stdout, "  %s: LoadState=%q ActiveState=%q SubState=%q MainPID=%q InvocationID=%q\n",
+				side.name, side.o.LoadState, side.o.ActiveState, side.o.SubState, side.o.MainPID, side.o.InvocationID)
+		}
+		fmt.Fprintf(stdout, "  verdict: %s — %s\n", obs.Verdict, observationVerdictMeaning(obs.Verdict))
 		for _, n := range obs.Notes {
 			fmt.Fprintf(stdout, "  note: %s\n", n)
 		}
@@ -296,4 +322,40 @@ func operatorName() string {
 		return "cli:" + u.Username
 	}
 	return "cli:unknown"
+}
+
+// observationVerdictMeaning states, per closed vocabulary class, exactly
+// what the comparison established — and what it did not. Causality is
+// never claimed: the observer sees machine state, not the act.
+func observationVerdictMeaning(v serviceobs.InvocationEvidence) string {
+	switch v {
+	case serviceobs.InvocationObserved:
+		return "a new unit invocation was established between the snapshots; the observation does not establish that the restart command caused it"
+	case serviceobs.NoNewInvocation:
+		return "no new invocation: both snapshots carry the same well-formed InvocationID"
+	case serviceobs.MainProcessChanged:
+		return "the main process was replaced; this does not prove a unit restart (an in-invocation MAINPID handoff looks the same)"
+	case serviceobs.InvocationUnprovable, serviceobs.InvocationNotProven, serviceobs.NotComparable:
+		return "insufficient evidence to answer the invocation question"
+	case "":
+		return "no comparison was performed (see notes)"
+	default:
+		return "unknown verdict"
+	}
+}
+
+// wireServiceObservation installs the reference read-only observer when
+// --observe-service-report was requested and the orchestrator does not
+// already carry one (an injected orchestrator keeps its own). It uses the
+// existing reference path only — ObserveServiceFromRunner over
+// ProductionCommandRunner (exec.CommandContext, fixed read-only argv) —
+// and the orchestrate report-only window around Engine.Apply; no second
+// implementation exists. Eligibility stays the orchestrate-side pin: the
+// single SERVICE action on service.fail2ban.service, observed only after
+// every authorization, preflight and journal gate has passed.
+func wireServiceObservation(o *orchestrate.Orchestrator, requested bool) {
+	if !requested || o.ObserveService != nil {
+		return
+	}
+	o.ObserveService = orchestrate.ObserveServiceFromRunner(serviceobs.ProductionCommandRunner)
 }

@@ -137,3 +137,172 @@ func TestApplyObservationFailureKeepsExitCode(t *testing.T) {
 		t.Fatal("the unobserved run must not carry a report")
 	}
 }
+
+// --- ZAI-119: the --observe-service-report CLI opt-in ---
+
+const (
+	obsInvA = "a8f6e6a6a8a64bd2bde1f655137127ac"
+	obsInvB = "b8f6e6a6a8a64bd2bde1f655137127ac"
+)
+
+// wireServiceObservation: requested=false never installs anything;
+// requested=true installs the reference observer on an orchestrator that
+// has none, and never overwrites an injected one.
+func TestWireServiceObservation(t *testing.T) {
+	o := defaultApplyOrchestrator(0)
+	wireServiceObservation(o, false)
+	if o.ObserveService != nil {
+		t.Fatal("without the request the observer must stay nil (production default)")
+	}
+	wireServiceObservation(o, true)
+	if o.ObserveService == nil {
+		t.Fatal("the request must install the reference observer")
+	}
+	wired := o.ObserveService
+	wireServiceObservation(o, true)
+	if sameFunc := o.ObserveService == nil; sameFunc {
+		t.Fatal("a second request must not clear the observer")
+	}
+	_ = wired
+}
+
+// The flag keeps an injected orchestrator's own observer (never
+// overwritten) — the seam tests rely on.
+func TestWireServiceObservationKeepsInjected(t *testing.T) {
+	o, calls := observationCountingOrchestrator(t, nil)
+	wireServiceObservation(o, true)
+	if _, err := o.ObserveService(context.Background(), "fail2ban.service"); err == nil {
+		t.Fatal("fixture sanity: the injected observer fails by design")
+	}
+	if *calls != 1 {
+		t.Fatal("the flag must keep the injected observer: the call must hit the injected closure")
+	}
+}
+
+// A successful run with the flag: exactly two snapshots around the
+// authorized attempt, and the full report (identity, transaction, both
+// sides' facts, verdict with its non-causal meaning, window).
+func TestApplyObserveFlagSuccessfulRunPrintsReport(t *testing.T) {
+	o, calls := scriptedObservationOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t), loadSaymer3Discovery(t), repairedSaymer3Discovery(t),
+	}, false)
+	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
+	prefix := fingerprintPrefix(t, prepared)
+
+	var out strings.Builder
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix, "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 0 {
+		t.Fatalf("the run must succeed, code=%d output=%s", code, out.String())
+	}
+	if *calls != 2 {
+		t.Fatalf("exactly two snapshots expected, got %d", *calls)
+	}
+	for _, want := range []string{
+		"Service observation (report-only): resource=service.fail2ban.service unit=fail2ban.service transaction=tx-",
+		"attempt_applied=true",
+		"before: LoadState=\"loaded\" ActiveState=\"active\" SubState=\"running\" MainPID=\"799\" InvocationID=\"" + obsInvA + "\"",
+		"after: LoadState=\"loaded\" ActiveState=\"active\" SubState=\"running\" MainPID=\"1001\" InvocationID=\"" + obsInvB + "\"",
+		"verdict: NEW_INVOCATION_OBSERVED — a new unit invocation was established between the snapshots; the observation does not establish that the restart command caused it",
+		"window: the entire engine execution attempt of the pinned fail2ban restart",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("report missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// A failed transaction with the flag: the report appears, honestly marks
+// the attempt as not applied, and the exit code still reflects the
+// failure.
+func TestApplyObserveFlagFailedTransactionReportedHonestly(t *testing.T) {
+	o, calls := scriptedObservationOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t),
+	}, true)
+	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
+	prefix := fingerprintPrefix(t, prepared)
+
+	var out strings.Builder
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix, "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("a failed transaction must exit 3, code=%d output=%s", code, out.String())
+	}
+	if *calls != 2 {
+		t.Fatalf("both snapshots must still be taken, got %d", *calls)
+	}
+	if !strings.Contains(out.String(), "attempt_applied=false") || !strings.Contains(out.String(), "did NOT end APPLIED") {
+		t.Fatalf("the failed attempt must be described honestly:\n%s", out.String())
+	}
+}
+
+// --dry-run with the flag: zero snapshots and an explicit skip message.
+func TestApplyObserveFlagDryRunSkipsObservation(t *testing.T) {
+	o, calls := observationCountingOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)})
+	var out strings.Builder
+	code := runApplyWith([]string{"--dry-run", "--config", experimentConfig(t), "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 0 {
+		t.Fatalf("dry-run must succeed, code=%d output=%s", code, out.String())
+	}
+	if *calls != 0 {
+		t.Fatalf("--dry-run must never observe, got %d calls", *calls)
+	}
+	if !strings.Contains(out.String(), "service observation skipped: --dry-run never observes") {
+		t.Fatalf("the skip must be stated explicitly:\n%s", out.String())
+	}
+}
+
+// Wrong confirmation with the flag: zero snapshots (the observer never
+// runs before the confirmation boundary).
+func TestApplyObserveFlagWrongConfirmationZeroCalls(t *testing.T) {
+	o, calls := observationCountingOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t), loadSaymer3Discovery(t)})
+	var out strings.Builder
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", "000000000000", "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 2 {
+		t.Fatalf("a wrong confirmation must exit 2, code=%d", code)
+	}
+	if *calls != 0 {
+		t.Fatalf("a refused run must not observe, got %d calls", *calls)
+	}
+}
+
+// A blocked plan (unknown ownership) with the flag: zero snapshots.
+func TestApplyObserveFlagBlockedPlanZeroCalls(t *testing.T) {
+	o, calls := observationCountingOrchestrator(t, []discovery.Result{loadSaymer3Discovery(t)})
+	noOwnership := writeApplyConfig(t, map[string]any{
+		"desired": map[string]any{"services": []map[string]any{{"name": "fail2ban.service", "active": true}}},
+	})
+	var out strings.Builder
+	code := runApplyWith([]string{"--config", noOwnership, "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("a blocked plan must exit 3, code=%d", code)
+	}
+	if *calls != 0 {
+		t.Fatalf("a blocked plan must not observe, got %d calls", *calls)
+	}
+}
+
+// scriptedObservationOrchestrator injects an observer returning two
+// PRESENT snapshots whose InvocationID changed (a healthy restart shape).
+func scriptedObservationOrchestrator(t *testing.T, states []discovery.Result, failApply bool) (*orchestrate.Orchestrator, *int) {
+	t.Helper()
+	svc := &cliRecordingExecutor{failApply: failApply}
+	o, _, _ := applyTestOrchestrator(t, states, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
+	})
+	calls := 0
+	o.ObserveService = func(ctx context.Context, unit string) (serviceobs.Observation, error) {
+		calls++
+		obs := serviceobs.Observation{
+			Unit: serviceobs.Unit(unit), Status: serviceobs.StatusPresent,
+			ActiveState: "active", SubState: "running", MainPID: "799",
+			ExecMainStartTimestamp: "Sun 2026-10-25 20:45:44 MSK", ExecMainStartTimestampMonotonic: "9946341",
+			InvocationID: obsInvA, NRestarts: "0", LoadState: "loaded",
+		}
+		if calls >= 2 {
+			obs.InvocationID = obsInvB
+			obs.MainPID = "1001"
+			obs.ExecMainStartTimestampMonotonic = "99000001"
+		}
+		return obs, nil
+	}
+	return o, &calls
+}
