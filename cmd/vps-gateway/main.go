@@ -29,10 +29,17 @@ commands:
   install --dry-run [--config FILE] [--state FILE] [--json]
                           run discovery → state → plan → preflight without
                           changing anything; real apply is not implemented yet
-  apply [--dry-run] [--config FILE] [--confirm PREFIX] [--timeout DURATION]
+  apply [--dry-run] [--config FILE] [--confirm PREFIX]
+        [--observe-service-report] [--timeout DURATION]
                           restricted to the first production experiment
                           (fail2ban.service repair); --dry-run shows the plan
-                          and stops before confirmation
+                          and stops before confirmation; --observe-service-report
+                          adds DIAGNOSTIC-ONLY observation (read-only
+                          before/after snapshots of fail2ban.service and an
+                          invocation report) around the already-authorized
+                          transaction — it never authorizes or initiates
+                          execution, and WARNING: apply with this flag can
+                          still restart the service once confirmed
 
 flags:
   --timeout DURATION      limit every discovery command (default 60s, e.g. 30s, 2m)`
