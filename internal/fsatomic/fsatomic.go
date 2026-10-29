@@ -5,6 +5,7 @@
 package fsatomic
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -48,14 +49,28 @@ func SyncDir(dir string) error {
 // freshly created tree cannot be lost to a power failure after files inside
 // it were durably written. This closes the first-run window where MkdirAll
 // alone creates the directory but its entry in the parent is not synced.
-// An existing directory is left untouched, including its permissions.
+// An existing directory is left untouched, including its permissions. An
+// existing NON-directory at any level of the path (including the target
+// itself) is a fail-closed error — the primitive guarantees a directory at
+// the end state and never succeeds without one (ZAI-124).
 // Durability relies on directory fsync (POSIX semantics); a filesystem that
 // cannot sync a directory produces an error, never a silent skip.
 func EnsureDir(dir string, mode os.FileMode) error {
 	var created []string
 	for cur := dir; ; {
-		_, err := os.Stat(cur)
-		if err == nil { break }
+		info, err := os.Stat(cur)
+		if err == nil {
+			// ZAI-124: an existing NON-directory at any level of the path is
+			// a fail-closed error, never a silent success — the walk-up loop
+			// above treats "exists" as done, and without this check a
+			// regular file occupying the target path (e.g. a journal
+			// directory that a stray file replaced) made EnsureDir report
+			// success while the directory it promises did not exist.
+			if !info.IsDir() {
+				return fmt.Errorf("fsatomic: %s exists and is not a directory", cur)
+			}
+			break
+		}
 		if !os.IsNotExist(err) { return err }
 		created = append(created, cur)
 		parent := filepath.Dir(cur)
