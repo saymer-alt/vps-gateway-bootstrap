@@ -13,6 +13,13 @@ durable journal. No new deployment or management system is created.
   the task/permission names the exact action: one
   `SERVICE fail2ban.service restart` on Saymer3 with
   `--observe-service-report`). No other host is in scope.
+- **The repair scenario must actually exist** (ZAI-124 addendum): the
+  pinned experiment is a CONVERGENCE plan — a restart action is planned
+  ONLY when fail2ban is not active at planning time. A healthy service
+  yields a converged zero-action plan: the dry-run reports NO_CHANGE
+  (exit 0) and NO plan fingerprint exists. Never stop, disable or break
+  the real service to manufacture the scenario; wait for a genuine
+  failure or obtain a separately designed owner decision.
 - Build host: the binary is built OFF-host from the exact intended
   `main` commit, linux/amd64, with the commit SHA and binary SHA256
   recorded in the run evidence.
@@ -255,16 +262,27 @@ scp ... apply root@5.175.134.49:/tmp/vps-gateway-apply
 ssh ... root@5.175.134.49 "/tmp/vps-gateway-apply apply --dry-run --observe-service-report"
 ```
 
-Expect: plan = exactly one action `SERVICE service.fail2ban.service
-restart (expected active), OWNED`; Preflight READY; the 12-character
-fingerprint prefix; and the explicit line "service observation skipped:
---dry-run never observes". Record the fingerprint. STOP if the plan
-shape or guard output deviates. The dry-run mutates nothing, but it is
+Two outcomes exist (ZAI-123 live finding + the ZAI-124 addendum):
+
+- **Repair scenario (fail2ban not active at planning time):** plan =
+  exactly one action `SERVICE service.fail2ban.service restart
+  (expected active), OWNED`; Preflight READY; the 12-character
+  fingerprint prefix; and the explicit line "service observation
+  skipped: --dry-run never observes". Record the fingerprint. STOP if
+  the plan shape or guard output deviates.
+- **Converged scenario (fail2ban already active):** the dry-run
+  reports `NO_CHANGE: the desired state already matches the machine
+  and no plan actions were produced` and exits 0. NO plan fingerprint
+  exists in this outcome — there is nothing to confirm and nothing to
+  observe; the field test CANNOT proceed to §5 and must not be forced.
+  Record the outcome and stop (no retry, no service manipulation). The dry-run mutates nothing, but it is
 Level A, not read-only: it executes the binary uploaded at §3.
 
 ## 5. The ONE authorized run (Level M — the authorized restart)
 
-Only after the owner's go for this exact fingerprint:
+Only after the owner's go for this exact fingerprint (which exists
+ONLY in the §4 repair scenario — a converged NO_CHANGE run produces no
+fingerprint and never reaches this step):
 
 ```sh
 ssh ... root@5.175.134.49 "/tmp/vps-gateway-apply apply --confirm <12-char-prefix> --observe-service-report; echo EXIT=\$?"

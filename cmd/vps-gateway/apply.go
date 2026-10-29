@@ -196,7 +196,19 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		return 3
 	}
 	// Scenario guard: this build executes only the first production experiment.
+	// ZAI-124 addendum: a CONVERGED plan (the desired state already matches
+	// the machine — zero actions, the ZAI-123 live finding on a healthy
+	// fail2ban) is an informational NO_CHANGE on the dry-run path, not a
+	// failed operation. The mutation path keeps the guard refusal intact:
+	// firstExperimentGuard is not weakened where it gates execution.
 	if err := firstExperimentGuard(p); err != nil {
+		if dryRun && len(p.Plan.Actions) == 0 {
+			fmt.Fprintln(stdout, "NO_CHANGE: the desired state already matches the machine and no plan actions were produced (converged plan); nothing to confirm or execute.")
+			if observeReport {
+				fmt.Fprintln(stdout, "service observation skipped: a converged plan produces no engine attempt to observe.")
+			}
+			return 0
+		}
 		fmt.Fprintln(stderr, "apply restricted to the first production experiment:", err)
 		return 3
 	}
