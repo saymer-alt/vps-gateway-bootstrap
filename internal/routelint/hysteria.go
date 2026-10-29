@@ -209,12 +209,22 @@ func parseACLRule(line string) (aclRule, error) {
 }
 
 // hysteriaConfig carries ONLY the structural facts the lint needs: the
-// outbound names/types and the inline ACL rule strings. Destinations,
-// domains and addresses are never retained.
+// outbound names/types, the inline ACL rule strings, and the server
+// safety facts (ZAI-126) retained as CLASSIFICATIONS, never values —
+// listen binds are reduced to wildcard/loopback/specific/range classes,
+// secrets are reduced to presence. Destinations, domains, addresses and
+// secret values are never retained.
 type hysteriaConfig struct {
 	acl       []string
 	aclFile   string
 	outbounds []hysteriaOutbound
+
+	listen       string // verbatim top-level listen value (a server bind, not user data)
+	trafficStats bool   // the trafficStats block is present
+	statsListen  string // verbatim trafficStats.listen value
+	statsSecret  bool   // a trafficStats.secret key is present (value never read)
+	obfsType     string // obfs.type value (obfs secret never read)
+	masquerade   bool   // a masquerade block/key is present
 }
 
 type hysteriaOutbound struct {
@@ -252,19 +262,80 @@ func parseHysteriaYAML(src string) (hysteriaConfig, error) {
 	var cfg hysteriaConfig
 	for i := 0; i < len(lines); i++ {
 		l := lines[i]
-		if l.indent != 0 || !strings.HasSuffix(l.text, ":") {
+		if l.indent != 0 {
 			continue
 		}
-		switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
-		case "acl":
-			i = parseACLBlock(lines, i, &cfg)
-		case "outbounds":
-			i = parseOutboundsBlock(lines, i, &cfg)
-		default:
-			// unrelated block — skipped without interpretation
+		// Top-level scalar keys: only the server bind facts are retained.
+		if !strings.HasSuffix(l.text, ":") {
+			if k, v, ok := strings.Cut(l.text, ":"); ok {
+				switch strings.TrimSpace(k) {
+				case "listen", "port":
+					cfg.listen = strings.TrimSpace(v)
+				}
+			}
+			continue
+		}
+		{
+			switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
+			case "acl":
+				i = parseACLBlock(lines, i, &cfg)
+			case "outbounds":
+				i = parseOutboundsBlock(lines, i, &cfg)
+			case "trafficStats":
+				cfg.trafficStats = true
+				i = parseTrafficStatsBlock(lines, i, &cfg)
+			case "obfs":
+				i = parseObfsBlock(lines, i, &cfg)
+			case "masquerade":
+				cfg.masquerade = true
+				// the block content (proxy/proxyURL/filesystem) is uninterpreted
+			default:
+				// unrelated block — skipped without interpretation
+			}
+			continue
 		}
 	}
 	return cfg, nil
+}
+
+// parseTrafficStatsBlock consumes the trafficStats block: it records the
+// PRESENCE of a secret key (the value is never read or retained) and the
+// verbatim listen value for classification.
+func parseTrafficStatsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
+	for j := i + 1; j < len(lines); j++ {
+		l := lines[j]
+		if l.indent == 0 && (strings.HasSuffix(l.text, ":") || strings.Contains(l.text, ": ")) {
+			if strings.HasSuffix(l.text, ":") {
+				return j - 1 // next top-level key
+			}
+			// a scalar top-level key ends the block
+			return j - 1
+		}
+		if k, v, ok := strings.Cut(l.text, ":"); ok {
+			switch strings.TrimSpace(k) {
+			case "listen":
+				cfg.statsListen = strings.TrimSpace(v)
+			case "secret":
+				cfg.statsSecret = true // presence only; value never retained
+			}
+		}
+	}
+	return len(lines) - 1
+}
+
+// parseObfsBlock consumes the obfs block: only the type value is retained;
+// the obfs secret is never read or retained.
+func parseObfsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
+	for j := i + 1; j < len(lines); j++ {
+		l := lines[j]
+		if l.indent == 0 && (strings.HasSuffix(l.text, ":") || strings.Contains(l.text, ": ")) {
+			return j - 1
+		}
+		if k, v, ok := strings.Cut(l.text, ":"); ok && strings.TrimSpace(k) == "type" {
+			cfg.obfsType = strings.TrimSpace(v)
+		}
+	}
+	return len(lines) - 1
 }
 
 // parseACLBlock consumes the acl block (lines after the `acl:` key until
