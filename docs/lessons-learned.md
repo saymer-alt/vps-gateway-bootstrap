@@ -641,3 +641,33 @@ and verified to fail on the pre-fix code.
 
 See `docs/serviceobs-live-validation-saymer3-2026-10-27.md` for the
 full evidence.
+
+## 35. A procedure step's permission level comes from what it writes, not from what it prints
+
+The ZAI-121 review of the first field-test procedure
+(`docs/field-test-fail2ban-observe.md`) found two defects in how the
+document labeled and verified steps. The deploy step — `scp` of the
+CLI binary onto the VPS — sat unlabeled between read-only sections,
+although transferring an executable is a WRITE to the machine and
+needs its own permission; nothing else in the procedure could be
+confused into calling it read-only once the levels are explicit. The
+journal readiness check concluded from `ls -la`, while the repository
+contract (`journal.BlockingRecords`) decides blocking from parsed
+record fields: `recovery_required: true`, or an empty `outcome`
+(an in-progress record is a crashed transaction), or a record that
+fails the loader's integrity checks. And the cleanup one-liner
+`rm -f … && ls … || echo ARTIFACT_REMOVED` printed success exactly in
+the case where `rm` failed — the `||` branch fired on the removal
+error, not on proven absence.
+
+**Rules:**
+- Label every field-procedure step with its permission level
+  (read-only check / temporary artifact write / mutation), and state
+  that authorization is never transitive: a grant for one level never
+  implies another. An artifact upload is never a read-only operation.
+- Decide journal or recovery state by parsing records per the
+  repository's journal contract, never from file presence or listing
+  output; a file being there proves nothing about its `outcome`.
+- Report artifact removal only from the removal command's exit code
+  plus an independent post-check of absence — never `rm -f`, never
+  from the intention to remove.
