@@ -13,8 +13,8 @@ import (
 // (rejected at the protocol level), and dangling outbound references.
 //
 // The YAML reader is a hand-rolled strict subset (the repo's pinned
-// alternative to adding a YAML dependency, mirroring
-// internal/mihomoconf). It understands ONLY the documented shapes:
+// alternative to adding a YAML dependency, mirroring the existing
+// mihomoconf strict-subset reader precedent). It understands ONLY the documented shapes:
 //
 //	acl:
 //	  inline:

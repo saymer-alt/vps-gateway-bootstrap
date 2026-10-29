@@ -41,7 +41,7 @@
 // (UNVERIFIED — the file content is not part of the sanitized input),
 // and any DNS behavior beyond the routing-time strategy note.
 //
-// Input hygiene (mirrors internal/mihomoconf): the parser consumes
+// Input hygiene (mirrors the mihomoconf strict-subset reader): the parser consumes
 // supplied bytes only — no filesystem, no commands, no environment;
 // diagnostic reasons name STRUCTURE (rule indexes, tags, types), never
 // destinations, domains or addresses from the configuration. Zero
