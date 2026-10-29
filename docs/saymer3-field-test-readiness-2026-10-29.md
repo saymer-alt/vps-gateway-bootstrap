@@ -9,24 +9,46 @@ all success). ZAI-113…120 results are accepted as-is; no re-audit.
 
 ## 1. What was done (local only)
 
+Revised 2026-10-29 in PR #49 after the owner's review (parser exactness,
+Level-A removal, explicit permission mapping).
+
 - **Procedure fixes** in `docs/field-test-fail2ban-observe.md`:
   - **Permission levels (§0.1, new).** Three explicitly separated
     levels — Level R (read-only SSH check), Level A (temporary
-    artifact on the VPS: the §3 upload is a WRITE, and the §4 dry-run
-    executes the uploaded binary — never labeled read-only), Level M
-    (the authorized restart). No level implies another; each step
-    header now carries its level.
+    artifact on the VPS: the §3 upload is a WRITE, the §4 dry-run
+    executes the uploaded binary, and the §6b removal is another
+    write — never labeled read-only), Level M (the authorized
+    restart). No level implies another; every step header carries its
+    level. The preconditions state the mapping explicitly: **R alone
+    is sufficient for the read-only preflight** (§1, §2, §6a); **A is
+    required only for the temporary binary's lifecycle** (§3 upload,
+    §4 execution, §6b removal); **M is required only for the ONE
+    restart pinned to the specific plan fingerprint the owner
+    confirmed** (§5).
   - **Journal and cleanup verification.** §2 no longer concludes from
-    `ls -la`: it parses every `/etc/vps-gateway/journal/*.json` record
-    per the repository contract (`internal/journal`,
-    `Journal.BlockingRecords`) — a record blocks iff
-    `recovery_required: true` OR `outcome` is empty (crashed), and any
-    record failing the loader's integrity checks (unparseable JSON,
-    `schema_version` outside 1–3, filename↔body id mismatch) blocks
-    the whole journal. §6 removes the test artifact in a separate,
-    verified step: plain `rm` (no `-f`), success claimed only from
-    `RM_EXIT=0` AND an independent post-check showing the path absent.
-    Lesson recorded as §35 in `docs/lessons-learned.md`.
+    `ls -la`: its read-only parser mirrors the loader boundary
+    (`internal/journal/journal.go`: `loadAll` + `BlockingRecords`)
+    rule-for-rule — readable schema versions exactly 1–3, non-empty
+    `transaction_id`/`plan_fingerprint`, byte-exact filename↔body
+    identity, `observed_spec_hash` integrity (v3-only, exactly 64
+    lowercase hex per `ownership.ParseSpecHashHex`), strict JSON
+    types with `null` tolerated like absence and unknown fields
+    ignored, RFC3339 timestamps, skipped non-`.json` entries; a
+    record blocks iff `recovery_required: true` OR `outcome` is
+    empty/absent/null, and any corrupt record or read error
+    (directory or file) is BLOCKING with a NON-ZERO parser exit
+    (directory absent = no records = clean). §6 is split: §6a
+    verification stays Level R; §6b removes the test artifact as a
+    separate LEVEL A operation (plain `rm`, no `-f`), success claimed
+    only from `RM_EXIT=0` AND an independent post-check showing the
+    path absent — the two confirmations stay separate. The parser
+    text is fixture-tested before inclusion: 20 cases run under WSL
+    Ubuntu python3 (clean v3/v2 records, observed-hash in v2, bad
+    hex, bad schema versions and types, empty identity, filename
+    mismatch, non-JSON, NaN literal, in-progress/latch records,
+    broken-symlink read error, non-record skip) — ALL PASS with the
+    intended verdicts and exit codes. Lesson recorded as §35 in
+    `docs/lessons-learned.md`.
 
 ## 2. What was NOT executed, and why
 
@@ -94,8 +116,8 @@ state, and must be re-verified at §1–§2 of the field-test procedure.
    (journal parse, state.json, leftovers — listing only) and record
    the values as run evidence.
 2. Separately, owner decides Level A (which artifact — local build or
-   CI artifact — may be uploaded, named by SHA256) → dry-run at §4
-   records the REAL plan fingerprint.
+   CI artifact — may be uploaded, executed and later removed, named
+   by SHA256) → dry-run at §4 records the REAL plan fingerprint.
 3. Separately, owner issues the per-run go for Level M pinned to that
    fingerprint → field-test §5–§7.
 

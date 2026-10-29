@@ -16,26 +16,33 @@ durable journal. No new deployment or management system is created.
 - Build host: the binary is built OFF-host from the exact intended
   `main` commit, linux/amd64, with the commit SHA and binary SHA256
   recorded in the run evidence.
-- Separate owner permissions for every step that is NOT read-only:
-  uploading the temporary CLI binary (§3) and the authorized restart
-  (§5) each require their own explicit authorization. A read-only SSH
-  grant covers neither.
+- Permission mapping: the read-only (Level R) grant ALONE is
+  sufficient for the preflight — §1, §2 and the verification reads of
+  §6a. Level A is required only for the temporary binary's lifecycle
+  on the machine: the upload (§3), its execution (§4) and its removal
+  after the run (§6b). Level M is required only for the ONE authorized
+  restart (§5), pinned to the specific plan fingerprint the owner
+  confirmed.
 
 ### 0.1 Permission levels (each step carries exactly one; no level implies another)
 
 - **Level R — read-only SSH check.** Observation only: `systemctl
   show/is-active/--version`, directory listings, reading and parsing
   the JSON records under `/etc/vps-gateway/`. Nothing is written on
-  the VPS; no binary is transferred or executed.
-- **Level A — temporary artifact on the VPS.** Transferring the CLI
-  binary to the machine (§3) is a WRITE to the VPS, and running it in
-  the non-mutating dry-run mode (§4) executes code placed on the
-  machine. It requires its own owner permission naming the exact
-  artifact (build commit SHA + binary SHA256). An artifact upload is
-  NEVER a read-only operation and must never be labeled one.
+  the VPS; no binary is transferred or executed. This level ALONE is
+  sufficient for the read-only preflight (§1, §2) and the
+  verification reads of §6a.
+- **Level A — temporary artifact on the VPS.** The artifact's whole
+  lifecycle on the machine is Level A: the upload (§3) is a WRITE to
+  the VPS, running it in the non-mutating dry-run mode (§4) executes
+  code placed on the machine, and its removal after the run (§6b) is
+  another write. It requires its own owner permission naming the
+  exact artifact (build commit SHA + binary SHA256). No artifact
+  operation is EVER read-only and none may be labeled one.
 - **Level M — real mutation.** The one authorized
   `apply --confirm <prefix> --observe-service-report` restart (§5),
-  pinned to the exact plan fingerprint recorded at §4.
+  pinned to the specific plan fingerprint the owner confirmed
+  (recorded at §4).
 
 ## 1. Identity and service state (Level R — read-only SSH)
 
@@ -66,41 +73,160 @@ ssh ... root@5.175.134.49 "ls -la /etc/vps-gateway/ /etc/vps-gateway/journal/ 2>
 ```
 
 Then parse every record (the script is fed over stdin; nothing is
-written on the VPS):
+written on the VPS). Exit code: 0 = CLEAN, non-zero = BLOCKED — a
+non-zero exit is a STOP:
 
 ```sh
 ssh ... root@5.175.134.49 "python3 -" <<'PY'
-import glob, json, os
+import json, os, re, sys
+
+JDIR = "/etc/vps-gateway/journal"
+HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+RFC3339 = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})\Z")
+ACTION_STRS = ("id", "resource", "kind", "retry_class",
+               "status", "error", "spec_hash", "observed_spec_hash")
 blocking = 0
-for p in sorted(glob.glob("/etc/vps-gateway/journal/*.json")):
+
+def corrupt(name, msg):
+    global blocking
+    blocking += 1
+    print(f"{name}: corrupt: {msg} -> BLOCKING")
+
+def bad_const(c):
+    raise ValueError(f"invalid JSON constant {c}")
+
+def want_str(obj, key):
+    # absent and null are equal here: Go leaves the field at its zero value
+    v = obj.get(key)
+    if v is not None and not isinstance(v, str):
+        raise ValueError(f"field {key!r} must be a string")
+    return "" if v is None else v
+
+def ext(name):  # Go's filepath.Ext semantics
+    i = name.rfind(".")
+    return name[i:] if i >= 0 else ""
+
+try:
+    names = sorted(os.listdir(JDIR))
+except FileNotFoundError:
+    print(f"{JDIR}: directory absent -> no records")
+    names = []
+except OSError as e:
+    corrupt(f"{JDIR}/", f"directory unreadable: {e}")
+    names = []
+
+for name in names:
+    path = os.path.join(JDIR, name)
+    if ext(name) != ".json" or (os.path.isdir(path)
+                                and not os.path.islink(path)):
+        continue  # skipped exactly like the Go loader
     try:
-        r = json.load(open(p))
-        tid = r["transaction_id"]
-        out = r.get("outcome", "")
-        rr = bool(r.get("recovery_required", False))
-        sv = r["schema_version"]
-        wellformed = (os.path.basename(p)[:-5] == tid and sv in (1, 2, 3)
-                      and tid.strip() != ""
-                      and r.get("plan_fingerprint", "").strip() != "")
-    except Exception as e:
-        print(f"{p}: UNPARSEABLE ({e}) -> BLOCKING"); blocking += 1; continue
-    verdict = "BLOCKING" if (rr or out == "" or not wellformed) else "ok"
-    print(f"{p}: tx={tid} outcome={out!r} recovery_required={rr} schema={sv} -> {verdict}")
-    blocking += 1 if verdict == "BLOCKING" else 0
-print("JOURNAL:", "CLEAN" if blocking == 0 else f"{blocking} blocking record(s) - STOP")
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        corrupt(name, f"read error: {e}")
+        continue
+    try:
+        r = json.loads(data, parse_constant=bad_const)
+        if not isinstance(r, dict):
+            raise ValueError("record is not a JSON object")
+        sv = r.get("schema_version")
+        if not isinstance(sv, int) or isinstance(sv, bool):
+            raise ValueError("schema_version must be an integer")
+        if sv not in (1, 2, 3):
+            raise ValueError(
+                f"unsupported schema version {sv} (readable: 1, 2, 3)")
+        tid = r.get("transaction_id")
+        if not isinstance(tid, str) or tid.strip() == "":
+            raise ValueError("transaction_id must be a non-empty string")
+        fp = r.get("plan_fingerprint")
+        if not isinstance(fp, str) or fp.strip() == "":
+            raise ValueError("plan_fingerprint must be a non-empty string")
+        for s in ("host_identity", "stage", "outcome", "rollback_result"):
+            want_str(r, s)
+        for b in ("mutation_possible", "rollback_attempted",
+                  "recovery_required"):
+            v = r.get(b)
+            if v is not None and not isinstance(v, bool):
+                raise ValueError(f"field {b!r} must be a boolean")
+        ap = r.get("approval")
+        if ap is not None:
+            if not isinstance(ap, dict):
+                raise ValueError("approval must be an object")
+            want_str(ap, "mode")
+            want_str(ap, "reference")
+        for ts in ("started_at", "updated_at"):
+            v = r.get(ts)
+            if v is not None and (not isinstance(v, str)
+                                  or not RFC3339.match(v)):
+                raise ValueError(f"field {ts!r} must be an RFC3339 timestamp")
+        actions = r.get("actions")
+        if actions is None:
+            actions = []
+        if not isinstance(actions, list):
+            raise ValueError("actions must be an array")
+        for a in actions:
+            if not isinstance(a, dict):
+                raise ValueError("each action must be an object")
+            for k in ACTION_STRS:
+                want_str(a, k)
+            oh = a.get("observed_spec_hash")
+            if oh:
+                if sv < 3:
+                    raise ValueError(
+                        "observed_spec_hash present in a schema version "
+                        f"{sv} record (the field exists since v3)")
+                if not HEX64.match(oh):
+                    raise ValueError(
+                        "corrupt observed_spec_hash (want exactly 64 "
+                        "lowercase hex characters)")
+        expected = name[:-len(".json")] if ext(name) == ".json" else name
+        if tid != expected:
+            raise ValueError(f"body transaction_id {tid!r} does not match "
+                             f"the file name identity {expected!r}")
+        rr = r.get("recovery_required")
+        outcome = want_str(r, "outcome")
+        verdict = "BLOCKING" if rr or outcome == "" else "ok"
+        print(f"{name}: tx={tid} outcome={outcome!r} "
+              f"recovery_required={bool(rr)} schema={sv} -> {verdict}")
+        if verdict == "BLOCKING":
+            blocking += 1
+    except ValueError as e:
+        corrupt(name, e)
+
+print("JOURNAL:",
+      "CLEAN" if blocking == 0 else f"{blocking} blocking record(s) - STOP")
+sys.exit(1 if blocking else 0)
 PY
 ```
 
-Decision rules (mirroring the repo contract exactly — do not
-approximate them from file names, sizes or dates):
+The parser mirrors the loader boundary rule-for-rule
+(`internal/journal/journal.go`: `loadAll` + `BlockingRecords`; not an
+approximation from file names, sizes or dates):
 
+- Readable schema versions are exactly 1, 2, 3.
+- `transaction_id` and `plan_fingerprint` must be non-empty strings
+  (whitespace-only is corrupt); the body `transaction_id` must equal
+  the file name minus `.json`, byte-exact — no case folding, no
+  trimming.
+- `observed_spec_hash` may be present only in a v3 record and must be
+  exactly 64 lowercase hex characters (the `ownership.ParseSpecHashHex`
+  rule); its presence in a v1/v2 record is corruption.
+- Every contract field is strictly typed — a wrong JSON type is
+  corrupt. JSON `null` is tolerated like absence, unknown fields are
+  ignored, NaN/Infinity literals are corrupt, and `started_at` /
+  `updated_at` must be RFC3339 timestamps.
+- Non-`.json` entries and directories are skipped; a MISSING journal
+  directory means "no records"; an unreadable directory or an
+  unreadable record file is an error, never a skip.
 - A record BLOCKS the field test iff `recovery_required` is `true` OR
-  `outcome` is empty/absent (an in-progress record is a crashed
+  `outcome` is empty/absent/null (an in-progress record is a crashed
   transaction). Outcome vocabulary: `COMPLETED`, `FAILED`,
   `RECOVERY_REQUIRED`.
-- A record that fails to parse as JSON, carries a `schema_version`
-  outside 1–3, or whose body `transaction_id` differs from the file
-  name blocks the WHOLE journal (the loader fails closed) — STOP.
+- Any corrupt record or read error is BLOCKING — one bad record fails
+  the WHOLE journal (the loader fails closed), and the parser exits
+  non-zero.
 - Any blocking record: STOP and resolve recovery with the operator
   first — the apply would refuse anyway. Clearing a
   recovery-required record is an operator action; no code path clears
@@ -147,7 +273,9 @@ ssh ... root@5.175.134.49 "/tmp/vps-gateway-apply apply --confirm <12-char-prefi
 Capture the full output: `Stage:`, the report block (resource, unit,
 transaction, before/after facts, verdict, window), exit code.
 
-## 6. Post-run verification (Level R — read-only SSH)
+## 6. Post-run verification and artifact removal
+
+### 6a. Verification (Level R — read-only SSH)
 
 ```sh
 ssh ... root@5.175.134.49 "systemctl is-active fail2ban.service; \
@@ -159,8 +287,11 @@ Then re-run the §2 journal parser (same read-only command): the new
 transaction's record must show `outcome: COMPLETED` with no
 `recovery_required`, and no other record may have become blocking.
 
-Artifact removal is a separate, verified step — never reported from
-intention:
+### 6b. Artifact removal (Level A — a VPS write; NOT read-only)
+
+The removal is the last step of the Level-A artifact lifecycle
+(§0.1): a separate operation with its own verification, never covered
+by the read-only grant and never reported from intention:
 
 ```sh
 ssh ... root@5.175.134.49 "rm /tmp/vps-gateway-apply; echo RM_EXIT=\$?; \
@@ -169,11 +300,12 @@ ssh ... root@5.175.134.49 "rm /tmp/vps-gateway-apply; echo RM_EXIT=\$?; \
 
 - `rm` without `-f` on purpose: a failed removal surfaces as a
   non-zero `RM_EXIT` instead of being silently absorbed.
-- Removal counts as verified ONLY when `RM_EXIT=0` AND the follow-up
-  check reports `PATH_ABSENT`. Any other combination is a cleanup
-  failure: report it, never retry automatically.
+- The removal exit code and the file's absence are confirmed
+  SEPARATELY. Removal counts as verified ONLY when `RM_EXIT=0` AND
+  the follow-up check reports `PATH_ABSENT`. Any other combination is
+  a cleanup failure: report it, never retry automatically.
 
-Pass criteria:
+Pass criteria (§6a + §6b):
 
 - EXIT=0, `Stage: COMPLETED`, `attempt_applied=true`.
 - The report's verdict is `NEW_INVOCATION_OBSERVED` and the after-side
@@ -195,5 +327,5 @@ or a verdict other than `NEW_INVOCATION_OBSERVED` while the exit says
 COMPLETED; the after InvocationID equal to the before value on a
 COMPLETED run; any unexpected journal state. A failed attempt must NOT
 be retried: the recovery latch exists precisely so the operator reviews
-first. A failed artifact-removal verification (§6) is likewise
-reported as a cleanup failure, never retried automatically.
+first. A failed artifact-removal verification (§6b, Level A) is
+likewise reported as a cleanup failure, never retried automatically.
