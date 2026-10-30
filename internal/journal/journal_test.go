@@ -137,6 +137,28 @@ func TestPersistenceBlockersFamilies(t *testing.T) {
 
 // F3 (TASK-15): the first run's journal directory must itself be durably
 // established — Begin creates the whole missing tree, not just the record.
+// ZAI-124 cold-start failure branch: a regular file occupying the journal
+// directory path must fail Begin closed — no record, no overwrite of the
+// blocking file, no partially created tree. (Before the fsatomic.EnsureDir
+// fix this surfaced as an accidental Stat error instead of the primitive's
+// own refusal; the fail-closed outcome is what is pinned here.)
+func TestBeginFailsClosedWhenJournalPathIsFile(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "journal")
+	if err := os.WriteFile(blocker, []byte("blocked"), 0600); err != nil { t.Fatal(err) }
+	j := &Journal{Dir: blocker}
+	if err := j.Begin(testRecord("tx-cold")); err == nil {
+		t.Fatal("Begin must fail when the journal directory path is a regular file")
+	}
+	data, err := os.ReadFile(blocker)
+	if err != nil || string(data) != "blocked" {
+		t.Fatalf("the blocking file must be left intact: %v %q", err, data)
+	}
+	if info, err := os.Stat(blocker); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("the blocking path must remain a regular file (no directory created over it): %v", err)
+	}
+}
+
 func TestBeginCreatesMissingDirectoryTree(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "etc", "vps-gateway", "journal")
 	j := &Journal{Dir: dir}

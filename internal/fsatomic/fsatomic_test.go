@@ -100,6 +100,24 @@ func TestEnsureDirLeavesExistingDirectoryUntouched(t *testing.T) {
 	if info.Mode().Perm() != 0750 { t.Fatalf("existing dir mode changed: %o", info.Mode().Perm()) }
 }
 
+// ZAI-124: an existing regular FILE at the TARGET path itself (not only in
+// the middle of it) must fail closed — the primitive guarantees a directory.
+// This test failed before the fix: EnsureDir walked up, saw "exists", and
+// returned success for a regular file.
+func TestEnsureDirRejectsExistingFileAtPath(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "journal")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil { t.Fatal(err) }
+	if err := EnsureDir(blocker, 0700); err == nil {
+		t.Fatal("EnsureDir must not report success when the target path is a regular file")
+	}
+	// The file is untouched by the refusal.
+	data, err := os.ReadFile(blocker)
+	if err != nil || string(data) != "x" {
+		t.Fatalf("the blocking file must be left intact: %v %q", err, data)
+	}
+}
+
 func TestEnsureDirRejectsFileInPath(t *testing.T) {
 	base := t.TempDir()
 	blocker := filepath.Join(base, "blocker")

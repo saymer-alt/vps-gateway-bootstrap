@@ -375,3 +375,35 @@ func TestBackupIntegrityFailureLatchesRecoveryRequired(t *testing.T) {
 }
 
 func ptr(b bool) *bool { return &b }
+
+// ZAI-124 cold-start guarantee at the integration level: when the FIRST
+// durable journal write cannot establish a directory (a regular file
+// occupies the journal path), Execute blocks BEFORE the engine — zero
+// executor calls, no state written, no report. The transaction never
+// reaches the action while the journal does not exist.
+func TestExecuteBlockedWhenJournalPathIsFile(t *testing.T) {
+	svc := &recordingExecutor{}
+	o, _ := newOrchestrator(t, []discovery.Result{makeDiscovery(false), makeDiscovery(false), makeDiscovery(true)}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc},
+	}, nil)
+	if err := os.WriteFile(o.Journal.Dir, []byte("blocked"), 0600); err != nil { t.Fatal(err) }
+	p := o.Prepare(fail2banConfig(), rootOn())
+	if !p.Ready { t.Fatalf("fixture sanity: %v", p.Blockers) }
+	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	out, err := o.Execute(p, conf, nil)
+	if err != nil { t.Fatal(err) }
+	if out.Stage != StageBlocked {
+		t.Fatalf("stage=%s blockers=%v", out.Stage, out.Blockers)
+	}
+	found := false
+	for _, b := range out.Blockers {
+		if strings.Contains(b, "journal") { found = true }
+	}
+	if !found { t.Fatalf("blockers must name the journal: %v", out.Blockers) }
+	if len(svc.calls) != 0 {
+		t.Fatalf("the engine must never run without a durable transaction record: %v", svc.calls)
+	}
+	if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) {
+		t.Fatalf("no persisted state may exist after a blocked cold start: %v", err)
+	}
+}
