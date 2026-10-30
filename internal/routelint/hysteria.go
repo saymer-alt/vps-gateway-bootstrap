@@ -221,12 +221,23 @@ func parseACLRule(line string) (aclRule, error) {
 }
 
 // hysteriaConfig carries ONLY the structural facts the lint needs: the
-// outbound names/types and the inline ACL rule strings. Destinations,
-// domains and addresses are never retained.
+// outbound names/types, the inline ACL rule strings, and the server
+// safety facts (ZAI-126) retained as CLASSIFICATIONS, never values —
+// listen binds are reduced to wildcard/loopback/specific/range classes,
+// secrets are reduced to presence. Destinations, domains, addresses and
+// secret values are never retained.
 type hysteriaConfig struct {
 	acl       []string
 	aclFile   string
 	outbounds []hysteriaOutbound
+
+	listen           string // verbatim top-level listen value (a server bind, not user data)
+	trafficStats     bool   // the trafficStats block is present
+	statsListen      string // verbatim trafficStats.listen value
+	statsSecret      bool   // a trafficStats.secret key is present with a NON-EMPTY value (value never read)
+	statsSecretEmpty bool   // a secret key is present but its value is empty/quoted-empty/null - semantics unknown (ZAI-128)
+	obfsType         string // obfs.type value (obfs secret never read)
+	masquerade       bool   // a masquerade block/key is present
 }
 
 type hysteriaOutbound struct {
@@ -244,6 +255,45 @@ type yamlLine struct {
 // indent 0 select the mode; blocks under uninterpreted keys are skipped
 // without interpretation; constructs inside acl/outbounds that the subset
 // does not define fail closed.
+// isFlowCollection reports whether a trimmed line actually opens a YAML
+// flow collection ({...} / [...]) as its value: the first bracket-like
+// byte after the colon/indicator must be a flow opener AND the value
+// must not be an IPv6-style bracketed host (which always closes the
+// brackets before the port digits and contains no commas between them).
+func isFlowCollection(t string) bool {
+	v := t
+	if _, rest, ok := strings.Cut(t, ":"); ok && strings.TrimSpace(rest) != "" {
+		v = strings.TrimSpace(rest)
+	} else if strings.HasPrefix(v, "- ") {
+		v = strings.TrimSpace(v[2:])
+	}
+	if v == "" {
+		return false
+	}
+	switch v[0] {
+	case '{':
+		return true
+	case '[':
+		// A YAML flow sequence opens '[' and its next byte is not ':'.
+		// An IPv6 literal opens '[' with ':' (or digits followed by ':').
+		if len(v) > 1 && v[1] == ':' {
+			return false
+		}
+		// Digits/hex then ':' — still an IPv6 host, not a flow sequence.
+		for i := 1; i < len(v); i++ {
+			c := v[i]
+			if c == ':' {
+				return false
+			}
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+				break
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func parseHysteriaYAML(src string) (hysteriaConfig, error) {
 	var lines []yamlLine
 	for i, raw := range strings.Split(src, "\n") {
@@ -256,27 +306,108 @@ func parseHysteriaYAML(src string) (hysteriaConfig, error) {
 			// an explicitly empty list is a legal empty block
 			continue
 		}
-		if strings.Contains(t, ": {") || strings.Contains(t, ": [") || strings.HasPrefix(t, "- {") {
-			return hysteriaConfig{}, fmt.Errorf("line %d: flow collections are outside the strict subset", i+1)
+		// Flow-collection detection must not false-positive on IPv6 bind
+		// literals: `[::]:9999` and `[2001:db8::1]:443` contain ": ["-like
+		// byte pairs inside brackets. A flow collection OPENS with "{" or
+		// "[" as the first non-space byte of the VALUE (or of the item).
+		if strings.HasSuffix(t, "{") || strings.HasSuffix(t, "[") ||
+			strings.Contains(t, ": {") || strings.Contains(t, ": [ {") ||
+			strings.HasPrefix(t, "- {") {
+			if isFlowCollection(t) {
+				return hysteriaConfig{}, fmt.Errorf("line %d: flow collections are outside the strict subset", i+1)
+			}
 		}
 		lines = append(lines, yamlLine{indent: len(raw) - len(strings.TrimLeft(raw, " \t")), text: t, num: i + 1})
 	}
 	var cfg hysteriaConfig
 	for i := 0; i < len(lines); i++ {
 		l := lines[i]
-		if l.indent != 0 || !strings.HasSuffix(l.text, ":") {
+		if l.indent != 0 {
 			continue
 		}
-		switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
-		case "acl":
-			i = parseACLBlock(lines, i, &cfg)
-		case "outbounds":
-			i = parseOutboundsBlock(lines, i, &cfg)
-		default:
-			// unrelated block — skipped without interpretation
+		// Top-level scalar keys: only the server bind facts are retained.
+		if !strings.HasSuffix(l.text, ":") {
+			if k, v, ok := strings.Cut(l.text, ":"); ok {
+				switch strings.TrimSpace(k) {
+				case "listen", "port":
+					cfg.listen = strings.TrimSpace(v)
+				}
+			}
+			continue
+		}
+		{
+			switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
+			case "acl":
+				i = parseACLBlock(lines, i, &cfg)
+			case "outbounds":
+				i = parseOutboundsBlock(lines, i, &cfg)
+			case "trafficStats":
+				cfg.trafficStats = true
+				i = parseTrafficStatsBlock(lines, i, &cfg)
+			case "obfs":
+				i = parseObfsBlock(lines, i, &cfg)
+			case "masquerade":
+				cfg.masquerade = true
+				// the block content (proxy/proxyURL/filesystem) is uninterpreted
+			default:
+				// unrelated block — skipped without interpretation
+			}
+			continue
 		}
 	}
 	return cfg, nil
+}
+
+// parseTrafficStatsBlock consumes the trafficStats block: it records the
+// PRESENCE of a secret key (the value is never read or retained) and the
+// verbatim listen value for classification.
+func parseTrafficStatsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
+	for j := i + 1; j < len(lines); j++ {
+		l := lines[j]
+		if l.indent == 0 && (strings.HasSuffix(l.text, ":") || strings.Contains(l.text, ": ")) {
+			if strings.HasSuffix(l.text, ":") {
+				return j - 1 // next top-level key
+			}
+			// a scalar top-level key ends the block
+			return j - 1
+		}
+		if k, v, ok := strings.Cut(l.text, ":"); ok {
+			switch strings.TrimSpace(k) {
+			case "listen":
+				cfg.statsListen = strings.TrimSpace(v)
+			case "secret":
+				// ZAI-128 review: only a NON-EMPTY value documents the
+				// Authorization requirement ("If an API secret is set in
+				// your configuration..."). Empty, quoted-empty and null
+				// values are recorded separately: whether the core treats
+				// them as a configured secret is not defined by the
+				// documentation - the authentication state is UNVERIFIED,
+				// never a PASS.
+				val := unquote(strings.TrimSpace(v))
+				if val != "" && !isNullScalar(val) {
+					cfg.statsSecret = true
+				} else {
+					cfg.statsSecretEmpty = true
+				}
+			}
+		}
+	}
+	return len(lines) - 1
+}
+
+// parseObfsBlock consumes the obfs block: only the type value is retained;
+// the obfs secret is never read or retained.
+func parseObfsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
+	for j := i + 1; j < len(lines); j++ {
+		l := lines[j]
+		if l.indent == 0 && (strings.HasSuffix(l.text, ":") || strings.Contains(l.text, ": ")) {
+			return j - 1
+		}
+		if k, v, ok := strings.Cut(l.text, ":"); ok && strings.TrimSpace(k) == "type" {
+			cfg.obfsType = strings.TrimSpace(v)
+		}
+	}
+	return len(lines) - 1
 }
 
 // parseACLBlock consumes the acl block (lines after the `acl:` key until
@@ -288,8 +419,8 @@ func parseACLBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 	j := i + 1
 	for j < len(lines) {
 		l := lines[j]
-		if l.indent == 0 && strings.HasSuffix(l.text, ":") {
-			return j - 1 // next top-level key
+		if l.indent == 0 {
+			return j - 1 // ANY indent-0 line ends the block (ZAI-128: scalar keys included)
 		}
 		if strings.HasSuffix(l.text, ":") {
 			switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
@@ -328,8 +459,8 @@ func parseACLBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 func parseOutboundsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 	for j := i + 1; j < len(lines); j++ {
 		l := lines[j]
-		if l.indent == 0 && strings.HasSuffix(l.text, ":") {
-			return j - 1 // next top-level key
+		if l.indent == 0 {
+			return j - 1 // ANY indent-0 line ends the block (ZAI-128: scalar keys included)
 		}
 		if !strings.HasPrefix(l.text, "- ") {
 			continue
@@ -369,6 +500,16 @@ func setOutboundField(ob *hysteriaOutbound, key, value string) {
 // unquote strips simple surrounding quotes from a scalar value (the
 // strict subset does not interpret escape sequences; a quoted value with
 // embedded quotes is not produced by the documented shapes).
+// isNullScalar reports whether a scalar value is one of YAML's null
+// spellings (the strict subset recognizes the documented spellings only).
+func isNullScalar(v string) bool {
+	switch v {
+	case "null", "Null", "NULL", "~":
+		return true
+	}
+	return false
+}
+
 func unquote(v string) string {
 	if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
 		return v[1 : len(v)-1]
