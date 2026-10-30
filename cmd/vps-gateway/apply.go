@@ -202,8 +202,13 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	// failed operation. The mutation path keeps the guard refusal intact:
 	// firstExperimentGuard is not weakened where it gates execution.
 	if err := firstExperimentGuard(p); err != nil {
-		if dryRun && len(p.Plan.Actions) == 0 {
-			fmt.Fprintln(stdout, "NO_CHANGE: the desired state already matches the machine and no plan actions were produced (converged plan); nothing to confirm or execute.")
+		// ZAI-127 review: NO_CHANGE is claimed ONLY when the experiment's
+		// explicit goal is verifiably reached on the machine — fail2ban
+		// reported active in the planning discovery. A zero-action plan
+		// from an empty or unrelated configuration is not a convergence
+		// fact; presenting it as success would be a false NO_CHANGE.
+		if dryRun && len(p.Plan.Actions) == 0 && experimentGoalReached(p) {
+			fmt.Fprintln(stdout, "NO_CHANGE: the experiment's desired goal (fail2ban.service active) is verifiably reached on this machine (the planning discovery reports it active) and no plan actions were produced; nothing to confirm or execute.")
 			if observeReport {
 				fmt.Fprintln(stdout, "service observation skipped: a converged plan produces no engine attempt to observe.")
 			}
@@ -334,6 +339,19 @@ func operatorName() string {
 		return "cli:" + u.Username
 	}
 	return "cli:unknown"
+}
+
+// experimentGoalReached reports whether the experiment's explicit goal —
+// fail2ban.service reported active — is verifiably present in the plan's
+// planning discovery. A zero-action plan alone proves nothing: an empty
+// or unrelated configuration also produces one (ZAI-127 review).
+func experimentGoalReached(p orchestrate.Plan) bool {
+	for _, svc := range p.Discovery.Services {
+		if svc.Name == "fail2ban.service" {
+			return svc.Exists && svc.Active
+		}
+	}
+	return false
 }
 
 // observationVerdictMeaning states, per closed vocabulary class, exactly

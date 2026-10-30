@@ -86,11 +86,11 @@ func TestApplyDryRunConvergedPlanReportsNoChange(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("a converged dry-run must succeed as NO_CHANGE, code=%d output:\n%s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "NO_CHANGE") || !strings.Contains(out.String(), "already matches") {
+	if !strings.Contains(out.String(), "NO_CHANGE") || !strings.Contains(out.String(), "verifiably reached") {
 		t.Fatalf("the converged outcome must be named explicitly:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "no plan actions were produced") {
-		t.Fatalf("the zero-action fact must be stated:\n%s", out.String())
+	if !strings.Contains(out.String(), "no plan actions were produced") || !strings.Contains(out.String(), "reports it active") {
+		t.Fatalf("the zero-action and verification facts must be stated:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "apply restricted to the first production experiment") {
 		t.Fatal("a converged dry-run must not be presented as a guard failure")
@@ -100,6 +100,31 @@ func TestApplyDryRunConvergedPlanReportsNoChange(t *testing.T) {
 	}
 	if probe.executorCalls != 0 || probe.observerCalls != 0 {
 		t.Fatalf("a converged plan must touch nothing: executor=%d observer=%d", probe.executorCalls, probe.observerCalls)
+	}
+}
+
+// A zero-action plan from an EMPTY/unrelated configuration is NOT a
+// converged NO_CHANGE: the experiment goal is not verifiably reached
+// (fail2ban absent from discovery), so the guard refusal stands even on
+// the dry-run path. Fails-first: the pre-review code reported NO_CHANGE
+// for every zero-action plan.
+func TestApplyDryRunZeroPlanWithoutGoalIsNotNoChange(t *testing.T) {
+	empty := writeApplyConfig(t, map[string]any{"desired": map[string]any{}})
+	o, _, _ := applyTestOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t),
+	}, apply.Registry{
+		ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: &cliRecordingExecutor{}},
+	})
+	var out strings.Builder
+	code := runApplyWith([]string{"--dry-run", "--config", empty}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("a zero-action plan without the verified goal must not be NO_CHANGE, code=%d output:\n%s", code, out.String())
+	}
+	if strings.Contains(out.String(), "NO_CHANGE") {
+		t.Fatal("an unrelated zero-action plan must not be reported as NO_CHANGE")
+	}
+	if !strings.Contains(out.String(), "apply restricted to the first production experiment") {
+		t.Fatalf("the guard refusal must stand:\n%s", out.String())
 	}
 }
 
