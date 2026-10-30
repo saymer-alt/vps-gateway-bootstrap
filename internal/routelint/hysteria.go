@@ -231,12 +231,13 @@ type hysteriaConfig struct {
 	aclFile   string
 	outbounds []hysteriaOutbound
 
-	listen       string // verbatim top-level listen value (a server bind, not user data)
-	trafficStats bool   // the trafficStats block is present
-	statsListen  string // verbatim trafficStats.listen value
-	statsSecret  bool   // a trafficStats.secret key is present (value never read)
-	obfsType     string // obfs.type value (obfs secret never read)
-	masquerade   bool   // a masquerade block/key is present
+	listen           string // verbatim top-level listen value (a server bind, not user data)
+	trafficStats     bool   // the trafficStats block is present
+	statsListen      string // verbatim trafficStats.listen value
+	statsSecret      bool   // a trafficStats.secret key is present with a NON-EMPTY value (value never read)
+	statsSecretEmpty bool   // a secret key is present but its value is empty/quoted-empty/null - semantics unknown (ZAI-128)
+	obfsType         string // obfs.type value (obfs secret never read)
+	masquerade       bool   // a masquerade block/key is present
 }
 
 type hysteriaOutbound struct {
@@ -375,11 +376,19 @@ func parseTrafficStatsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 			case "listen":
 				cfg.statsListen = strings.TrimSpace(v)
 			case "secret":
-				// ZAI-127 review: an EMPTY secret value is no protection —
-				// the documented Authorization requirement is driven by
-				// "an API secret is set", and an empty value is not a set
-				// secret. Presence counts only with a non-empty value.
-				cfg.statsSecret = strings.TrimSpace(v) != ""
+				// ZAI-128 review: only a NON-EMPTY value documents the
+				// Authorization requirement ("If an API secret is set in
+				// your configuration..."). Empty, quoted-empty and null
+				// values are recorded separately: whether the core treats
+				// them as a configured secret is not defined by the
+				// documentation - the authentication state is UNVERIFIED,
+				// never a PASS.
+				val := unquote(strings.TrimSpace(v))
+				if val != "" && !isNullScalar(val) {
+					cfg.statsSecret = true
+				} else {
+					cfg.statsSecretEmpty = true
+				}
 			}
 		}
 	}
@@ -410,8 +419,8 @@ func parseACLBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 	j := i + 1
 	for j < len(lines) {
 		l := lines[j]
-		if l.indent == 0 && strings.HasSuffix(l.text, ":") {
-			return j - 1 // next top-level key
+		if l.indent == 0 {
+			return j - 1 // ANY indent-0 line ends the block (ZAI-128: scalar keys included)
 		}
 		if strings.HasSuffix(l.text, ":") {
 			switch strings.TrimSpace(strings.TrimSuffix(l.text, ":")) {
@@ -450,8 +459,8 @@ func parseACLBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 func parseOutboundsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 	for j := i + 1; j < len(lines); j++ {
 		l := lines[j]
-		if l.indent == 0 && strings.HasSuffix(l.text, ":") {
-			return j - 1 // next top-level key
+		if l.indent == 0 {
+			return j - 1 // ANY indent-0 line ends the block (ZAI-128: scalar keys included)
 		}
 		if !strings.HasPrefix(l.text, "- ") {
 			continue
@@ -491,6 +500,16 @@ func setOutboundField(ob *hysteriaOutbound, key, value string) {
 // unquote strips simple surrounding quotes from a scalar value (the
 // strict subset does not interpret escape sequences; a quoted value with
 // embedded quotes is not produced by the documented shapes).
+// isNullScalar reports whether a scalar value is one of YAML's null
+// spellings (the strict subset recognizes the documented spellings only).
+func isNullScalar(v string) bool {
+	switch v {
+	case "null", "Null", "NULL", "~":
+		return true
+	}
+	return false
+}
+
 func unquote(v string) string {
 	if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
 		return v[1 : len(v)-1]

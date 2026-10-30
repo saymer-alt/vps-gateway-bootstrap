@@ -258,3 +258,106 @@ func TestSafetyUnsupportedFormStaysConservative(t *testing.T) {
 	}
 	wantDiag(t, r, "hysteria.stats-no-secret")
 }
+
+// --- ZAI-128 review regressions (PR #52) ---
+
+// R4: NONE of the empty/quoted-empty/null secret spellings may confirm
+// working authentication. Each case keeps the conservative no-secret
+// WARN and adds the UNVERIFIED semantics marker (the documentation does
+// not define the core's behavior for an empty value). Fails-first: the
+// pre-review parser counted every spelling as a configured secret.
+func TestSafetySecretEmptySpellingsNeverConfirmAuth(t *testing.T) {
+	for _, v := range []string{`""`, `''`, `null`, ``} {
+		src := "trafficStats:\n  listen: :9999\n"
+		if v != `` {
+			src += "  secret: " + v + "\n"
+		} else {
+			src += "  secret:\n"
+		}
+		r, err := LintHysteria2Safety([]byte(src))
+		if err != nil {
+			t.Fatalf("secret=%q: %v", v, err)
+		}
+		noAuth := false
+		unverified := false
+		for _, d := range r.Diagnostics {
+			if d.ID == "hysteria.stats-no-secret" && d.Level == LevelWarn {
+				noAuth = true
+			}
+			if d.ID == "hysteria.stats-secret-empty" && d.Evidence == Unverified {
+				unverified = true
+			}
+		}
+		if !noAuth || !unverified {
+			t.Fatalf("secret=%q: want no-secret WARN + UNVERIFIED marker, got %+v", v, r.Diagnostics)
+		}
+	}
+	// A NON-EMPTY value is the only case that documents the Authorization
+	// requirement — and even then the lint states the config-level fact,
+	// never observed reachability.
+	r, err := LintHysteria2Safety([]byte("trafficStats:\n  listen: :9999\n  secret: synthetic-nonempty\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range r.Diagnostics {
+		if d.ID == "hysteria.stats-no-secret" || d.ID == "hysteria.stats-secret-empty" {
+			t.Fatalf("a non-empty secret must not produce the no-auth diagnostics: %+v", d)
+		}
+	}
+}
+
+// R5: section ORDER must not hide the port-hopping fact — `outbounds` or
+// `acl` first, then the scalar `listen: :20000-50000`, still warns.
+// Fails-first: the pre-review block parsers swallowed the scalar
+// top-level key that followed a block, and the warning disappeared.
+func TestSafetyPortHoppingSurvivesSectionOrder(t *testing.T) {
+	for _, src := range []string{
+		"outbounds:\n  - name: guard\n    type: direct\nlisten: :20000-50000\n",
+		"acl:\n  inline:\n    - direct(all)\nlisten: :20000-50000\noutbounds:\n  - name: guard\n    type: direct\n",
+		"listen: :20000-50000\noutbounds:\n  - name: guard\n    type: direct\n",
+	} {
+		r, err := LintHysteria2Safety([]byte(src))
+		if err != nil {
+			t.Fatalf("src=%q: %v", src, err)
+		}
+		found := false
+		for _, d := range r.Diagnostics {
+			if d.ID == "hysteria.port-hopping-range" && d.Level == LevelWarn {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("src=%q: the port-hopping warning disappeared (order-dependent parse): %+v", src, r.Diagnostics)
+		}
+	}
+}
+
+// R6: indentation-aware block termination — a deeper-indented block under
+// an unrelated top-level key must not leak into the acl/outbounds parse,
+// and the acl inline list must stop at its own indentation level.
+func TestSafetyIndentationAwareBlocks(t *testing.T) {
+	r, err := LintHysteria2Safety([]byte(`unrelated:
+  - this is not an acl rule
+acl:
+  inline:
+    - direct(all)
+outbounds:
+  - name: guard
+    type: direct
+listen: :20000-50000
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unrelated block's item must not become an ACL rule (it would be
+	// unparseable as one and fail closed); the acl/ports facts stand.
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.ID == "hysteria.port-hopping-range" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the port-hopping fact must survive unrelated blocks: %+v", r.Diagnostics)
+	}
+}

@@ -161,6 +161,16 @@ func LintHysteria2Safety(configYAML []byte) (Report, error) {
 				Reason: "trafficStats.listen binds a specific non-loopback address; reachability depends on the machine's firewall state, which a static lint cannot observe",
 			})
 		}
+		if cfg.statsSecretEmpty {
+			// ZAI-128: an empty/quoted-empty/null secret value is a
+			// semantics-unknown case — the documentation does not define
+			// whether the core treats it as a configured secret. Never a
+			// PASS: the conservative no-secret warning stays alongside.
+			report.Diagnostics = append(report.Diagnostics, Diagnostic{
+				ID: "hysteria.stats-secret-empty", Level: LevelWarn, Evidence: Unverified,
+				Reason: "a trafficStats.secret key is present but its value is empty (or null) in the sanitized input: whether the core treats an empty value as a configured secret is not defined by the documentation — the authentication state is UNVERIFIED, and the conservative no-auth warning below still applies",
+			})
+		}
 		if !cfg.statsSecret {
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "hysteria.stats-no-secret", Level: LevelWarn, Evidence: ConfigInferred,
