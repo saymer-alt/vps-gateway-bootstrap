@@ -382,3 +382,131 @@ func TestPreambleNeverClaimsEgress(t *testing.T) {
 		}
 	}
 }
+
+// --- ZAI-127 review regressions (PR #51) ---
+
+// R1: official sourceIP/localIP/localPort fields make a rule restrictive
+// — a rule restricted only by sourceIP must NOT be reported as a
+// catch-all. Fails-first: the pre-review model omitted localPort/localIP
+// and used the wrong source name, so such rules were misclassified.
+func TestXraySourceIPLocalPortFieldsRestrictive(t *testing.T) {
+	r, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "proxy", "protocol": "vless"}],
+		"routing": {"rules": [
+			{"outboundTag": "proxy", "sourceIP": ["10.0.0.0/8"]},
+			{"outboundTag": "proxy", "localIP": ["127.0.0.1"], "localPort": "8080-8443"}
+		]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	noDiag(t, r, "xray.catch-all-rule")
+	wantDiag(t, r, "xray.no-explicit-catch-all")
+}
+
+// R2: official JSON types must parse — attrs as an OBJECT (with a
+// numeric-ish value and pseudo-headers), vlessRoute as a NUMBER, ports as
+// NUMBERS and comma-range strings. A wrong Go model would refuse correct
+// configurations outright.
+func TestXrayOfficialTypesParse(t *testing.T) {
+	r, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "proxy", "protocol": "vless"}],
+		"routing": {"rules": [{
+			"outboundTag": "proxy",
+			"attrs": {":method": "GET", "x-num": 7},
+			"vlessRoute": 443,
+			"port": 53,
+			"sourcePort": "1000-2000",
+			"localPort": "80,8080-8443"
+		}]}
+	}`))
+	if err != nil {
+		t.Fatalf("official types must parse: %v", err)
+	}
+	noDiag(t, r, "xray.catch-all-rule") // every field above is restrictive
+	// String form of vlessRoute and a plain-string port also parse.
+	if _, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "proxy", "protocol": "vless"}],
+		"routing": {"rules": [{"outboundTag": "proxy", "vlessRoute": "443", "port": "53,443,1000-2000"}]}
+	}`)); err != nil {
+		t.Fatalf("string vlessRoute/port must parse: %v", err)
+	}
+}
+
+// R3: with a routing script present, rules-based conclusions are
+// degraded to UNVERIFIED and carry the Lua scope note.
+func TestXrayLuaDegradesRulesConclusions(t *testing.T) {
+	r, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "proxy", "protocol": "vless"}],
+		"routing": {"script": "synthetic", "rules": [
+			{"outboundTag": "proxy", "domain": ["domain:example.internal"]},
+			{"outboundTag": "proxy", "network": "tcp,udp"}
+		]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := wantDiag(t, r, "xray.catch-all-rule")
+	if d.Evidence != Unverified || !strings.Contains(d.Reason, "overridden by Lua") {
+		t.Fatalf("catch-all must be degraded under Lua: %+v", d)
+	}
+	d = wantDiag(t, r, "xray.lua-routing")
+	if !strings.Contains(d.Reason, "degraded to UNVERIFIED") {
+		t.Fatalf("the standing Lua warning must scope the rules pass: %q", d.Reason)
+	}
+	// Without Lua the same shape keeps its by-construction classification.
+	r2, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "proxy", "protocol": "vless"}],
+		"routing": {"rules": [{"outboundTag": "proxy", "network": "tcp,udp"}]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := wantDiag(t, r2, "xray.catch-all-rule"); d.Evidence != ConfigInferred {
+		t.Fatalf("without Lua the classification stays CONFIG-INFERRED: %+v", d)
+	}
+}
+
+// R4: an `all` rule with a port-restricted selector (`*/443`) does NOT
+// shadow later rules — traffic on other ports still reaches them.
+// Fails-first: the pre-review prefix check (`strings.HasPrefix(p, "*")`)
+// classified `*/443` as both-protocols.
+func TestHysteriaAllWithPortRestrictionDoesNotShadow(t *testing.T) {
+	r, err := LintHysteria2([]byte(`acl:
+  inline:
+    - direct(all, */443)
+    - reject(all, udp/53)
+outbounds:
+  - name: guard
+    type: direct
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	noDiag(t, r, "hysteria.acl-all-placement")
+	// A both-protocol port-free `all` still shadows.
+	r2, err := LintHysteria2([]byte(`acl:
+  inline:
+    - direct(all)
+    - reject(all, udp)
+outbounds:
+  - name: guard
+    type: direct
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDiag(t, r2, "hysteria.acl-all-placement")
+	// Port-restricted rules still feed the UDP-over-http fact.
+	r3, err := LintHysteria2([]byte(`acl:
+  inline:
+    - web(all, udp/53)
+outbounds:
+  - name: web
+    type: http
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDiag(t, r3, "hysteria.udp-over-http")
+}
