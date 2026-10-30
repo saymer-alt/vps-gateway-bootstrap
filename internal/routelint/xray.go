@@ -107,22 +107,32 @@ func LintXray(configJSON []byte) (Report, error) {
 
 	// Unmatched-traffic fallback: the first outbound (official: "When no
 	// rule is matched, traffic is sent via the first outbound by default").
+	// ZAI-128 review: with a routing script configured, Lua takes over
+	// routing — the fallback conclusion is a property of the SCRIPT's
+	// behavior then, so the static classification is degraded to
+	// UNVERIFIED (the outbound STRUCTURE is still reported).
 	first := cfg.Outbounds[0]
+	fallbackEvidence := Evidence(ConfigInferred)
+	fallbackScope := ""
+	if luaRouting {
+		fallbackEvidence = Unverified
+		fallbackScope = "; NOTE: a routing script is configured, so the effective fallback is decided by the script and this static classification is UNVERIFIED"
+	}
 	switch first.Protocol {
 	case "freedom":
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
-			ID: "xray.unmatched-fallback-direct", Level: LevelWarn, Evidence: ConfigInferred,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (direct egress by construction)", first.Tag, first.Protocol),
+			ID: "xray.unmatched-fallback-direct", Level: LevelWarn, Evidence: fallbackEvidence,
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (direct egress by construction)%s", first.Tag, first.Protocol, fallbackScope),
 		})
 	case "blackhole":
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
-			ID: "xray.unmatched-fallback-blackhole", Level: LevelInfo, Evidence: ConfigInferred,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (traffic discarded by construction)", first.Tag, first.Protocol),
+			ID: "xray.unmatched-fallback-blackhole", Level: LevelInfo, Evidence: fallbackEvidence,
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (traffic discarded by construction)%s", first.Tag, first.Protocol, fallbackScope),
 		})
 	default:
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
-			ID: "xray.unmatched-fallback-first", Level: LevelInfo, Evidence: ConfigInferred,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (a proxy outbound — the fallback is not direct egress)", first.Tag, first.Protocol),
+			ID: "xray.unmatched-fallback-first", Level: LevelInfo, Evidence: fallbackEvidence,
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (a proxy outbound — the fallback is not direct egress)%s", first.Tag, first.Protocol, fallbackScope),
 		})
 	}
 
@@ -189,9 +199,17 @@ func LintXray(configJSON []byte) (Report, error) {
 	case "", "AsIs":
 		// documented default; no routing-time DNS.
 	case "IPIfNonMatch", "IPOnDemand":
+		ev := Evidence(ConfigInferred)
+		scope := ""
+		if luaRouting {
+			// ZAI-128 review: with Lua routing the strategy may be bypassed
+			// entirely — the DNS-invocation conclusion is not a fact.
+			ev = Unverified
+			scope = "; NOTE: a routing script is configured, so the strategy may be bypassed by the script and this classification is UNVERIFIED"
+		}
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
-			ID: "xray.routing-dns", Level: LevelInfo, Evidence: ConfigInferred,
-			Reason: fmt.Sprintf("domainStrategy %q can invoke the built-in DNS during ROUTING (a routing-time lookup, distinct from the final outbound's DNS and from observed egress); resolved addresses include IPv6 unless the DNS queryStrategy restricts it", cfg.Routing.DomainStrategy),
+			ID: "xray.routing-dns", Level: LevelInfo, Evidence: ev,
+			Reason: fmt.Sprintf("domainStrategy %q can invoke the built-in DNS during ROUTING (a routing-time lookup, distinct from the final outbound's DNS and from observed egress); resolved addresses include IPv6 unless the DNS queryStrategy restricts it%s", cfg.Routing.DomainStrategy, scope),
 		})
 	default:
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{

@@ -510,3 +510,41 @@ outbounds:
 	}
 	wantDiag(t, r3, "hysteria.udp-over-http")
 }
+
+// ZAI-128 review regression: with a routing script configured, Lua takes
+// routing over — the fallback-through-first-outbound conclusion and the
+// routing-time DNS conclusion are properties of the SCRIPT then, and
+// must be UNVERIFIED, never CONFIG-INFERRED. Without a script the same
+// shapes keep their documented by-construction classification.
+func TestXrayLuaDegradesFallbackAndRoutingDNS(t *testing.T) {
+	withScript := `{
+		"outbounds": [{"tag": "direct-out", "protocol": "freedom"}, {"tag": "proxy", "protocol": "vless"}],
+		"routing": {"script": "synthetic", "domainStrategy": "IPIfNonMatch", "rules": [{"outboundTag": "proxy", "domain": ["domain:example.internal"]}]}
+	}`
+	r, err := LintXray([]byte(withScript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := wantDiag(t, r, "xray.unmatched-fallback-direct")
+	if d.Evidence != Unverified || !strings.Contains(d.Reason, "decided by the script") {
+		t.Fatalf("the fallback conclusion must be UNVERIFIED under Lua: %+v", d)
+	}
+	d = wantDiag(t, r, "xray.routing-dns")
+	if d.Evidence != Unverified || !strings.Contains(d.Reason, "bypassed by the script") {
+		t.Fatalf("the routing-dns conclusion must be UNVERIFIED under Lua: %+v", d)
+	}
+	// Without a script the same shapes stay CONFIG-INFERRED.
+	r2, err := LintXray([]byte(`{
+		"outbounds": [{"tag": "direct-out", "protocol": "freedom"}],
+		"routing": {"domainStrategy": "IPIfNonMatch", "rules": [{"outboundTag": "proxy", "domain": ["domain:example.internal"]}]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := wantDiag(t, r2, "xray.unmatched-fallback-direct"); d.Evidence != ConfigInferred {
+		t.Fatalf("without Lua the fallback stays CONFIG-INFERRED: %+v", d)
+	}
+	if d := wantDiag(t, r2, "xray.routing-dns"); d.Evidence != ConfigInferred {
+		t.Fatalf("without Lua the routing-dns stays CONFIG-INFERRED: %+v", d)
+	}
+}
