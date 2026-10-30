@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -89,7 +90,7 @@ func TestApplyDryRunConvergedPlanReportsNoChange(t *testing.T) {
 	if !strings.Contains(out.String(), "NO_CHANGE") || !strings.Contains(out.String(), "verifiably reached") {
 		t.Fatalf("the converged outcome must be named explicitly:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "no plan actions were produced") || !strings.Contains(out.String(), "reports it active") {
+	if !strings.Contains(out.String(), "no plan actions were produced") || !strings.Contains(out.String(), "explicitly desired active under OWNED ownership") || !strings.Contains(out.String(), "model diff is NO_CHANGE") {
 		t.Fatalf("the zero-action and verification facts must be stated:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "apply restricted to the first production experiment") {
@@ -125,6 +126,48 @@ func TestApplyDryRunZeroPlanWithoutGoalIsNotNoChange(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "apply restricted to the first production experiment") {
 		t.Fatalf("the guard refusal must stand:\n%s", out.String())
+	}
+}
+
+// ZAI-127 correction, required case 2: a COMPLETELY EMPTY user config
+// ({}) must not receive a false NO_CHANGE success — nothing is desired,
+// so nothing is converged.
+func TestApplyDryRunEmptyUserConfigIsNotNoChange(t *testing.T) {
+	empty := writeApplyConfig(t, map[string]any{})
+	o, probe := convergedTestOrchestrator(t)
+	var out strings.Builder
+	code := runApplyWith([]string{"--dry-run", "--observe-service-report", "--config", empty}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("an empty configuration must not be a NO_CHANGE success, code=%d output:\n%s", code, out.String())
+	}
+	if strings.Contains(out.String(), "NO_CHANGE") {
+		t.Fatal("an empty configuration must not be reported as NO_CHANGE")
+	}
+	if probe.executorCalls != 0 || probe.observerCalls != 0 {
+		t.Fatalf("nothing may execute for an empty config: executor=%d observer=%d", probe.executorCalls, probe.observerCalls)
+	}
+}
+
+// ZAI-127 correction, required case 3: the REAL apply path (no
+// --dry-run) keeps the pre-existing prohibition for a converged plan —
+// the guard refusal with exit 3, no execution, no state written.
+func TestApplyRealApplyConvergedPlanStillForbidden(t *testing.T) {
+	o, probe := convergedTestOrchestrator(t)
+	prepared := o.Prepare(firstExperimentConfig(), rootOpts())
+	prefix := fingerprintPrefix(t, prepared)
+	var out strings.Builder
+	code := runApplyWith([]string{"--config", experimentConfig(t), "--confirm", prefix, "--observe-service-report"}, o, rootOpts(), strings.NewReader(""), &out, &out)
+	if code != 3 {
+		t.Fatalf("the real apply of a converged plan must stay forbidden, code=%d output:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "apply restricted to the first production experiment") {
+		t.Fatalf("the guard refusal must be the outcome:\n%s", out.String())
+	}
+	if probe.executorCalls != 0 || probe.observerCalls != 0 {
+		t.Fatalf("a refused apply must touch nothing: executor=%d observer=%d", probe.executorCalls, probe.observerCalls)
+	}
+	if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) {
+		t.Fatalf("no state may be written by a refused apply: %v", err)
 	}
 }
 
