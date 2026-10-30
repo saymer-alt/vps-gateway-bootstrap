@@ -69,13 +69,42 @@ const (
 )
 
 // bindClass reduces a listen value to its bind class without retaining
-// the concrete address.
+// the concrete address. IPv6 handling (ZAI-127 review): a bracketed host
+// ([...]) is classified by its content; :: is the IPv6 wildcard, ::1 the
+// IPv6 loopback, and any other bracketed or colon-bearing host is a
+// specific non-loopback bind — a global IPv6 address must NOT read as
+// loopback just because the string contains colons.
 func bindClass(v string) string {
 	v = strings.TrimSpace(v)
-	if v == "" || v == ":" || strings.HasPrefix(v, ":") || strings.HasPrefix(v, "0.0.0.0") || v == "::" || strings.HasPrefix(v, "[::]") {
+	// Strip a bracketed host prefix for classification ("[::1]:80" → "::1").
+	if strings.HasPrefix(v, "[") {
+		if i := strings.Index(v, "]"); i > 1 {
+			host := v[1:i]
+			if host == "::" {
+				return "wildcard"
+			}
+			if host == "::1" {
+				return "loopback"
+			}
+			return "specific"
+		}
+		return "wildcard" // malformed bracket: fail loud, treat as exposed
+	}
+	if v == "" || v == ":" || v == "::" || strings.HasPrefix(v, "0.0.0.0") {
 		return "wildcard"
 	}
-	if strings.HasPrefix(v, "127.") || strings.HasPrefix(v, "::1") || v == "localhost" {
+	// An unbracketed IPv6 literal starts with ':' — classify it by its
+	// leading group instead of treating every colon-prefix as wildcard.
+	if strings.HasPrefix(v, ":") {
+		if strings.HasPrefix(v, "::1") && (len(v) == 3 || v[3] == ':') {
+			return "loopback"
+		}
+		return "wildcard"
+	}
+	if v == "localhost" || strings.HasPrefix(v, "127.") {
+		return "loopback"
+	}
+	if strings.HasPrefix(v, "::1") && (len(v) == 4 || v[4] == ':') {
 		return "loopback"
 	}
 	return "specific"
@@ -109,18 +138,22 @@ func LintHysteria2Safety(configYAML []byte) (Report, error) {
 		class := bindClass(cfg.statsListen)
 		switch class {
 		case "wildcard":
+			w := "without a configured secret it answers unauthenticated (documented)"
+			if cfg.statsSecret {
+				w = "a non-empty secret is configured (value never read)"
+			}
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "hysteria.stats-wildcard", Level: LevelWarn, Evidence: ConfigInferred,
-				Reason: "trafficStats.listen binds a WILDCARD address: the API is potentially reachable from outside the host; without a configured secret it answers unauthenticated (documented), and the API can both report stats and manage connections (kick)",
+				Reason: "trafficStats.listen binds a WILDCARD address: the API is potentially reachable from outside the host; " + w + ", and the API can both report stats and manage connections (kick)",
 			})
 		case "loopback":
-			auth := "with"
+			auth := "a non-empty"
 			if !cfg.statsSecret {
-				auth = "WITHOUT"
+				auth = "NO"
 			}
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "hysteria.stats-loopback", Level: LevelInfo, Evidence: ConfigInferred,
-				Reason: fmt.Sprintf("trafficStats.listen binds the loopback interface; remote exposure is not implied by this configuration alone (secret %s a key in the sanitized input — value never read)", auth),
+				Reason: fmt.Sprintf("trafficStats.listen binds the loopback interface; remote exposure is not implied by this configuration alone (%s secret value in the sanitized input — values never read; an absent or EMPTY secret is no protection by the documented Authorization rule)", auth),
 			})
 		default:
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
@@ -131,7 +164,7 @@ func LintHysteria2Safety(configYAML []byte) (Report, error) {
 		if !cfg.statsSecret {
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "hysteria.stats-no-secret", Level: LevelWarn, Evidence: ConfigInferred,
-				Reason: "the trafficStats block carries no secret key: the documented Authorization requirement does not apply, so every reachable client can query and manage the API",
+				Reason: "the trafficStats block carries no (non-empty) secret: the documented Authorization requirement does not apply, so every reachable client can query and manage the API",
 			})
 		}
 	}

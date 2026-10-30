@@ -254,6 +254,45 @@ type yamlLine struct {
 // indent 0 select the mode; blocks under uninterpreted keys are skipped
 // without interpretation; constructs inside acl/outbounds that the subset
 // does not define fail closed.
+// isFlowCollection reports whether a trimmed line actually opens a YAML
+// flow collection ({...} / [...]) as its value: the first bracket-like
+// byte after the colon/indicator must be a flow opener AND the value
+// must not be an IPv6-style bracketed host (which always closes the
+// brackets before the port digits and contains no commas between them).
+func isFlowCollection(t string) bool {
+	v := t
+	if _, rest, ok := strings.Cut(t, ":"); ok && strings.TrimSpace(rest) != "" {
+		v = strings.TrimSpace(rest)
+	} else if strings.HasPrefix(v, "- ") {
+		v = strings.TrimSpace(v[2:])
+	}
+	if v == "" {
+		return false
+	}
+	switch v[0] {
+	case '{':
+		return true
+	case '[':
+		// A YAML flow sequence opens '[' and its next byte is not ':'.
+		// An IPv6 literal opens '[' with ':' (or digits followed by ':').
+		if len(v) > 1 && v[1] == ':' {
+			return false
+		}
+		// Digits/hex then ':' — still an IPv6 host, not a flow sequence.
+		for i := 1; i < len(v); i++ {
+			c := v[i]
+			if c == ':' {
+				return false
+			}
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+				break
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func parseHysteriaYAML(src string) (hysteriaConfig, error) {
 	var lines []yamlLine
 	for i, raw := range strings.Split(src, "\n") {
@@ -266,8 +305,16 @@ func parseHysteriaYAML(src string) (hysteriaConfig, error) {
 			// an explicitly empty list is a legal empty block
 			continue
 		}
-		if strings.Contains(t, ": {") || strings.Contains(t, ": [") || strings.HasPrefix(t, "- {") {
-			return hysteriaConfig{}, fmt.Errorf("line %d: flow collections are outside the strict subset", i+1)
+		// Flow-collection detection must not false-positive on IPv6 bind
+		// literals: `[::]:9999` and `[2001:db8::1]:443` contain ": ["-like
+		// byte pairs inside brackets. A flow collection OPENS with "{" or
+		// "[" as the first non-space byte of the VALUE (or of the item).
+		if strings.HasSuffix(t, "{") || strings.HasSuffix(t, "[") ||
+			strings.Contains(t, ": {") || strings.Contains(t, ": [ {") ||
+			strings.HasPrefix(t, "- {") {
+			if isFlowCollection(t) {
+				return hysteriaConfig{}, fmt.Errorf("line %d: flow collections are outside the strict subset", i+1)
+			}
 		}
 		lines = append(lines, yamlLine{indent: len(raw) - len(strings.TrimLeft(raw, " \t")), text: t, num: i + 1})
 	}
@@ -328,7 +375,11 @@ func parseTrafficStatsBlock(lines []yamlLine, i int, cfg *hysteriaConfig) int {
 			case "listen":
 				cfg.statsListen = strings.TrimSpace(v)
 			case "secret":
-				cfg.statsSecret = true // presence only; value never retained
+				// ZAI-127 review: an EMPTY secret value is no protection —
+				// the documented Authorization requirement is driven by
+				// "an API secret is set", and an empty value is not a set
+				// secret. Presence counts only with a non-empty value.
+				cfg.statsSecret = strings.TrimSpace(v) != ""
 			}
 		}
 	}

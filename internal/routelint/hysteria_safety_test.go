@@ -184,3 +184,77 @@ func reasons(r Report) []string {
 	}
 	return out
 }
+
+// --- ZAI-127 review regressions (PR #52) ---
+
+// R1: an EMPTY secret value is NO protection — the no-secret WARN must
+// fire. Fails-first: the pre-review presence check counted an empty
+// value as a configured secret.
+func TestSafetyEmptySecretIsNoProtection(t *testing.T) {
+	r, err := LintHysteria2Safety([]byte(`trafficStats:
+  listen: :9999
+  secret:
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := wantDiag(t, r, "hysteria.stats-no-secret")
+	if d.Level != LevelWarn || !strings.Contains(d.Reason, "non-empty") {
+		t.Fatalf("an empty secret must be reported as no protection: %+v", d)
+	}
+	// And the loopback wording is consistent about empty secrets.
+	r2, err := LintHysteria2Safety([]byte("trafficStats:\n  listen: 127.0.0.1:9999\n  secret:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := wantDiag(t, r2, "hysteria.stats-loopback")
+	if !strings.Contains(d2.Reason, "EMPTY secret is no protection") {
+		t.Fatalf("the loopback reason must state the empty-secret fact: %q", d2.Reason)
+	}
+}
+
+// R2: IPv6 bind classification — the IPv6 wildcard is wildcard, ::1 is
+// loopback, and a GLOBAL IPv6 address is a specific bind (never loopback
+// because the string contains colons).
+func TestSafetyIPv6BindClasses(t *testing.T) {
+	cases := []struct {
+		listen string
+		wantID string
+	}{
+		{"[::]:9999", "hysteria.stats-wildcard"},
+		{"[::1]:9999", "hysteria.stats-loopback"},
+		{"[2001:db8::10]:9999", "hysteria.stats-specific-bind"},
+		{"::1:9999", "hysteria.stats-loopback"},
+	}
+	for _, tc := range cases {
+		r, err := LintHysteria2Safety([]byte("trafficStats:\n  listen: " + tc.listen + "\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", tc.listen, err)
+		}
+		found := false
+		for _, d := range r.Diagnostics {
+			if d.ID == tc.wantID {
+				found = true
+			}
+			if !strings.Contains(d.Reason, tc.listen) == false && strings.Contains(d.Reason, tc.listen) {
+				t.Fatalf("%q: the concrete bind must never be echoed: %q", tc.listen, d.Reason)
+			}
+		}
+		if !found {
+			t.Fatalf("%q: want diagnostic %q, got %+v", tc.listen, tc.wantID, r.Diagnostics)
+		}
+	}
+}
+
+// R3: unsupported YAML forms inside trafficStats degrade the protection
+// conclusion instead of implying safety — an unreadable secret keeps the
+// no-secret WARN (incompleteness is never turned into confirmed safety).
+func TestSafetyUnsupportedFormStaysConservative(t *testing.T) {
+	// A secret declared as a nested mapping (outside the strict subset):
+	// the parser does not read it, so protection cannot be confirmed.
+	r, err := LintHysteria2Safety([]byte("trafficStats:\n  listen: :9999\n  secret:\n    env: SYNTHETIC\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDiag(t, r, "hysteria.stats-no-secret")
+}
