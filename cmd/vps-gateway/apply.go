@@ -196,7 +196,26 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		return 3
 	}
 	// Scenario guard: this build executes only the first production experiment.
+	// ZAI-124 addendum: a CONVERGED plan (the desired state already matches
+	// the machine — zero actions, the ZAI-123 live finding on a healthy
+	// fail2ban) is an informational NO_CHANGE on the dry-run path, not a
+	// failed operation. The mutation path keeps the guard refusal intact:
+	// firstExperimentGuard is not weakened where it gates execution.
 	if err := firstExperimentGuard(p); err != nil {
+		// ZAI-127 review + correction: NO_CHANGE is claimed ONLY for the
+		// verified converged experiment — the exact allowed service is
+		// EXPLICITLY desired active, OWNED, the model diff shows NO_CHANGE
+		// for its resource, and the plan carries no other actions. A
+		// zero-action plan alone (empty or unrelated configuration) is not
+		// a convergence fact; presenting it as success would be a false
+		// NO_CHANGE.
+		if dryRun && len(p.Plan.Actions) == 0 && experimentConverged(p) {
+			fmt.Fprintln(stdout, "NO_CHANGE: the allowed experiment goal is verifiably reached (fail2ban.service is explicitly desired active under OWNED ownership, the model diff is NO_CHANGE for it, and no plan actions were produced); nothing to confirm or execute.")
+			if observeReport {
+				fmt.Fprintln(stdout, "service observation skipped: a converged plan produces no engine attempt to observe.")
+			}
+			return 0
+		}
 		fmt.Fprintln(stderr, "apply restricted to the first production experiment:", err)
 		return 3
 	}
@@ -322,6 +341,40 @@ func operatorName() string {
 		return "cli:" + u.Username
 	}
 	return "cli:unknown"
+}
+
+// experimentConverged reports whether the ALLOWED experiment is verifiably
+// converged: the exact resource (service.fail2ban.service) is explicitly
+// desired active in the planning model, declared OWNED, the model diff
+// classifies it NO_CHANGE, and the plan carries no other actions (ZAI-127
+// correction). A zero-action plan alone proves nothing — an empty or
+// unrelated configuration also produces one.
+func experimentConverged(p orchestrate.Plan) bool {
+	const resource = "service.fail2ban.service"
+	desired := false
+	for _, svc := range p.Model.Desired.Services {
+		if svc.Name == "fail2ban.service" && svc.Active != nil && *svc.Active {
+			desired = true
+		}
+	}
+	if !desired {
+		return false
+	}
+	if p.Model.Ownership[resource] != state.Owned {
+		return false
+	}
+	noChange := false
+	for _, d := range p.Model.Diff {
+		if d.Resource != resource {
+			// Any other requested change disqualifies the "converged
+			// experiment" claim: NO_CHANGE describes THIS resource only.
+			return false
+		}
+		if d.Kind == state.NoChange && d.Ownership == state.Owned {
+			noChange = true
+		}
+	}
+	return noChange
 }
 
 // observationVerdictMeaning states, per closed vocabulary class, exactly
