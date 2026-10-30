@@ -3,8 +3,62 @@ package routelint
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
+
+// xrayRule is the typed view of one routing rule under the OFFICIAL JSON
+// schema (verified 2026-10-30, https://xtls.github.io/en/config/routing.html):
+//   - attrs: object (string keys → string values), NOT an array;
+//   - vlessRoute: number | string (same syntax as port);
+//   - port/sourcePort/localPort: number | string, strings carry comma-
+//     separated ports and a-b ranges;
+//   - sourceIP: JSON name "sourceIP" (alias "source" is also accepted by
+//     the core) — modeled as a string list; localIP likewise;
+//   - localPort: JSON name "localPort" (the model previously omitted it
+//     entirely).
+// Loose JSON types here keep CORRECT configurations parseable: a rule
+// the core would accept must never be refused by this lint because of a
+// wrong Go model (ZAI-127 review).
+type xrayRule struct {
+	OutboundTag string `json:"outboundTag"`
+	BalancerTag string `json:"balancerTag"`
+	Network     string `json:"network"`
+	Domain      []string `json:"domain"`
+	IP          []string `json:"ip"`
+	Port        json.RawMessage `json:"port"`
+	SourcePort  json.RawMessage `json:"sourcePort"`
+	LocalPort   json.RawMessage `json:"localPort"`
+	Source      json.RawMessage `json:"sourceIP"`
+	LocalIP     json.RawMessage `json:"localIP"`
+	Protocol    []string `json:"protocol"`
+	InboundTag  []string `json:"inboundTag"`
+	User        []string `json:"user"`
+	Attrs       map[string]json.RawMessage `json:"attrs"`
+	Process     []string `json:"process"`
+	VlessRoute  json.RawMessage `json:"vlessRoute"`
+}
+
+// rawNonEmpty reports whether a loose-typed field carries a restrictive
+// condition: any JSON value other than null, empty array, empty object
+// or empty string is restrictive.
+func rawNonEmpty(raw json.RawMessage) bool {
+	t := strings.TrimSpace(string(raw))
+	switch t {
+	case "", "null", "{}", "[]", `""`:
+		return false
+	}
+	return true
+}
+
+// attrsNonEmpty reports whether an attrs object carries at least one
+// condition entry (null/absent/empty object are non-restrictive).
+func attrsNonEmpty(attrs map[string]json.RawMessage) bool {
+	return len(attrs) > 0
+}
+
+// portFields returns the rule's port-family fields (port, sourcePort,
+// localPort) as display strings without echoing their values.
 // LintXray statically lints the ROUTING POLICY of a sanitized Xray server
 // configuration (JSON bytes) and reports the facts the official routing
 // specification makes mechanically derivable: the unmatched-traffic
@@ -24,23 +78,7 @@ func LintXray(configJSON []byte) (Report, error) {
 	var cfg struct {
 		Routing struct {
 			DomainStrategy string `json:"domainStrategy"`
-			Rules          []struct {
-				OutboundTag   string   `json:"outboundTag"`
-				BalancerTag   string   `json:"balancerTag"`
-				Network       string   `json:"network"`
-				Domain        []string `json:"domain"`
-				IP            []string `json:"ip"`
-				Port          string   `json:"port"`
-				SourcePort    string   `json:"sourcePort"`
-				Source        []string `json:"source"`
-				Protocol      []string `json:"protocol"`
-				InboundTag    []string `json:"inboundTag"`
-				User          []string `json:"user"`
-				Attr          string   `json:"attrs"`
-				Process       []string `json:"process"`
-				VlessRoute    *bool    `json:"vlessRoute"`
-				HasScriptRule bool     `json:"-"`
-			} `json:"rules"`
+			Rules          []xrayRule `json:"rules"`
 			Script    string `json:"script"`
 			Balancers []struct {
 				Tag string `json:"tag"`
@@ -55,6 +93,10 @@ func LintXray(configJSON []byte) (Report, error) {
 		return Report{}, fmt.Errorf("routelint/xray: configuration is not parseable JSON: %w", err)
 	}
 	report := Report{Core: "xray", Preamble: preamble("Xray")}
+	// ZAI-127 review: with a routing script present, static rules may be
+	// overridden by Lua — every rules-based conclusion below is degraded
+	// to UNVERIFIED (the loop reports them as facts of the TEXT only).
+	luaRouting := cfg.Routing.Script != ""
 	if len(cfg.Outbounds) == 0 {
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.no-outbounds", Level: LevelWarn, Evidence: Unverified,
@@ -112,22 +154,31 @@ func LintXray(configJSON []byte) (Report, error) {
 		// condition: only a target designation (outbound/balancer) and at
 		// most an unrestricted network selector. Such a rule matches every
 		// connection that reaches it.
-		restrictive := len(r.Domain) > 0 || len(r.IP) > 0 || len(r.Source) > 0 ||
-			len(r.Protocol) > 0 || len(r.InboundTag) > 0 || len(r.User) > 0 ||
-			len(r.Process) > 0 || r.Port != "" || r.SourcePort != "" ||
-			r.Attr != "" || r.VlessRoute != nil
+		restrictive := len(r.Domain) > 0 || len(r.IP) > 0 || len(r.Protocol) > 0 ||
+			len(r.InboundTag) > 0 || len(r.User) > 0 || len(r.Process) > 0 ||
+			rawNonEmpty(r.Port) || rawNonEmpty(r.SourcePort) || rawNonEmpty(r.LocalPort) ||
+			rawNonEmpty(r.Source) || rawNonEmpty(r.LocalIP) ||
+			attrsNonEmpty(r.Attrs) || rawNonEmpty(r.VlessRoute)
 		if !restrictive && (r.Network == "" || r.Network == "tcp,udp") {
 			catchAllSeen = true
+			ev := Evidence(ConfigInferred)
+			if luaRouting {
+				ev = Unverified
+			}
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
-				ID: "xray.catch-all-rule", Level: LevelInfo, Evidence: ConfigInferred,
-				Reason: fmt.Sprintf("rule %d carries no restrictive condition (network %q only): by construction it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx, r.Network),
+				ID: "xray.catch-all-rule", Level: LevelInfo, Evidence: ev,
+				Reason: catchAllReason(idx, r.Network, luaRouting),
 			})
 		}
 	}
 	if !catchAllSeen && len(cfg.Routing.Rules) > 0 {
+		ev := Evidence(ConfigInferred)
+		if luaRouting {
+			ev = Unverified
+		}
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
-			ID: "xray.no-explicit-catch-all", Level: LevelInfo, Evidence: ConfigInferred,
-			Reason: "no unconditional rule was found; unmatched traffic is governed by the documented first-outbound fallback reported above",
+			ID: "xray.no-explicit-catch-all", Level: LevelInfo, Evidence: ev,
+			Reason: noCatchAllReason(luaRouting),
 		})
 	}
 
@@ -159,22 +210,54 @@ func LintXray(configJSON []byte) (Report, error) {
 			}
 		}
 		if plain > 0 {
+			ev := Evidence(ConfigInferred)
+			if luaRouting {
+				ev = Unverified
+			}
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
-				ID: "xray.plain-domain-substring", Level: LevelInfo, Evidence: ConfigInferred,
-				Reason: fmt.Sprintf("rule %d contains %d plain domain string(s): by the documented semantics a plain string is a SUBSTRING (keyword) match, which is broader than a domain: or full: entry — listed here as a breadth note, destinations never echoed", i+1, plain),
+				ID: "xray.plain-domain-substring", Level: LevelInfo, Evidence: ev,
+				Reason: fmt.Sprintf("rule %d contains %d plain domain string(s): by the documented semantics a plain string is a SUBSTRING (keyword) match, which is broader than a domain: or full: entry — listed here as a breadth note, destinations never echoed%s", i+1, plain, luaNote(luaRouting)),
 			})
 			break // one structural note is enough; do not enumerate rules
 		}
 	}
 
-	// Lua routing script: when present, static rules are not authoritative.
-	if cfg.Routing.Script != "" {
+	// Lua routing script: when present, static rules are not authoritative —
+	// a standing warning that scopes every rules-based conclusion above.
+	if luaRouting {
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.lua-routing", Level: LevelWarn, Evidence: Unverified,
-			Reason: "the configuration contains a routing script; on cores that support it the static rules and domainStrategy may not be authoritative — the effective policy requires auditing the script, and this lint's rules pass must not be read as a policy conclusion",
+			Reason: "the configuration contains a routing script; on cores that support it the static rules and domainStrategy may not be authoritative — the effective policy requires auditing the script, and this lint's rules-based conclusions are degraded to UNVERIFIED and must not be read as policy facts",
 		})
 	}
 	return report, nil
+}
+
+// luaNote is the shared degradation suffix.
+func luaNote(lua bool) string {
+	if lua {
+		return "; a routing script is configured, so this text-level note may not describe the effective policy (UNVERIFIED)"
+	}
+	return ""
+}
+
+// catchAllReason builds the catch-all diagnostic reason; with a Lua
+// routing script the "by construction" claim is explicitly scoped away.
+func catchAllReason(idx int, network string, lua bool) string {
+	base := fmt.Sprintf("rule %d carries no restrictive condition (network %q only): it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx, network)
+	if lua {
+		return base + "; NOTE: a routing script is configured, so static rules may be overridden by Lua and this classification is UNVERIFIED"
+	}
+	return base[:0] + fmt.Sprintf("rule %d carries no restrictive condition (network %q only): by construction it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx, network)
+}
+
+// noCatchAllReason builds the absence note; scoped under Lua likewise.
+func noCatchAllReason(lua bool) string {
+	base := "no unconditional rule was found; unmatched traffic is governed by the documented first-outbound fallback reported above"
+	if lua {
+		return base + "; NOTE: a routing script is configured, so static rules may be overridden by Lua and this classification is UNVERIFIED"
+	}
+	return base
 }
 
 func hasDomainPrefix(d string) bool {

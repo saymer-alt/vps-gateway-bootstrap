@@ -145,17 +145,29 @@ type aclRule struct {
 }
 
 // matchesBothProtocols reports whether the rule's proto selector matches
-// both TCP and UDP (an omitted or wildcard selector).
+// both TCP and UDP across ALL ports — a precondition for the shadowing
+// claim. A port-restricted selector (e.g. `*/443`, `tcp/80`,
+// `udp/20000-30000`) does NOT shadow later rules: traffic on other ports
+// still reaches them, so an `all` rule with such a selector is not an
+// unconditional catch-all (ZAI-127 review: `all` + `*/443` must not be
+// reported as shadowing everything that follows).
 func (r aclRule) matchesBothProtocols() bool {
 	p := r.proto
 	if p == "" || p == "*" {
 		return true
 	}
-	return strings.HasPrefix(p, "*")
+	// proto/port composite: any explicit port restriction disqualifies
+	// the shadowing claim regardless of the proto part.
+	if i := strings.Index(p, "/"); i >= 0 {
+		return false
+	}
+	return p == "tcp,udp"
 }
 
 // matchesUDP reports whether the rule's proto selector can match UDP
-// traffic (an omitted selector matches both protocols).
+// traffic (an omitted selector matches both protocols). For a proto/port
+// composite the PORT part is ignored here on purpose: UDP over the
+// matched ports is what matters for the http-outbound rejection fact.
 func (r aclRule) matchesUDP() bool {
 	p := r.proto
 	if p == "" || p == "*" {
