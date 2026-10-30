@@ -110,6 +110,9 @@ internal/orchestrate apply lifecycle: prepare → confirm → lock → execute �
 internal/doctor      triage of discovery results (OK/WARN/FAIL)
 internal/netdiag     network-diagnostics/v1 passive evidence document (ZAI-91)
 internal/validate    strict effective-state gate (PASS/FAIL)
+internal/routelint   offline semantic routing-policy linter for Xray and
+                     Hysteria2 (Issues #22/#20; surfaced by the read-only
+                     lint-routing command, see docs/routelint-cli.md)
 internal/pipeline    read-only pipeline: discovery → model → diff → plan → preflight
 internal/probe       external management-probe model (controller-side; not wired)
 internal/lock        machine-local exclusive lock (compiled project identity)
