@@ -52,6 +52,16 @@ func (e *SSHExecutor) action(id, resource string) (state.Action, error) {
 	if a.Spec.SSH.Unit != "" {
 		if err := validateUnitName(a.Spec.SSH.Unit); err != nil { return state.Action{}, err }
 	}
+	// Stage 1 (docs/security-model.md §13): a syntactically valid SSH unit
+	// name is not a permission. Only the documented SSH units are
+	// manageable — a correctly named foreign unit must never replace the
+	// expected SSH service. The check normalizes the empty-unit default
+	// first, so the fallback cannot become a policy bypass.
+	unit := a.Spec.SSH.Unit
+	if unit == "" { unit = "ssh.service" }
+	if !sshUnitPolicy[unit] {
+		return state.Action{}, fmt.Errorf("unit %q is not in the compiled Stage 1 SSH policy (ssh.service/ssh.socket): mutation refused", unit)
+	}
 	return a, nil
 }
 
@@ -200,6 +210,20 @@ func (e *SSHExecutor) safePath(p string) (string, error) {
 	root := e.Root; if root == "" { root = "/" }; root = filepath.Clean(root)
 	rel, err := filepath.Rel(root, filepath.Clean(p))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) { return "", fmt.Errorf("SSH config path outside executor root: %s", p) }
+	// Stage 1 (docs/security-model.md §13): the managed SSH fragment is
+	// writable only inside the compiled drop-in namespace — never the main
+	// sshd_config, never a systemd unit file, never the trust anchor, and
+	// never through a symlinked component that would redirect the write
+	// outside the resolved root.
+	if !relativeInNamespace(rel, sshConfigNamespaces) {
+		return "", fmt.Errorf("SSH config path is outside the compiled Stage 1 fragment namespace (etc/ssh/sshd_config.d/): %s", p)
+	}
+	if relativeReservedTrust(rel) {
+		return "", errors.New("path is reserved trust-anchor material and cannot be managed: " + p)
+	}
+	if err := verifyPhysicalContainment(root, filepath.Join(root, rel)); err != nil {
+		return "", err
+	}
 	return filepath.Join(root, rel), nil
 }
 

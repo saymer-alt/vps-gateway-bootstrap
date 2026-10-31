@@ -184,6 +184,21 @@ func (e *FileExecutor) safePath(p string) (string, error) {
 	root := e.root()
 	rel, err := filepath.Rel(root, filepath.Clean(p))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) { return "", fmt.Errorf("path outside executor root: %s", p) }
+	// Stage 1 (docs/security-model.md §13): a plan-supplied path must sit
+	// inside the compiled managed namespace, never inside the reserved
+	// trust-anchor directory (root-relative layer), and must be physically
+	// contained — a symlinked component may never redirect the operation
+	// outside the resolved root. Declared ownership and a correct Root are
+	// never sufficient on their own.
+	if !relativeInNamespace(rel, managedFileNamespaces) {
+		return "", fmt.Errorf("path is outside the compiled Stage 1 file namespace (etc/vps-gateway/): %s", p)
+	}
+	if relativeReservedTrust(rel) {
+		return "", errors.New("path is reserved trust-anchor material and cannot be managed: " + p)
+	}
+	if err := verifyPhysicalContainment(root, filepath.Join(root, rel)); err != nil {
+		return "", err
+	}
 	return filepath.Join(root, rel), nil
 }
 

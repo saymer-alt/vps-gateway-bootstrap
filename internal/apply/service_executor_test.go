@@ -7,6 +7,19 @@ import (
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/state"
 )
 
+// testUnitPolicy is the documented TEST-ONLY service policy (set through
+// the unexported ServiceExecutor.unitPolicy seam): it exercises the
+// operation machinery — verb dispatch, composite operation order,
+// expected-state validation — with the synthetic demo/gateway units. The
+// COMPILED PRODUCTION POLICY is different and much narrower: exactly
+// `restart` on fail2ban.service (stage1_policy.go); production wiring sites
+// never set this seam, and that difference is pinned by
+// TestStage1ServicePolicyDefaultIsCompiled.
+var testUnitPolicy = map[string][]string{
+	"demo.service":    {"start", "stop", "restart", "reload", "enable", "disable", "enable-start", "disable-stop"},
+	"gateway.service": {"start", "stop", "restart", "reload", "enable", "disable", "enable-start", "disable-stop"},
+}
+
 func serviceAction(op, expected, rollback string) state.Action {
 	return state.Action{ID: "svc1", Resource: "test.service", Kind: state.ActionService, Ownership: state.Owned,
 		Spec: &state.ActionSpec{Service: &state.ServiceActionSpec{Name: "demo.service", Operation: op, ExpectedState: expected, RollbackOperation: rollback}}}
@@ -14,7 +27,7 @@ func serviceAction(op, expected, rollback string) state.Action {
 
 func TestServiceExecutorUsesTypedOperations(t *testing.T) {
 	var calls [][]string
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "stop")}, Runner: func(name string, args ...string) error {
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "stop")}, Runner: func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...)); return nil
 	}}
 	if err := e.Backup("svc1", "test.service"); err != nil { t.Fatal(err) }
@@ -26,18 +39,18 @@ func TestServiceExecutorUsesTypedOperations(t *testing.T) {
 
 func TestServiceExecutorRejectsExternal(t *testing.T) {
 	a := serviceAction("restart", "active", ""); a.Ownership = state.External
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": a}, Runner: func(string, ...string) error { return nil }}
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": a}, Runner: func(string, ...string) error { return nil }}
 	if err := e.Apply("svc1", "test.service", string(state.ActionService)); err == nil { t.Fatal("expected ownership rejection") }
 }
 
 func TestServiceExecutorRejectsUnknownOperation(t *testing.T) {
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("shell", "active", "")}, Runner: func(string, ...string) error { return nil }}
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("shell", "active", "")}, Runner: func(string, ...string) error { return nil }}
 	if err := e.Apply("svc1", "test.service", string(state.ActionService)); err == nil { t.Fatal("expected operation rejection") }
 }
 
 func TestServiceExecutorCompositeOperationsOrder(t *testing.T) {
 	var calls [][]string
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("enable-start", "active", "disable-stop")}, Runner: func(name string, args ...string) error {
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("enable-start", "active", "disable-stop")}, Runner: func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...)); return nil
 	}}
 	if err := e.Apply("svc1", "test.service", string(state.ActionService)); err != nil { t.Fatal(err) }
@@ -48,20 +61,20 @@ func TestServiceExecutorCompositeOperationsOrder(t *testing.T) {
 }
 
 func TestServiceExecutorValidateExpectedStates(t *testing.T) {
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("stop", "inactive", "")}, Runner: func(name string, args ...string) error {
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("stop", "inactive", "")}, Runner: func(name string, args ...string) error {
 		if args[0] == "is-active" { return errors.New("inactive unit") }
 		return nil
 	}}
 	if err := e.Validate("svc1", "test.service"); err != nil { t.Fatal(err) }
 	e.Runner = func(string, ...string) error { return nil }
 	if err := e.Validate("svc1", "test.service"); err == nil { t.Fatal("expected active service to fail inactive validation") }
-	bad := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("stop", "flying", "")}, Runner: func(string, ...string) error { return nil }}
+	bad := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("stop", "flying", "")}, Runner: func(string, ...string) error { return nil }}
 	if err := bad.Validate("svc1", "test.service"); err == nil { t.Fatal("expected unsupported expected-state rejection") }
 }
 
 func TestServiceExecutorRollbackWithoutOperationIsNoop(t *testing.T) {
 	var calls [][]string
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(name string, args ...string) error {
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...)); return nil
 	}}
 	if err := e.Rollback("svc1", "test.service"); err != nil { t.Fatal(err) }
@@ -69,12 +82,12 @@ func TestServiceExecutorRollbackWithoutOperationIsNoop(t *testing.T) {
 }
 
 func TestServiceExecutorRollbackRejectsUnknownOperation(t *testing.T) {
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "reboot")}, Runner: func(string, ...string) error { return nil }}
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "reboot")}, Runner: func(string, ...string) error { return nil }}
 	if err := e.Rollback("svc1", "test.service"); err == nil { t.Fatal("expected rollback operation rejection") }
 }
 
 func TestServiceExecutorApplyPropagatesFailure(t *testing.T) {
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(name string, args ...string) error {
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(name string, args ...string) error {
 		if args[0] == "restart" { return errors.New("job failed") }
 		return nil
 	}}
@@ -82,7 +95,7 @@ func TestServiceExecutorApplyPropagatesFailure(t *testing.T) {
 }
 
 func TestServiceExecutorRejectsUnknownActionOrResource(t *testing.T) {
-	e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(string, ...string) error { return nil }}
+	e := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: map[string]state.Action{"svc1": serviceAction("restart", "active", "")}, Runner: func(string, ...string) error { return nil }}
 	if err := e.Backup("missing", "test.service"); err == nil { t.Fatal("expected unknown action rejection") }
 	if err := e.Apply("svc1", "other.service", string(state.ActionService)); err == nil { t.Fatal("expected resource mismatch rejection") }
 }

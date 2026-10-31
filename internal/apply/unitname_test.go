@@ -73,12 +73,16 @@ func TestServiceExecutorRejectsMalformedUnitNameBeforeExec(t *testing.T) {
 }
 
 // Legitimate project unit names still reach systemctl (positive control).
+// What is under test here is the Stage-0 unit-NAME validation, not the
+// Stage-1 resource policy, so this control runs under an explicit test
+// policy that names every unit in the loop; the compiled production policy
+// stays pinned by TestStage1ServicePolicyDefaultIsCompiled.
 func TestServiceExecutorAcceptsManagedUnitNames(t *testing.T) {
 	for _, name := range []string{"fail2ban.service", "ssh.service", "ssh.socket", "demo.service"} {
 		a := serviceAction("restart", "active", "")
 		a.Spec.Service.Name = name
 		invoked := false
-		e := &ServiceExecutor{Actions: map[string]state.Action{"svc1": a}, Runner: func(name string, args ...string) error {
+		e := &ServiceExecutor{unitPolicy: map[string][]string{name: {"restart"}}, Actions: map[string]state.Action{"svc1": a}, Runner: func(name string, args ...string) error {
 			invoked = true
 			return nil
 		}}
