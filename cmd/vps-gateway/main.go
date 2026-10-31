@@ -40,6 +40,11 @@ commands:
                           transaction — it never authorizes or initiates
                           execution, and WARNING: apply with this flag can
                           still restart the service once confirmed
+  lint-routing --core xray|hysteria2 --config FILE [--json]
+                          offline static routing-policy lint of an
+                          operator-supplied sanitized configuration file;
+                          reads only that file (no machine, no network,
+                          no discovery, see docs/routelint-cli.md)
 
 flags:
   --timeout DURATION      limit every discovery command (default 60s, e.g. 30s, 2m)`
@@ -65,6 +70,8 @@ func main() {
 		code = runInstall(os.Args[2:])
 	case "apply":
 		code = runApply(os.Args[2:], nil, os.Stdin, os.Stdout, os.Stderr)
+	case "lint-routing":
+		code = runLintRouting(os.Args[2:], os.Stdout, os.Stderr)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		code = 2

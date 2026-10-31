@@ -122,17 +122,17 @@ func LintXray(configJSON []byte) (Report, error) {
 	case "freedom":
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.unmatched-fallback-direct", Level: LevelWarn, Evidence: fallbackEvidence,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (direct egress by construction)%s", first.Tag, first.Protocol, fallbackScope),
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound (position 1 of the outbounds list) has protocol \"freedom\" (direct egress by construction; the user-defined tag is not echoed)%s", fallbackScope),
 		})
 	case "blackhole":
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.unmatched-fallback-blackhole", Level: LevelInfo, Evidence: fallbackEvidence,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (traffic discarded by construction)%s", first.Tag, first.Protocol, fallbackScope),
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound (position 1 of the outbounds list) has protocol \"blackhole\" (traffic discarded by construction; the user-defined tag is not echoed)%s", fallbackScope),
 		})
 	default:
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.unmatched-fallback-first", Level: LevelInfo, Evidence: fallbackEvidence,
-			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound is tagged %q with protocol %q (a proxy outbound — the fallback is not direct egress)%s", first.Tag, first.Protocol, fallbackScope),
+			Reason: fmt.Sprintf("unmatched traffic falls back to the FIRST outbound by documented default; the first outbound (position 1 of the outbounds list) is a proxy outbound (the fallback is not direct egress; the protocol value is not echoed)%s", fallbackScope),
 		})
 	}
 
@@ -151,13 +151,13 @@ func LintXray(configJSON []byte) (Report, error) {
 		if r.OutboundTag != "" && !outboundTags[r.OutboundTag] {
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "xray.dangling-outbound-tag", Level: LevelWarn, Evidence: Unverified,
-				Reason: fmt.Sprintf("rule %d references outboundTag %q which is not defined in outbounds; the documented routing page does not specify the core's behavior for a missing tag — treat as a configuration error, not as a policy conclusion", idx, r.OutboundTag),
+				Reason: fmt.Sprintf("rule %d references an outboundTag that is not defined in the outbounds list (the value is not echoed); the documented routing page does not specify the core's behavior for a missing tag — treat as a configuration error, not as a policy conclusion", idx),
 			})
 		}
 		if r.BalancerTag != "" && !balancerTags[r.BalancerTag] {
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "xray.dangling-balancer-tag", Level: LevelWarn, Evidence: Unverified,
-				Reason: fmt.Sprintf("rule %d references balancerTag %q which is not defined in routing.balancers; the documented routing page does not specify the core's behavior for a missing balancer", idx, r.BalancerTag),
+				Reason: fmt.Sprintf("rule %d references a balancerTag that is not defined in routing.balancers (the value is not echoed); the documented routing page does not specify the core's behavior for a missing balancer", idx),
 			})
 		}
 		// A rule is a catch-all candidate when it carries no restrictive
@@ -177,7 +177,7 @@ func LintXray(configJSON []byte) (Report, error) {
 			}
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "xray.catch-all-rule", Level: LevelInfo, Evidence: ev,
-				Reason: catchAllReason(idx, r.Network, luaRouting),
+				Reason: catchAllReason(idx, luaRouting),
 			})
 		}
 	}
@@ -214,7 +214,7 @@ func LintXray(configJSON []byte) (Report, error) {
 	default:
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{
 			ID: "xray.routing-dns", Level: LevelInfo, Evidence: Unverified,
-			Reason: fmt.Sprintf("domainStrategy %q is not one of the documented AsIs/IPIfNonMatch/IPOnDemand values; the routing-time DNS behavior depends on the unreported core version", cfg.Routing.DomainStrategy),
+			Reason: "domainStrategy is not one of the documented AsIs/IPIfNonMatch/IPOnDemand values; the routing-time DNS behavior depends on the unreported core version (the configured value is not echoed)",
 		})
 	}
 
@@ -261,12 +261,14 @@ func luaNote(lua bool) string {
 
 // catchAllReason builds the catch-all diagnostic reason; with a Lua
 // routing script the "by construction" claim is explicitly scoped away.
-func catchAllReason(idx int, network string, lua bool) string {
-	base := fmt.Sprintf("rule %d carries no restrictive condition (network %q only): it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx, network)
+// The rule's (unrestricted) network selector is deliberately not echoed —
+// the diagnostic is localized by the rule number only.
+func catchAllReason(idx int, lua bool) string {
+	base := fmt.Sprintf("rule %d carries no restrictive condition (no protocol, address, port or other restrictive selector): it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx)
 	if lua {
 		return base + "; NOTE: a routing script is configured, so static rules may be overridden by Lua and this classification is UNVERIFIED"
 	}
-	return base[:0] + fmt.Sprintf("rule %d carries no restrictive condition (network %q only): by construction it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx, network)
+	return fmt.Sprintf("rule %d carries no restrictive condition (no protocol, address, port or other restrictive selector): by construction it matches every connection that reaches it and terminates rule evaluation (explicit catch-all)", idx)
 }
 
 // noCatchAllReason builds the absence note; scoped under Lua likewise.
