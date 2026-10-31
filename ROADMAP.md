@@ -20,6 +20,20 @@ VALIDATE
 READY
 ```
 
+## Active delivery focus (owner decision 2026-10-31)
+
+**Finish the bounded Core MVP before expanding the framework.** The binding [Core MVP strategy](docs/CORE-MVP-STRATEGY.md) and [Issue #56](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/56) establish a finite product milestone. The historical phase checklists below remain useful as a backlog but **are not a demand to implement every item before Core MVP** and must not be treated as live status without evidence.
+
+- **P0 / NOW:** complete and test Security Model Stages 1–5 using existing approval, capability, ownership and orchestration primitives. Do **not** widen production mutation pins until explicitly permitted by the Security Model and operator.
+- **P1 / NEXT:** demonstrate **one** tightly scoped, user-visible, operator-authorized Core task end-to-end with idempotency, transaction/recovery evidence, truthful diagnostics, and separately authorized disposable-lab acceptance.
+- **P2 / AFTER CORE MVP:** compose **one** minimal gateway scenario from the stable Core and independently managed modules. More protocols, profiles, UI and transport R&D are deferred, not deleted.
+- **Every new task:** name the specific Core MVP exit criterion it advances, or mark it MODULE / DEFER / SKIP with a short Proof Before Build rationale. Prefer finishing and accepting a bounded milestone to adding another abstraction.
+- **Hard boundary:** a green CI or a pinned fail2ban/file experiment is not proof of generic provisioning or production readiness; all safety, ownership, operator authority and real-VPS restrictions remain unchanged.
+
+**Core MVP ≠ Gateway MVP ≠ complete multi-protocol platform.** Completing the first must have a finite, measurable STOP/acceptance gate, so unrelated future modules can keep evolving without keeping Core permanently unfinished.
+
+---
+
 ## Implementation status (2026-09-06)
 
 Terminology used below: **implemented** — exists in code; **tested** — covered by automated tests; **live-proven** — exercised on a production VPS. A status is never raised just because an adjacent lifecycle stage succeeded.
