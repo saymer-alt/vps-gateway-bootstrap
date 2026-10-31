@@ -104,7 +104,10 @@ func parseLintRoutingArgs(args []string, stderr io.Writer) (core, path string, j
 			i = next
 			path = v
 		default:
-			fmt.Fprintf(stderr, "unknown lint-routing flag %q\n%s\n", a, usage)
+			// The unrecognized argument is deliberately not echoed: it is
+			// operator input, and a pasted usage error must not carry it
+			// (ZAI-130 privacy). The supported flags are listed instead.
+			fmt.Fprintf(stderr, "unknown lint-routing flag; supported flags: --core, --config, --json\n%s\n", usage)
 			return "", "", false, 2
 		}
 	}
@@ -115,7 +118,9 @@ func parseLintRoutingArgs(args []string, stderr io.Writer) (core, path string, j
 	switch core {
 	case "xray", "hysteria2":
 	default:
-		fmt.Fprintf(stderr, "lint-routing: unknown --core %q (supported: xray, hysteria2)\n", core)
+		// The unrecognized --core value is deliberately not echoed (ZAI-130
+		// privacy); the supported values are listed instead.
+		fmt.Fprintln(stderr, "lint-routing: unknown --core value (supported: xray, hysteria2)")
 		return "", "", false, 2
 	}
 	if path == "" {

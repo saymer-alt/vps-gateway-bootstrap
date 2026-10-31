@@ -400,3 +400,34 @@ func TestLintRoutingStructuralIdentifiersNeverEchoValues(t *testing.T) {
 		t.Fatalf("hysteria no-ACL finding must stay localized:\n%s", outT)
 	}
 }
+
+// N8 (ZAI-130 final privacy pass): the argument-error path echoes nothing.
+// A synthetic secret typed as an unknown --core value (both flag forms) or
+// as an unknown flag / bare positional argument must not reach stderr or
+// stdout, while the messages stay actionable (supported values listed) and
+// the exit code stays 2. Fails-first: the pre-fix code quoted the argument
+// value with %q in both messages.
+func TestLintRoutingArgErrorsNeverEchoValues(t *testing.T) {
+	const token = "synthetic-secret-do-not-report"
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"unknown core value", []string{"--core", token, "--config", "whatever.json"}},
+		{"unknown core value (=)", []string{"--core=" + token, "--config", "whatever.json"}},
+		{"unknown flag carrying the token", []string{"--core", "xray", "--config", "whatever.json", "--" + token}},
+		{"bare positional argument", []string{token}},
+	}
+	for _, tc := range cases {
+		code, out, errOut := runLint(t, tc.args...)
+		if code != 2 {
+			t.Fatalf("%s: exit=%d, want 2", tc.name, code)
+		}
+		if strings.Contains(out+errOut, token) {
+			t.Fatalf("%s: the token leaked into the argument error output:\n%s", tc.name, errOut)
+		}
+		if !strings.Contains(errOut, "supported") {
+			t.Fatalf("%s: the message must stay actionable and list supported values: %q", tc.name, errOut)
+		}
+	}
+}
