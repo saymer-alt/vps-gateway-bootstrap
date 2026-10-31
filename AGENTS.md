@@ -2,6 +2,8 @@
 
 > **Владелец, 26.10.2026 — общее правило для всех проектов:** перед внедрением новой функции / серьёзной переделки требуется короткая «защита идеи» — доказать проблему, сравнить альтернативы (включая ничего не менять / штатную ОС / ждать upstream), оценить пользу, **ТЭО**, стоимость сопровождения, риски, измеримый тест и критерии STOP. Нет доказательства пользы — DEFER/SKIP. Мелкие исправления не требуют отдельной бюрократии. **Источник:** [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md) ([центральный PR #9](https://github.com/saymer-alt/saymer-alt/pull/9)). Существующие safety/CI/permissions сохраняются.
 
+> **Owner decision — FINISH CORE MVP FIRST (31.10.2026):** Read [Core MVP strategy](docs/CORE-MVP-STRATEGY.md) ([Issue #56](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/56)) **before starting or prioritizing work**. Core has a finite acceptance gate: complete the existing authority/safety foundation and ONE bounded usable end-to-end operator workflow, then grow through independent modules. New protocols, UI, generalized provisioning and theoretical abstractions are BACKLOG unless they unblock Core MVP or the owner grants a separately justified exception. Every proposed task must name the specific Core MVP exit criterion it advances, or explain why it is DEFERRED. Do not let endless research or module expansion postpone a working Core. This is a scope/order decision, NOT permission to bypass `docs/security-model.md`, expand experiment pins, merge PRs or touch live VPS.
+
 # AGENTS.md — operational and safety contract for AI agents
 
 ## Owner-wide design gate — SIMPLICITY-FIRST (2026-10-24)
@@ -47,7 +49,7 @@ therefore encodes safety as architecture (orchestration, transactions,
 fail-closed gates) and as rules. Your job is to work within that architecture,
 never around it.
 
-Read first: `README.md`, `ROADMAP.md`, `docs/architecture.md`,
+Read first: `docs/CORE-MVP-STRATEGY.md`, `README.md`, `ROADMAP.md`, `docs/architecture.md`,
 `docs/security-model.md`, `docs/plan-apply.md`, `docs/lessons-learned.md`. Deep detail:
 `docs/state-model.md`, `docs/ownership.md`, `docs/discovery.md`,
 `docs/discovery-schema.md`, `docs/management-probe.md`,
