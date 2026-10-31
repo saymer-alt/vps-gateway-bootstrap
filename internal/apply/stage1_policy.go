@@ -67,6 +67,49 @@ var sshConfigNamespaces = []string{"etc/ssh/sshd_config.d/"}
 // stays in force as the second, root-independent layer.
 const reservedTrustNamespace = "etc/vps-gateway/trust"
 
+// protectedCoreResources are the Core-internal resources relative to the
+// executor root: the transaction journal, the transaction-scoped backups,
+// the persisted last-known-good state and the mutation lock. They are the
+// machine's recovery/integrity/authority surfaces; a PLAN-supplied file
+// action must never create, overwrite or delete them (an OWNED label in
+// config or state does not unlock them — the compiled set outranks
+// labels). The executor's own subsystems are unaffected: journal, backup
+// and state writes never route through the plan-path policy.
+var protectedCoreResources = []string{
+	"etc/vps-gateway/journal",
+	"etc/vps-gateway/backups",
+	"etc/vps-gateway/state.json",
+	"etc/vps-gateway/apply.lock",
+}
+
+// relativeProtectedCore reports whether a root-relative path is a
+// Core-internal resource (the resource itself, or anything inside it).
+func relativeProtectedCore(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, p := range protectedCoreResources {
+		if rel == p || strings.HasPrefix(rel, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// containedJoin joins base with elems and refuses the result when cleaning
+// would move it outside base: a malformed or hostile identifier (a
+// transaction id, an action id derived from raw plan input) carrying ".."
+// elements must never relocate executor-written material — e.g. backup
+// artifacts — outside its root. This is a lexical boundary check on the
+// executor's OWN material, complementing the plan-path policy in safePath.
+func containedJoin(base string, elems ...string) (string, error) {
+	cleanBase := filepath.Clean(base)
+	joined := filepath.Join(append([]string{cleanBase}, elems...)...)
+	rel, err := filepath.Rel(cleanBase, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", errors.New("backup path escapes the backup root: transaction or action identifier is not path-safe")
+	}
+	return joined, nil
+}
+
 // relativeInNamespace reports whether a root-relative path sits inside one
 // of the compiled namespace prefixes.
 func relativeInNamespace(rel string, namespaces []string) bool {
@@ -107,6 +150,19 @@ func allowedServiceOperation(policy map[string][]string, unit, op string) bool {
 // it stays inside the root by construction. The logical path passed in
 // must already be the executor-joined form returned by safePath's lexical
 // checks.
+//
+// GUARANTEE BOUNDARY (honest TOCTOU statement): the Lstat walk narrows the
+// symlink window but is NOT an atomic guarantee. Between this check and
+// the subsequent open/write, a local process with sufficient privileges
+// can replace a path component with a symlink and redirect the operation;
+// neither the check nor the file writes here use O_NOFOLLOW/openat2. The
+// containment therefore holds against misconfiguration, stale symlinks
+// and unprivileged races; against a malicious ROOT on the target machine
+// it is evidence-narrowing only — the same limitation the journal and the
+// backups already declare (docs/security-model.md §11, "Malicious-root
+// limitation"). A no-symlink-follow rewrite of the file operations is
+// deliberately NOT part of Stage 1: no demonstrated need, per Proof Before
+// Build.
 func verifyPhysicalContainment(root, logicalPath string) error {
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {

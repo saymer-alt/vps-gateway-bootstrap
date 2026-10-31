@@ -34,11 +34,14 @@ func (e *FileExecutor) BindTransaction(ctx TransactionContext) {
 }
 
 // backupDir returns the transaction-scoped backup directory for one action.
+// The join is boundary-checked: neither the transaction id nor the action
+// id (which embeds raw plan input) may relocate backup material outside the
+// backup root (ZAI-131 addendum B).
 func (e *FileExecutor) backupDir(actionID, resource string) (string, error) {
 	if e.TransactionID == "" || e.PlanFingerprint == "" {
 		return "", errors.New("no transaction bound: backups are transaction-scoped and refuse to run without orchestration context")
 	}
-	return filepath.Join(e.backupRoot(), e.TransactionID, actionID), nil
+	return containedJoin(e.backupRoot(), e.TransactionID, actionID)
 }
 
 // Backup captures the managed path's pre-transaction state into the
@@ -134,7 +137,8 @@ func (e *FileExecutor) Rollback(actionID, resource string) error {
 	f := a.Spec.File
 	path, err := e.safePath(f.Path)
 	if err != nil { return err }
-	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	dir, err := containedJoin(e.backupRoot(), e.TransactionID, actionID)
+	if err != nil { return err }
 	manifest, err := loadBackupManifest(filepath.Join(dir, "manifest.json"))
 	if err != nil { return err }
 	if err := manifest.validateAgainst(e.TransactionID, e.PlanFingerprint, actionID, resource); err != nil { return err }
@@ -195,6 +199,22 @@ func (e *FileExecutor) safePath(p string) (string, error) {
 	}
 	if relativeReservedTrust(rel) {
 		return "", errors.New("path is reserved trust-anchor material and cannot be managed: " + p)
+	}
+	// ZAI-131 addendum: Core-internal resources (journal, backups, state,
+	// lock) are the machine's recovery/integrity/authority surfaces — a
+	// plan action can neither create, overwrite nor delete them, and an
+	// OWNED label does not unlock them.
+	if relativeProtectedCore(rel) {
+		return "", errors.New("path is Core-internal state (journal/backups/state/lock) and cannot be managed by a plan action: " + p)
+	}
+	// ZAI-131 addendum B: the input must be canonical. The diff layer
+	// embeds the RAW spec path into the resource string and therefore into
+	// the action id; a non-canonical path carrying ".." elements would
+	// clean to this allowed target while its raw form moves the ID-derived
+	// backup directory outside the backup root. Refusing non-canonical
+	// input closes that divergence at the source.
+	if p != filepath.Clean(p) {
+		return "", errors.New("file path must be canonical (no redundant ., .. or separator components): " + p)
 	}
 	if err := verifyPhysicalContainment(root, filepath.Join(root, rel)); err != nil {
 		return "", err

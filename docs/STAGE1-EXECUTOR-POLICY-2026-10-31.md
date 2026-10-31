@@ -56,6 +56,53 @@ orchestrator (pinned by `TestStage1ServicePolicyHoldsThroughDirectRegistryCall`)
   fail2ban experiment, its NO_CHANGE convergence tests and all other CLI
   suites pass unchanged.
 
+## Addendum (review hardening, same PR)
+
+Two review findings closed before merge, both fails-first-verified against
+the policy commit:
+
+- **Core-internal resources are not plan-manageable.** Inside the
+  otherwise permitted namespace, the compiled set
+  `protectedCoreResources` refuses plan-supplied file actions against
+  `journal/`, `backups/`, `state.json` and `apply.lock` (relative to the
+  executor root) — the machine's recovery, integrity and authority
+  surfaces. An OWNED label does not unlock them. The executor's own
+  subsystems are unaffected: journal, backup and state writes never route
+  through the plan-path policy (positive control pinned).
+- **The backup directory cannot leave the backup root.** The diff layer
+  embeds the RAW `FileDesired.Path` into the resource string and therefore
+  into the action id (`action-<i>-file.<raw path>`), while the executor
+  validates the CLEANED spec path — a divergence that in production
+  (executor root `/`) lets excess `..` components be dropped at the
+  absolute root (the cleaned target re-enters `/etc/vps-gateway`) while
+  `filepath.Join(backupRoot, txID, actionID)` — exactly three levels
+  deeper — climbs out of the backup root. Closed at both ends, minimally
+  and format-preserving: (1) plan paths must be **canonical** (no
+  redundant `.`, `..` or separator components) — the raw string can never
+  reach the id layer through a successful operation; (2)
+  `containedJoin()` boundary-checks every backup-directory join in BOTH
+  file and SSH executors, so no identifier — transaction id or action id —
+  can relocate backup material outside the backup root. Existing backup
+  artifact naming and restore semantics are unchanged for canonical
+  inputs.
+- **Honest TOCTOU boundary** (documented in `stage1_policy.go`): the
+  Lstat-based physical containment walk narrows the symlink window but is
+  not atomic — between check and use, a sufficiently privileged local
+  process can swap in a symlink; the checks use neither `O_NOFOLLOW` nor
+  `openat2`. Containment holds against misconfiguration, stale symlinks
+  and unprivileged races; against malicious root it is evidence-narrowing
+  only, the same limitation the journal and backups already declare
+  (security-model §11). A no-symlink-follow rewrite of the file
+  operations is deliberately not part of Stage 1 (no demonstrated need;
+  Proof Before Build).
+
+Addendum evidence: the three new tests
+(`TestStage1FilePolicyBlocksCoreInternalResources`,
+`TestStage1BackupDirCannotEscapeBackupRoot`,
+`TestStage1SSHBackupDirContainment`) were run against the policy commit
+without the addendum fixes and **all three failed there**; they are green
+with the fix commit. Full gate re-run: 39/39 packages, vet, amd64+arm64.
+
 ## What this does NOT provide (deliberately — Stages 2–5)
 
 Not provided by this change, and not claimed: operator-signed approval

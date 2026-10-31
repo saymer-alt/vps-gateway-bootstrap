@@ -76,7 +76,8 @@ func (e *SSHExecutor) Backup(actionID, resource string) error {
 	if e.TransactionID == "" {
 		return errors.New("no transaction bound: backups are transaction-scoped and refuse to run without orchestration context")
 	}
-	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	dir, err := containedJoin(e.backupRoot(), e.TransactionID, actionID)
+	if err != nil { return err }
 	if err := os.MkdirAll(dir, 0700); err != nil { return err }
 
 	manifest := &BackupManifest{
@@ -157,7 +158,8 @@ func (e *SSHExecutor) restoreConfigVerified(actionID, resource string, s *state.
 		return errors.New("rollback requires a bound transaction: backups are transaction-scoped")
 	}
 	path, err := e.safePath(s.ConfigPath); if err != nil { return err }
-	dir := filepath.Join(e.backupRoot(), e.TransactionID, actionID)
+	dir, err := containedJoin(e.backupRoot(), e.TransactionID, actionID)
+	if err != nil { return err }
 	manifest, err := loadBackupManifest(filepath.Join(dir, "manifest.json"))
 	if err != nil { return err }
 	if err := manifest.validateAgainst(e.TransactionID, e.PlanFingerprint, actionID, resource); err != nil { return err }
@@ -220,6 +222,13 @@ func (e *SSHExecutor) safePath(p string) (string, error) {
 	}
 	if relativeReservedTrust(rel) {
 		return "", errors.New("path is reserved trust-anchor material and cannot be managed: " + p)
+	}
+	// ZAI-131 addendum B: canonical input only — the raw spec path must
+	// never diverge from its cleaned form (the same invariant the file
+	// executor enforces; SSH action ids are path-free today, and this keeps
+	// them provably harmless).
+	if p != filepath.Clean(p) {
+		return "", errors.New("SSH config path must be canonical (no redundant ., .. or separator components): " + p)
 	}
 	if err := verifyPhysicalContainment(root, filepath.Join(root, rel)); err != nil {
 		return "", err
