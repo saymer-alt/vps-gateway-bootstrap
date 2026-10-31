@@ -297,3 +297,106 @@ func TestLintRoutingSourceHasNoMachineOrNetworkSurface(t *testing.T) {
 		}
 	}
 }
+
+// N7 (ZAI-130 privacy fix): user-defined structural identifiers are never
+// echoed. A synthetic token planted as an outboundTag, a balancerTag, the
+// first outbound's protocol, an unknown domainStrategy value, a Hysteria2
+// outbound name, an unknown Hysteria2 outbound type, and in the FILE PATH
+// must not appear in stdout, stderr or JSON — while every corresponding
+// diagnostic still fires, localized by rule number and outbound position.
+// Fails-first: the pre-fix analyzers cited tags, names, unknown
+// protocols/strategies and the path verbatim.
+func TestLintRoutingStructuralIdentifiersNeverEchoValues(t *testing.T) {
+	const token = "synthetic-token-do-not-report"
+	// xrayA exercises every Xray echo site at once: a dangling outboundTag
+	// reference, a dangling balancerTag reference and an unknown
+	// domainStrategy value — all carrying the token.
+	xp := writeLintFixture(t, "xray.json", `{
+		"outbounds": [{"tag": "safe-out", "protocol": "freedom"}],
+		"routing": {
+			"domainStrategy": "`+token+`",
+			"balancers": [{"tag": "real-balancer"}],
+			"rules": [
+				{"outboundTag": "`+token+`", "domain": ["domain:placeholder.example"]},
+				{"balancerTag": "`+token+`", "network": "tcp"},
+				{"outboundTag": "safe-out"}
+			]
+		}
+	}`)
+	// xrayB plants the token as the FIRST outbound's protocol: an unknown
+	// protocol value must be classified, not echoed.
+	xProto := writeLintFixture(t, "xray-proto.json", `{"outbounds":[{"tag":"safe-one","protocol":"`+token+`"}]}`)
+	hyDangling := writeLintFixture(t, "hy2-dangling.yaml", "acl:\n  inline:\n    - "+token+"(all)\noutbounds:\n  - name: direct\n    type: direct\n")
+	hyType := writeLintFixture(t, "hy2-type.yaml", "outbounds:\n  - name: first\n    type: "+token+"\n")
+	missingPath := filepath.Join(t.TempDir(), token+".yaml") // token in the name, file absent
+	bigPath := writeLintFixture(t, token+"-big.yaml", strings.Repeat("x\n", (maxLintInputBytes/len("x\n"))+8))
+
+	code, out, errOut := runLint(t, "--core", "xray", "--config", xp)
+	if code != 0 {
+		t.Fatalf("xray exit=%d stderr=%s", code, errOut)
+	}
+	codeJSON, outJSON, errJSON := runLint(t, "--core", "xray", "--config", xp, "--json")
+	if codeJSON != 0 {
+		t.Fatalf("xray json exit=%d", codeJSON)
+	}
+	codeP, outP, _ := runLint(t, "--core", "xray", "--config", xProto)
+	if codeP != 0 {
+		t.Fatalf("xray proto exit=%d", codeP)
+	}
+	codeD, outD, _ := runLint(t, "--core", "hysteria2", "--config", hyDangling)
+	if codeD != 0 {
+		t.Fatalf("hysteria dangling exit=%d", codeD)
+	}
+	codeT, outT, _ := runLint(t, "--core", "hysteria2", "--config", hyType)
+	if codeT != 0 {
+		t.Fatalf("hysteria type exit=%d", codeT)
+	}
+	codeM, outM, errM := runLint(t, "--core", "xray", "--config", missingPath)
+	if codeM != 1 {
+		t.Fatalf("missing file exit=%d, want 1", codeM)
+	}
+	codeB, outB, errB := runLint(t, "--core", "hysteria2", "--config", bigPath)
+	if codeB != 1 {
+		t.Fatalf("oversized exit=%d, want 1", codeB)
+	}
+
+	// The token must not leak into any output channel.
+	for name, text := range map[string]string{
+		"xray human": out, "xray json": outJSON, "xray stderr": errOut, "xray json stderr": errJSON,
+		"xray proto": outP, "hysteria dangling": outD, "hysteria type": outT,
+		"missing path": outM + errM, "oversized path": outB + errB,
+	} {
+		if strings.Contains(text, token) {
+			t.Fatalf("%s: the planted token leaked:\n%s", name, text)
+		}
+	}
+
+	// Informativeness is preserved: every finding stays localized without
+	// the value (rule numbers, positions, verified-vocabulary types only).
+	for name, text := range map[string]string{
+		"xray human":        out,
+		"hysteria dangling": outD,
+		"hysteria type":     outT,
+	} {
+		if !strings.Contains(text, "diagnostic") {
+			t.Fatalf("%s: the report must still be produced: %s", name, text)
+		}
+	}
+	for _, want := range []string{"xray.unmatched-fallback-direct", "xray.dangling-outbound-tag", "xray.dangling-balancer-tag", "xray.routing-dns"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("xray output must keep the %q finding localized:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, `"freedom"`) {
+		t.Fatalf("verified-vocabulary protocol values are still citable:\n%s", out)
+	}
+	if !strings.Contains(outP, "xray.unmatched-fallback-first") {
+		t.Fatalf("the unknown-protocol fallback finding must stay localized:\n%s", outP)
+	}
+	if !strings.Contains(outD, "hysteria.dangling-outbound") {
+		t.Fatalf("hysteria dangling finding must stay localized:\n%s", outD)
+	}
+	if !strings.Contains(outT, "hysteria.no-acl-first-outbound") {
+		t.Fatalf("hysteria no-ACL finding must stay localized:\n%s", outT)
+	}
+}

@@ -17,8 +17,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -138,22 +140,41 @@ func lintFlagValue(args []string, i int, name string) (string, int, bool) {
 }
 
 // readBoundedFile reads at most limit+1 bytes and fails closed when the
-// input exceeds the limit. Error messages carry the path and sizes only —
-// never file content.
+// input exceeds the limit. Error messages never carry the path (the
+// operator typed it and knows it; a pasted error must not leak a token the
+// file NAME may carry) and never carry file content.
 func readBoundedFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, lintReadError(err)
 	}
 	defer f.Close()
+	if st, serr := f.Stat(); serr == nil && st.IsDir() {
+		return nil, errors.New("the --config path is a directory, not a file")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return nil, err
+		return nil, lintReadError(err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s exceeds the %d MiB input limit (%d bytes read); the file was not analyzed", path, limit>>20, len(data))
+		return nil, fmt.Errorf("the --config file exceeds the %d MiB input limit (%d bytes read); the file was not analyzed", limit>>20, len(data))
 	}
 	return data, nil
+}
+
+// lintReadError classifies an OS read failure into a fixed, actionable
+// message. The underlying error text is deliberately discarded: it embeds
+// the operator-supplied path, which must not travel into stderr, logs or
+// pasted reports.
+func lintReadError(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return errors.New("the --config file does not exist")
+	case errors.Is(err, fs.ErrPermission):
+		return errors.New("the --config file cannot be read (permission denied)")
+	default:
+		return errors.New("the --config file could not be read (error details suppressed: a file path may carry sensitive data)")
+	}
 }
 
 // lintRoutingReport dispatches to the existing analyzers. For hysteria2 the
@@ -215,6 +236,6 @@ func renderLintReport(r routelint.Report) string {
 		}
 	}
 	fmt.Fprintf(&b, "\n%d diagnostic(s): %d WARN, %d INFO; evidence: %d CONFIG-INFERRED, %d UNVERIFIED.\n", len(r.Diagnostics), warns, infos, inferred, unverified)
-	b.WriteString("Static analysis of one file. Zero diagnostics is NOT a safety proof: no DPI blocking, DNS leak, IPv6 leak or real egress behavior was tested, and unsupported constructs fail closed or stay UNVERIFIED. Outbound tags and rule names are cited verbatim as structural identifiers — sanitize the output before sharing it.\n")
+	b.WriteString("Static analysis of one file. Zero diagnostics is NOT a safety proof: no DPI blocking, DNS leak, IPv6 leak or real egress behavior was tested, and unsupported constructs fail closed or stay UNVERIFIED. User-defined tags, outbound names and unknown values are never echoed — findings are localized by rule number and outbound position; protocol and type values are cited only from the documented vocabulary. Still sanitize the configuration before sharing it.\n")
 	return b.String()
 }

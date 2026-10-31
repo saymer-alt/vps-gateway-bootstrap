@@ -57,8 +57,9 @@ network egress, leaks, or runtime protection.
 
 WARN  CONFIG-INFERRED  xray.unmatched-fallback-direct
       unmatched traffic falls back to the FIRST outbound by documented
-      default; the first outbound is tagged "direct-out" with protocol
-      "freedom" (direct egress by construction)
+      default; the first outbound (position 1 of the outbounds list) has
+      protocol "freedom" (direct egress by construction; the user-defined
+      tag is not echoed)
 
 1 diagnostic(s): 1 WARN, 0 INFO; evidence: 1 CONFIG-INFERRED, 0 UNVERIFIED.
 Static analysis of one file. Zero diagnostics is NOT a safety proof: ...
@@ -69,15 +70,23 @@ NOT a safety proof.
 
 ## Privacy contract
 
-- Never echoed: destinations, domains, IPs, URLs, secret values (Traffic
-  Stats secret, obfs password), subscription data. The analyzers retain
-  structure only; regressions in `cmd/vps-gateway/lintrouting_test.go`
-  pin that planted secrets/URLs/IPs/domains cannot appear in stdout,
-  stderr, JSON or error messages.
-- Echoed verbatim BY DESIGN: outbound/balancer tags and outbound names
-  (e.g. `"proxy-out"`), protocol types, rule indexes and counts. These
-  are structural identifiers needed to locate the finding in your file.
-  If a tag name is itself sensitive, rename it before sharing output.
+- Never echoed, in any channel (stdout, stderr, JSON, error messages):
+  destinations, domains, IPs, URLs, secret values (Traffic Stats secret,
+  obfs password), subscription data — AND user-defined structural
+  identifiers: outbound/balancer tags, Hysteria2 outbound names, unknown
+  protocol values and unknown setting values (e.g. an unrecognized
+  `domainStrategy`). The `--config` file path is never echoed either:
+  read errors are classified (does not exist / permission denied /
+  directory / unreadable — details suppressed), because a file NAME may
+  itself carry a token.
+- Localized instead by: rule numbers, outbound positions ("position 1 of
+  the outbounds list"), diagnostic IDs and counts — enough to find the
+  finding in your own file.
+- Cited only from verified vocabulary: a protocol/type value appears in a
+  reason only when the analyzer's own code path proved it belongs to the
+  documented set (Xray `freedom`/`blackhole` in the fallback
+  classification; Hysteria2 `direct`/`socks5`/`http` outbound types).
+  Everything else reads "the value is not echoed".
 - The tool never writes files, never logs, and never sends anything to
   the network. Before passing a configuration (or its lint output) to
   third parties, remove sensitive data yourself — the tool cannot

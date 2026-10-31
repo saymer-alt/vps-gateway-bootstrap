@@ -88,7 +88,7 @@ func LintHysteria2(configYAML []byte) (Report, error) {
 		default:
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{
 				ID: "hysteria.dangling-outbound", Level: LevelWarn, Evidence: Unverified,
-				Reason: fmt.Sprintf("ACL rule %d routes to outbound %q which is neither a built-in (direct/reject/default) nor defined in outbounds; the documented ACL page does not specify the behavior for a missing outbound — treat as a configuration error, not as a policy conclusion", r.index, r.outbound),
+				Reason: fmt.Sprintf("ACL rule %d routes to an outbound that is neither a built-in (direct/reject/default) nor defined in the outbounds list (the name is not echoed); the documented ACL page does not specify the behavior for a missing outbound — treat as a configuration error, not as a policy conclusion", r.index),
 			})
 			continue
 		}
@@ -123,9 +123,17 @@ func hysteriaNoACL(report Report, outbounds []hysteriaOutbound) Report {
 		return report
 	}
 	first := outbounds[0]
+	// The outbound TYPE is echoed only when it belongs to the documented
+	// vocabulary (official Full-Server-Config: direct/socks5/http); any
+	// other value is user-defined text and is not echoed (ZAI-130 privacy).
+	typeNote := " (a type outside the documented direct/socks5/http set; the value is not echoed)"
+	switch first.typ {
+	case "direct", "socks5", "http":
+		typeNote = fmt.Sprintf(" (type %q)", first.typ)
+	}
 	diag := Diagnostic{
 		ID: "hysteria.no-acl-first-outbound", Level: LevelInfo, Evidence: ConfigInferred,
-		Reason: fmt.Sprintf("no ACL configured: ALL connections are routed through the first outbound by the documented default (type %q)", first.typ),
+		Reason: "no ACL configured: ALL connections are routed through the first outbound by the documented default (position 1 of the outbounds list)" + typeNote,
 	}
 	if first.typ == "http" {
 		diag.Level = LevelWarn
