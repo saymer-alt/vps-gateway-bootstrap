@@ -36,7 +36,7 @@ func (s *integrationSystem) registry(actions ...state.Action) Registry {
 	for _, a := range actions { byID[a.ID] = a }
 	files := &FileExecutor{Root: s.root, Backups: filepath.Join(s.root, "backups"), Actions: byID}
 	files.TransactionID, files.PlanFingerprint = "tx-integration", "fp-integration"
-	services := &ServiceExecutor{Actions: byID, Runner: func(name string, args ...string) error {
+	services := &ServiceExecutor{unitPolicy: testUnitPolicy, Actions: byID, Runner: func(name string, args ...string) error {
 		s.svcCalls = append(s.svcCalls, append([]string{name}, args...))
 		if args[0] == s.failSvc { return errors.New("systemctl " + args[0] + " failed") }
 		return nil
