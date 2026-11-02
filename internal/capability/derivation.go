@@ -33,6 +33,7 @@ const (
 	KindRoutingReserve
 	KindFirewallTagged
 	KindFirewallMSSClamp
+	KindServiceRestart
 
 	numDerivationKinds // sentinel: keep last
 )
@@ -43,6 +44,7 @@ var derivationKindNames = map[DerivationKind]string{
 	KindRoutingReserve:   "routing-reserve",
 	KindFirewallTagged:   "firewall-tagged",
 	KindFirewallMSSClamp: "firewall-mssclamp",
+	KindServiceRestart:   "service-restart",
 }
 
 func (k DerivationKind) String() string {
@@ -83,6 +85,7 @@ type CapabilitySpec struct {
 	Chains     []string     // KindFirewallTagged
 	Tag        string       // KindFirewallTagged
 	Ifaces     []string     // KindFirewallMSSClamp
+	Unit       string       // KindServiceRestart
 }
 
 // Derivation error classes, distinct from the canonicalization classes of C1.
@@ -101,6 +104,7 @@ var applicableFields = map[DerivationKind]map[string]bool{
 	KindRoutingReserve:   {"table": true, "selector": true},
 	KindFirewallTagged:   {"chains": true, "tag": true},
 	KindFirewallMSSClamp: {"ifaces": true},
+	KindServiceRestart:   {"unit": true},
 }
 
 // fieldSet records which CapabilitySpec fields are set (non-zero).
@@ -127,13 +131,16 @@ func (s CapabilitySpec) setFields() fieldSet {
 	if len(s.Ifaces) > 0 {
 		f["ifaces"] = true
 	}
+	if s.Unit != "" {
+		f["unit"] = true
+	}
 	return f
 }
 
 // orderedNames returns the set field names in fixed order.
 func (f fieldSet) orderedNames() []string {
 	names := make([]string, 0, len(f))
-	for _, n := range []string{"sysctlKeys", "table", "selector", "chains", "tag", "ifaces"} {
+	for _, n := range []string{"sysctlKeys", "table", "selector", "chains", "tag", "ifaces", "unit"} {
 		if f[n] {
 			names = append(names, n)
 		}
@@ -166,6 +173,8 @@ func DeriveCapability(kind DerivationKind, spec CapabilitySpec) (CapabilityID, e
 		return DeriveFirewallTagged(spec.Chains, spec.Tag)
 	case KindFirewallMSSClamp:
 		return DeriveFirewallMSSClamp(spec.Ifaces)
+	case KindServiceRestart:
+		return DeriveServiceRestart(spec.Unit)
 	default:
 		return "", fmt.Errorf("%w: derivation kind %d", ErrUnsupportedDerivationKind, int(kind))
 	}
@@ -255,6 +264,20 @@ func DeriveFirewallMSSClamp(ifaces []string) (CapabilityID, error) {
 		}
 	}
 	return ParseCapability("muvg.firewall.mssclamp.v1;ifaces=" + strings.Join(normalized, ","))
+}
+
+// DeriveServiceRestart derives muvg.service.restart.v1 bound to one systemd
+// unit (ZAI-132, Stage 4/B). The unit is a strict validated parameter of the
+// capability identity: two units are two different capabilities, and there
+// is no wildcard form. Which units a plan may DERIVE this capability for is
+// the compiled plan-level derivation bound (the executor-side Stage-1
+// policy) — this constructor validates shape only; derivation grants no
+// authority by itself.
+func DeriveServiceRestart(unit string) (CapabilityID, error) {
+	if unit == "" {
+		return "", fmt.Errorf("%w: KindServiceRestart requires a unit name", ErrMissingTypedSpec)
+	}
+	return ParseCapability("muvg.service.restart.v1;unit=" + unit)
 }
 
 // Aggregate folds derived capability requirements into one canonical set.

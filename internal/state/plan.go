@@ -36,6 +36,17 @@ type Plan struct {
 	Actions       []Action `json:"actions"`
 	Blocked       bool     `json:"blocked"`
 	BlockReasons  []string `json:"block_reasons,omitempty"`
+	// Capabilities carries the canonical capability IDs this plan requires
+	// (security-model §9.B, Stage 4/B). They are derived ONLY by the
+	// orchestrator's configured compiled deriver from the plan's own typed
+	// actions — never from config, persisted state or caller input — and are
+	// part of the plan's canonical JSON, hence of its fingerprint: adding,
+	// removing or replacing a capability changes the plan identity and
+	// invalidates every previously issued confirmation for it. Canonical
+	// sorted order, non-empty only when a deriver is configured; omitempty
+	// keeps plans without a derived set byte-identical to the pre-Stage-4
+	// encoding.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type ActionSpec struct {

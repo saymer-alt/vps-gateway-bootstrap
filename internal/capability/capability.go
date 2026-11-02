@@ -55,6 +55,7 @@ const (
 	paramTable                     // canonical decimal routing-table number
 	paramSelector                  // canonical IPv4 CIDR (NIGHT-12 safety subset)
 	paramTag                       // single compiled namespace tag token
+	paramUnit                      // single strict systemd unit name (identity.ValidUnitName)
 )
 
 type paramSpec struct {
@@ -67,10 +68,18 @@ type capSpec struct {
 	params []paramSpec // all required, already in canonical (sorted) key order
 }
 
-// vocabulary is the closed v1 capability vocabulary (NIGHT-21 FINAL §15).
-// It is compiled: config, state and Plan data cannot extend it, and any
-// capability name outside this table is rejected. muvg.projectfile.v1 takes
-// no caller-controlled parameter — the compiled project namespace contract is
+// vocabulary is the closed capability vocabulary. The muvg.* entries are
+// the NIGHT-21 FINAL §15 set; muvg.service.restart.v1 is the Stage-4/B
+// service-restart class (ZAI-132, docs/security-model.md §9.B): a per-unit
+// parametrized authority for the pinned restart operation, deliberately
+// NOT part of the MUVG_INTEGRATION_V1 domain — the service class and the
+// muvg.* integration classes are separate authority domains (approval
+// v2 purposes are distinct) and must never mask each other. There is no
+// wildcard unit and no generic systemd authority: every unit is a explicit
+// parameter of its own capability identity. All entries are compiled:
+// config, state and Plan data cannot extend this table, and any capability
+// name outside it is rejected. muvg.projectfile.v1 takes no
+// caller-controlled parameter — the compiled project namespace contract is
 // the bound, and the identity must never become an arbitrary path grant.
 var vocabulary = map[string]capSpec{
 	"muvg.projectfile.v1": {name: "muvg.projectfile.v1"},
@@ -87,6 +96,9 @@ var vocabulary = map[string]capSpec{
 	}},
 	"muvg.firewall.mssclamp.v1": {name: "muvg.firewall.mssclamp.v1", params: []paramSpec{
 		{key: "ifaces", kind: paramIfaceSet},
+	}},
+	"muvg.service.restart.v1": {name: "muvg.service.restart.v1", params: []paramSpec{
+		{key: "unit", kind: paramUnit},
 	}},
 }
 
@@ -202,9 +214,52 @@ func validateValue(kind paramKind, val string) error {
 		return validateSelector(val)
 	case paramTag:
 		return validateTag(val)
+	case paramUnit:
+		return ValidUnitName(val)
 	default:
 		return errors.New("unknown parameter kind")
 	}
+}
+
+// ValidUnitName is the strict systemd unit-name subset a capability unit
+// parameter must satisfy. The rules MIRROR the executor boundary's shared
+// validator (internal/identity.ValidUnitName) rule for rule; the
+// duplication is deliberate and pinned by the cross-consistency test in
+// internal/apply (TestCapabilityUnitNameMatchesExecutorValidation): the
+// capability package must stay PURE (no repository-internal imports), so it
+// cannot import the identity package, and the two validations must never
+// drift apart. It is input validation, not authorization: which units a
+// plan may actually derive authority for is decided by the compiled
+// plan-level derivation bound.
+func ValidUnitName(name string) error {
+	if name == "" {
+		return errors.New("unit name must not be empty")
+	}
+	if len(name) > 255 {
+		return fmt.Errorf("unit name is too long (%d characters, max 255)", len(name))
+	}
+	if name[0] == '-' {
+		return fmt.Errorf("unit name %q must not look like a command-line option", name)
+	}
+	prefix, unitType, ok := strings.Cut(name, ".")
+	if !ok || strings.Contains(unitType, ".") {
+		return fmt.Errorf("unit name %q is not a valid unit identifier", name)
+	}
+	if unitType != "service" && unitType != "socket" {
+		return fmt.Errorf("unit name %q has unsupported unit type %q (supported: service, socket)", name, unitType)
+	}
+	if prefix == "" || prefix == "." || prefix == ".." {
+		return fmt.Errorf("unit name %q must not be path-like", name)
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.' || r == ':':
+		default:
+			return fmt.Errorf("unit name %q contains invalid character %q", name, string(r))
+		}
+	}
+	return nil
 }
 
 // CheckSysctlKey validates one element of the sysctl keys parameter against

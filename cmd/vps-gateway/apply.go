@@ -111,6 +111,13 @@ func defaultApplyOrchestrator(timeout time.Duration) *orchestrate.Orchestrator {
 		// closed before Journal.Begin; /etc/machine-id is never initialized
 		// or repaired here.
 		AcquireHostIdentity: acquireFixedHostIdentity,
+		// Stage-4/B (ZAI-132): the compiled capability derivation from the
+		// plan's own typed actions (apply.RequiredCapabilities). The derived
+		// set becomes part of the plan's canonical identity — its
+		// fingerprint — so the confirmation boundary (legacy prefix today,
+		// operator-signed approval v2 in Stage 2) always approves a plan
+		// WITH its capability requirements baked in.
+		DeriveRequiredCapabilities: apply.RequiredCapabilities,
 	}
 }
 

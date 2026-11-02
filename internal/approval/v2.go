@@ -73,16 +73,27 @@ const SchemaVersionV2 = 2
 type Purpose string
 
 // PurposeMUVGIntegrationV1 is the authority domain of the compiled
-// muvg.* capability vocabulary — the only operation class currently
-// modeled by the repository (project files, sysctl, routing, tagged
-// firewall rules, the MSS clamp).
+// muvg.* integration capability vocabulary — project files, sysctl,
+// routing, tagged firewall rules, the MSS clamp. It is deliberately NOT
+// the service-restart domain: MUVG_INTEGRATION_V1 does not authorize a
+// systemd service operation (ZAI-132).
 const PurposeMUVGIntegrationV1 Purpose = "MUVG_INTEGRATION_V1"
+
+// PurposeServiceExperimentV1 is the authority domain of the
+// muvg.service.restart.v1 capability class (ZAI-132, Stage 4/B): the
+// pinned, per-unit service-restart operation class. Distinct from
+// PurposeMUVGIntegrationV1 by construction — an artifact issued for one
+// domain is never interpretable in the other (§6), so an integration
+// grant can never authorize a service restart and vice versa. Wiring a
+// verifier that requires this purpose is Stage 2 work and is deliberately
+// not done here.
+const PurposeServiceExperimentV1 Purpose = "SERVICE_EXPERIMENT_V1"
 
 // Valid reports whether p is a member of the closed purpose vocabulary.
 // Empty and unknown purposes DENY (§6/§19); there is no generic fallback.
 func (p Purpose) Valid() bool {
 	switch p {
-	case PurposeMUVGIntegrationV1:
+	case PurposeMUVGIntegrationV1, PurposeServiceExperimentV1:
 		return true
 	}
 	return false
