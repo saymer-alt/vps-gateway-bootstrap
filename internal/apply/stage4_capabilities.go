@@ -51,6 +51,15 @@ func RequiredCapabilities(p state.Plan) (capability.CapabilitySet, error) {
 			if !allowedServiceOperation(serviceUnitPolicy, s.Name, s.Operation) {
 				return capability.CapabilitySet{}, fmt.Errorf("capability derivation: operation %q is not permitted on unit %q by the compiled Stage 1 service policy", s.Operation, s.Name)
 			}
+			// A rollback is a real mutation too — the executor's Rollback
+			// re-checks it against the same compiled policy — so the
+			// derivation must not grant an authority for a plan whose
+			// restore path the executors would refuse. An empty
+			// RollbackOperation means "no rollback mutation" and stays
+			// valid.
+			if s.RollbackOperation != "" && !allowedServiceOperation(serviceUnitPolicy, s.Name, s.RollbackOperation) {
+				return capability.CapabilitySet{}, fmt.Errorf("capability derivation: rollback operation %q is not permitted on unit %q by the compiled Stage 1 service policy", s.RollbackOperation, s.Name)
+			}
 			id, err := capability.DeriveServiceRestart(s.Name)
 			if err != nil {
 				return capability.CapabilitySet{}, fmt.Errorf("capability derivation: action %q: %w", a.ID, err)

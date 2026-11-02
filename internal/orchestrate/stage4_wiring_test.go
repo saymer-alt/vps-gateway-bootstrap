@@ -187,6 +187,38 @@ func TestStage4ExecuteBlocksOperationMismatch(t *testing.T) {
 	}
 }
 
+// Rollback-operation bound (review fix): a service action whose ROLLBACK
+// operation the compiled Stage-1 policy refuses must fail capability
+// derivation — even though the operation itself ("restart") is permitted.
+// The confirmation here is deliberately VALID for the tampered plan: the
+// refusal must come from the derivation re-check BEFORE the confirmation
+// boundary and before any executor call, never from the executor's own
+// rollback path.
+func TestStage4ExecuteBlocksForbiddenRollbackOperationBeforeConfirm(t *testing.T) {
+	o, p, svc := stage4PreparedPlan(t)
+	p.Plan.Actions[0].Spec.Service.RollbackOperation = "stop"
+	conf := Confirmation{PlanFingerprint: Fingerprint(p.Plan), ApprovedBy: "operator", At: time.Now().UTC()}
+	// The confirmation itself is consistent with this plan's identity —
+	// Confirm would accept it; the derivation bound must refuse first.
+	if err := o.Confirm(p, conf); err != nil {
+		t.Fatalf("precondition: the confirmation must be valid for this plan: %v", err)
+	}
+	out, err := o.Execute(p, conf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Stage != StageBlocked {
+		t.Fatalf("stage=%s", out.Stage)
+	}
+	joined := strings.Join(out.Blockers, "; ")
+	if !strings.Contains(joined, "capability derivation") || !strings.Contains(joined, "rollback operation") || !strings.Contains(joined, "not permitted") {
+		t.Fatalf("the forbidden rollback operation must fail capability derivation: %v", out.Blockers)
+	}
+	if len(svc.calls) != 0 {
+		t.Fatalf("no executor call may happen on a refused plan: %v", svc.calls)
+	}
+}
+
 // Changed-plan invalidation: a confirmation issued for the derived plan is
 // refused for ANY other plan identity — in particular for a plan whose
 // capability set differs. The capability set is inside the fingerprint

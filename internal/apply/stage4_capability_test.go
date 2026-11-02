@@ -19,6 +19,12 @@ func stage4ServiceAction(unit, op string) state.Action {
 		Spec: &state.ActionSpec{Service: &state.ServiceActionSpec{Name: unit, Operation: op, ExpectedState: "active"}}}
 }
 
+func stage4ServiceActionRollback(unit, op, rollbackOp string) state.Action {
+	a := stage4ServiceAction(unit, op)
+	a.Spec.Service.RollbackOperation = rollbackOp
+	return a
+}
+
 // The pinned production experiment derives exactly one capability: the
 // per-unit service-restart authority. Deterministic.
 func TestStage4RequiredCapabilitiesPinnedExperiment(t *testing.T) {
@@ -52,6 +58,32 @@ func TestStage4RequiredCapabilitiesRefuseNonPermittedOperations(t *testing.T) {
 		_, err := RequiredCapabilities(state.Plan{Actions: []state.Action{stage4ServiceAction("fail2ban.service", op)}})
 		if err == nil || !strings.Contains(err.Error(), "not permitted") {
 			t.Fatalf("operation %q on fail2ban.service must be refused, got %v", op, err)
+		}
+	}
+}
+
+// The ROLLBACK operation is part of the same derivation bound: a rollback
+// is a real mutation (the executor's Rollback re-checks it against the
+// compiled Stage-1 policy), so a plan whose restore path the executors
+// would refuse must not derive an authority. The derived set can never be
+// broader than what the executors would actually enforce.
+func TestStage4RequiredCapabilitiesBindRollbackOperation(t *testing.T) {
+	for _, rollbackOp := range []string{"stop", "start", "reload", "enable", "disable", "enable-start", "disable-stop", "restart-force"} {
+		_, err := RequiredCapabilities(state.Plan{Actions: []state.Action{stage4ServiceActionRollback("fail2ban.service", "restart", rollbackOp)}})
+		if err == nil || !strings.Contains(err.Error(), "rollback operation") || !strings.Contains(err.Error(), "not permitted") {
+			t.Fatalf("rollback operation %q on fail2ban.service must be refused, got %v", rollbackOp, err)
+		}
+	}
+	// Allowed shapes: no rollback mutation at all, and a rollback the
+	// policy permits. Both derive exactly the pinned capability.
+	for _, rollbackOp := range []string{"", "restart"} {
+		set, err := RequiredCapabilities(state.Plan{Actions: []state.Action{stage4ServiceActionRollback("fail2ban.service", "restart", rollbackOp)}})
+		if err != nil {
+			t.Fatalf("rollback operation %q must be allowed, got %v", rollbackOp, err)
+		}
+		ids := set.IDs()
+		if len(ids) != 1 || ids[0] != capability.CapabilityID("muvg.service.restart.v1;unit=fail2ban.service") {
+			t.Fatalf("rollback operation %q must derive exactly the pinned capability, got %v", rollbackOp, ids)
 		}
 	}
 }
