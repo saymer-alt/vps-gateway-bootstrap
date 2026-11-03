@@ -25,6 +25,7 @@ import (
 
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/apply"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/approval"
+	"github.com/saymer-alt/vps-gateway-bootstrap/internal/capability"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/discovery"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/journal"
 	"github.com/saymer-alt/vps-gateway-bootstrap/internal/lock"
@@ -76,6 +77,23 @@ type Orchestrator struct {
 	// production path must configure a Verifier; forgetting one fail-closes
 	// the legacy form away.
 	ApprovalVerifier *approval.Verifier
+
+	// DeriveRequiredCapabilities, when non-nil, is the compiled Stage-4/B
+	// derivation (docs/security-model.md §9.B, §13 stage 4; production
+	// wiring: apply.RequiredCapabilities): the canonical capability set the
+	// plan requires, derived from the plan's own typed actions by trusted
+	// compiled code — never from config, persisted state or caller input.
+	// Prepare folds the derived set into the plan BEFORE any fingerprint is
+	// computed, so the capability set is part of the plan's identity:
+	// adding, removing or replacing a capability changes the fingerprint
+	// and invalidates every previously issued confirmation for it. A
+	// derivation failure blocks the plan. Execute re-derives the set under
+	// the staleness gate and re-checks it against the carried set with the
+	// exact-set discipline before confirmation — a hand-tampered
+	// Capabilities field can never reach a mutation. Nil means the legacy
+	// behavior: plans carry no capabilities, fingerprints are unchanged,
+	// and no capability check runs.
+	DeriveRequiredCapabilities func(state.Plan) (capability.CapabilitySet, error)
 
 	// Journal is the durable transaction record (operational recovery, not
 	// authority — docs/security-model.md §11). A mutating transaction
@@ -209,6 +227,19 @@ func (o Orchestrator) Prepare(cfg *pipeline.Config, opts pipeline.Options) Plan 
 		cfg = &pipeline.Config{}
 	}
 	res := pipeline.Assemble(o.Discover(), cfg, opts)
+	// Stage-4/B: fold the derived capability requirements into the plan
+	// before any fingerprint exists, so the capability set is part of the
+	// plan identity from the first byte. A derivation failure blocks the
+	// plan: requirements that cannot be derived can never be authorized.
+	if o.DeriveRequiredCapabilities != nil {
+		set, err := o.DeriveRequiredCapabilities(res.Plan)
+		if err != nil {
+			res.Plan.Blocked = true
+			res.Plan.BlockReasons = append(res.Plan.BlockReasons, "capability derivation: "+err.Error())
+		} else if !set.IsZero() {
+			res.Plan.Capabilities = capabilityStrings(set.IDs())
+		}
+	}
 	p := Plan{
 		Discovery: res.Discovery,
 		Model:     res.Model,
@@ -374,6 +405,32 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 		out.Blockers = append(out.Blockers, err.Error())
 		return out, nil
 	}
+	// Stage-4/B structural re-check: when a capability deriver is
+	// configured, the plan's carried capability set must equal the set
+	// derived from the plan's own typed actions, under the exact-set
+	// discipline of §9.C — a missing requirement AND an extra grant are
+	// both authorization mismatches. A hand-tampered Capabilities field
+	// (added, removed or replaced authority) blocks before confirmation
+	// and before any executor call.
+	if o.DeriveRequiredCapabilities != nil {
+		set, derr := o.DeriveRequiredCapabilities(p.Plan)
+		if derr != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "capability derivation: "+derr.Error())
+			return out, nil
+		}
+		carried, cerr := capability.NewCapabilitySet(capabilityIDs(p.Plan.Capabilities))
+		if cerr != nil {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "plan carries a malformed capability set: "+cerr.Error())
+			return out, nil
+		}
+		if v := capability.VerifyCapabilityGrant(set, carried); v.Status != capability.GrantSatisfied {
+			out.Stage = StageBlocked
+			out.Blockers = append(out.Blockers, "plan capabilities do not match the derived requirements (missing: ["+capabilityList(v.Missing)+"]; unexpected: ["+capabilityList(v.Unexpected)+"])")
+			return out, nil
+		}
+	}
 	registered := map[state.ActionKind]bool{}
 	for kind, ex := range o.Registry.ByKind {
 		if ex != nil {
@@ -419,6 +476,22 @@ func (o Orchestrator) Execute(p Plan, c Confirmation, mgmt []probe.Result) (out 
 	// mutation is refused — a stale plan must be regenerated, never applied.
 	if p.prepared {
 		fresh := pipeline.Assemble(o.Discover(), p.Config, p.opts)
+		// Stage-4/B: the fresh plan carries the same derived capability
+		// requirements as the prepared one — the derivation is part of the
+		// plan identity on BOTH sides of the staleness comparison. A
+		// machine change that alters the derived set therefore reads as
+		// staleness and refuses the mutation.
+		if o.DeriveRequiredCapabilities != nil {
+			freshSet, derr := o.DeriveRequiredCapabilities(fresh.Plan)
+			if derr != nil {
+				out.Stage = StageBlocked
+				out.Blockers = append(out.Blockers, "capability derivation on the fresh plan: "+derr.Error())
+				return out, nil
+			}
+			if !freshSet.IsZero() {
+				fresh.Plan.Capabilities = capabilityStrings(freshSet.IDs())
+			}
+		}
 		if Fingerprint(fresh.Plan) != Fingerprint(p.Plan) {
 			out.Stage = StageBlocked
 			out.Blockers = append(out.Blockers, "plan is stale: the machine changed since planning; regenerate the plan")
@@ -1013,3 +1086,35 @@ type preflightGate struct{ pf state.Preflight }
 
 func (g preflightGate) Ready() bool       { return g.pf.Status == state.PreflightReady }
 func (g preflightGate) Reasons() []string { return g.pf.Blocking }
+
+// capabilityIDs converts the plan's carried canonical capability strings to
+// the typed form for the exact-set check. Parse errors are reported by
+// NewCapabilitySet at the caller (fail-closed).
+func capabilityIDs(ss []string) []capability.CapabilityID {
+	out := make([]capability.CapabilityID, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, capability.CapabilityID(s))
+	}
+	return out
+}
+
+// capabilityStrings converts a derived canonical set into the plan's stored
+// string form (canonical order preserved).
+func capabilityStrings(ids []capability.CapabilityID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, string(id))
+	}
+	return out
+}
+
+// capabilityList renders capability IDs for a blocker message. The IDs are
+// canonical structural identifiers (no plan payload data), so echoing them
+// in a refusal is safe and actionable.
+func capabilityList(ids []capability.CapabilityID) string {
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, string(id))
+	}
+	return strings.Join(parts, ", ")
+}

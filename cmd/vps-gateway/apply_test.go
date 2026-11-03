@@ -243,6 +243,14 @@ func TestDefaultApplyOrchestratorWiring(t *testing.T) {
 	if o.Discover == nil {
 		t.Fatal("Discover must be wired (never called in this test)")
 	}
+	// Stage-4/B wiring pin: the production orchestrator derives the plan's
+	// required capabilities from its typed actions
+	// (apply.RequiredCapabilities), making the capability set part of the
+	// plan identity. Nil here would silently drop the Stage-4 semantics
+	// from the experiment flow.
+	if o.DeriveRequiredCapabilities == nil {
+		t.Fatal("DeriveRequiredCapabilities must be wired for the experiment flow (Stage 4/B)")
+	}
 }
 
 // A confirmation typed for a different plan is refused: the CLI binds the
