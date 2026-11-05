@@ -200,6 +200,65 @@ func TestApplyApprovalDryRunStopsBeforeConfirmationPhase(t *testing.T) {
 	}
 }
 
+// TestApplyApprovalEmptyPathNeverDowngradesToLegacy: an explicitly
+// requested approval boundary can never silently downgrade to the legacy
+// fingerprint-prefix confirmation (docs/security-model.md §6; ZAI-134
+// review of the Stage 2 slice). Before the fix, `--approval ""` was
+// indistinguishable from an absent flag: `--approval "" --confirm <prefix>`
+// bypassed the documented mutual exclusion and EXECUTED the mutation
+// through the legacy self-suppliable boundary. Both forms must now be
+// usage errors with zero mutating executor calls, refused before the
+// planning phase.
+func TestApplyApprovalEmptyPathNeverDowngradesToLegacy(t *testing.T) {
+	svc, calls := matrixExecutorCalls(t)
+	o, _, _ := applyTestOrchestrator(t, []discovery.Result{
+		loadSaymer3Discovery(t), loadSaymer3Discovery(t),
+	}, apply.Registry{ByKind: map[state.ActionKind]apply.ActionExecutor{state.ActionService: svc}})
+	// A valid legacy prefix for THIS plan: if the empty --approval ever
+	// degraded to the legacy boundary, this confirm would execute it.
+	rawCfg, err := os.ReadFile(experimentConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pipeline.ParseConfig(rawCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := o.Prepare(cfg, rootOpts())
+	if !p.Ready {
+		t.Fatalf("plan must be ready for the downgrade probe: %v", p.Blockers)
+	}
+	prefix := orchestrate.Fingerprint(p.Plan)[:12]
+
+	cases := map[string][]string{
+		"empty-approval-with-confirm": {"--config", experimentConfig(t), "--approval", "", "--confirm", prefix},
+		"empty-approval-alone":        {"--config", experimentConfig(t), "--approval", ""},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			*calls = nil
+			var out bytes.Buffer
+			code := runApplyWith(args, o, rootOpts(), strings.NewReader(""), &out, &out)
+			if code != 2 {
+				t.Fatalf("empty --approval must be a usage error (exit 2), got %d: output=%s", code, out.String())
+			}
+			// Either refusal message is correct: with a legacy --confirm also
+			// present the mutual-exclusion contract fires first; alone, the
+			// no-downgrade contract does. Both refuse before planning.
+			if !strings.Contains(out.String(), "never falls back to the legacy confirmation") &&
+				!strings.Contains(out.String(), "mutually exclusive") {
+				t.Fatalf("expected an explicit approval-contract refusal message: %s", out.String())
+			}
+			if hasMutatingCall(*calls) {
+				t.Fatalf("empty --approval reached the legacy boundary and mutated: %v", *calls)
+			}
+			if strings.Contains(out.String(), "Stage: "+orchestrate.StageCompleted) {
+				t.Fatalf("empty --approval reported COMPLETED: %s", out.String())
+			}
+		})
+	}
+}
+
 // TestApplyConfigCannotInjectCapabilities: the desired config carries no
 // authority vocabulary (muvg_config.go: no ownership/authority/capability
 // fields). A config that smuggles a top-level "capabilities" key gets at

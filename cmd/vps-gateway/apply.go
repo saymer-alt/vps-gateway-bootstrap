@@ -137,6 +137,12 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	dryRun := false
 	observeReport := false
 	configPath, confirmPrefix, approvalPath := "", "", ""
+	// approvalRequested tracks that the operator EXPLICITLY asked for the
+	// approval boundary, separately from the artifact path value: an empty
+	// path argument must be a usage error, never an implicit downgrade to
+	// the legacy fingerprint-prefix confirmation (docs/security-model.md §6;
+	// ZAI-134 review of the Stage 2 slice).
+	approvalRequested := false
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
 		case "--dry-run":
@@ -164,13 +170,18 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 			}
 			i++
 			approvalPath = rest[i]
+			approvalRequested = true
 		default:
 			fmt.Fprintf(stderr, "unknown apply flag %q\nusage: vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--approval FILE] [--observe-service-report] [--timeout DURATION]\n", rest[i])
 			return 2
 		}
 	}
-	if approvalPath != "" && confirmPrefix != "" {
+	if approvalRequested && confirmPrefix != "" {
 		fmt.Fprintln(stderr, "--approval and --confirm are mutually exclusive: an operator-signed artifact replaces the legacy fingerprint-prefix confirmation (docs/security-model.md §6)")
+		return 2
+	}
+	if approvalRequested && approvalPath == "" {
+		fmt.Fprintln(stderr, "--approval requires a non-empty artifact file path: an explicitly requested approval never falls back to the legacy confirmation (docs/security-model.md §6)")
 		return 2
 	}
 
