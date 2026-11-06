@@ -19,6 +19,20 @@
 | Переключение при принудительном отказе WG, MASQUE, обеих подписок и при полном outage без DIRECT | **NOT YET VERIFIED** — нужна контролируемая отрицательная приёмка |
 | Все приложения/VPN-порты VPS автоматически попадают в Mihomo | **НЕ ДОКАЗАНО**: `mixed-port: 7890` обрабатывает только потоки, реально направленные на него, а не автоматически весь трафик хоста |
 
+## SE: Amnezia Gateway в отличие от локального SE2 (кандидат 06.11.2026, НЕ применён)
+
+Владелец предоставил **два варианта генератора** для SE: (1) только `mixed-port: 7890`; (2) VPS Transparent Gateway с `tun-mihomo`, `auto-route: false`, `dns: fake-ip`, `dns-hijack` и sniffer. Для SE с работающим `amnezia-mihomo-gateway` **нельзя** переносить локальный вариант SE2 без TUN: AmneziaWG Docker-трафик использует Linux policy-routing в таблице 100 → `tun-mihomo`, а служебные ответы AWG намеренно идут через `fwmark 0x88` и host route. См. [документацию gateway](https://github.com/saymer-alt/amnezia-mihomo-gateway/blob/main/README.md).
+
+- Сверка полей без публикации секретов: SE имеет отдельные от SE2 MASQUE EC P-256 private key, WG private key (32 byte), HWID и WARP IPv6; H2/H3 внутри SE используют один ключ/аккаунт — это ожидаемо. WARP peer public keys для SE и SE2 общие. **Реальная регистрация/handshake не проверялись.**
+- Единственные нужные изменения в пользовательских правилах: `GLOBAL → AUTO-EXIT`, приоритеты WG/H3/H2/Geodema/Kyra/Gist, доменные Gemini → `GEODEMA`, no user DIRECT + empty fallback → REJECT. Не ломать существующие TUN/DNS/sniffer, `device: tun-mihomo`, `auto-route: false`.
+- **MIPS vs gVisor:** генератор предложил `stack: mips`, но gateway README фиксирует `gvisor` как сравнительно проверенный VPS baseline (21.09.2026). Не менять stack вместе с routing без фактического live-check и отдельного согласования. Переносить фактически работающий стек; при одинаковой функциональности предпочитать подтверждённый gVisor.
+- `dns.listen: 0.0.0.0:53` требует контроля конфликтов с другим DNS-слушателем и защиты от публичного доступа firewall'ом. Это операторская проверка, а не рекомендация открыть резолвер.
+- Для SE **нет** `exclude-filter` в двух представленных исходниках; не копировать ограничения SE2 на RU-узлы без отдельного решения владельца.
+- На SE отсутствуют подтвержденные данные о текущем `-d/-f`, пути unit, active TUN stack, firewall/host route, поэтому YAML-кандидат **НЕ production-approved** только потому, что парсится локальным YAML parser.
+- До обновления: проверить `ps aux | grep '[m]ihomo'`, `systemctl cat mihomo`, `grep -A12 '^tun:' <active-yaml>` (без секретов), `ip -4 rule`, `ip -4 route show table 100`, `ip link show tun-mihomo`, `systemctl status warp-docker-routing.service check-warp-routing.timer`, `ss -lntup`; после — тест `mihomo -t`, явный owner-applied restart, внешний IP через 7890 **и** подключённого AWG-клиента, Gemini chain и fail-closed.
+
+**Статус:** офлайн-сверка структуры и ключевых различий — PASS; бинарный Mihomo parse и live Gateway smoke — **NOT TESTED**.
+
 ## Политика SE2 V2
 
 - `mode: rule` сохраняется: **никогда не включать фактический режим Mihomo `global`**, если нужно исключение Gemini. `GLOBAL` — имя группы `type: select`, а не режим работы ядра.
@@ -123,7 +137,7 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 | Host | Состояние |
 | --- | --- |
 | SE2 (`Saymer2`) | V2 применена владельцем, функциональная smoke-проверка **reported PASS**, negative outage и точный маршрут Gemini — **UNKNOWN** |
-| SE | Нужен текущий приватный YAML, discovery и отдельная адаптация; **NOT STARTED** |
+| SE | Приватный YAML от оператора рассмотрен, создан офлайн-кандидат V2 с Gateway; live discovery и установка — **NOT STARTED** |
 | EE | То же; **NOT STARTED**. Исторически на EE был `tun-mihomo` и policy routing для AWG (09.2026): проверить актуальность и сохранить TUN/rules, не подменять профилем SE2 |
 | MSK | То же; возможны отдельные транзитные/меж-VPS пути, не перетирать и исключить циклы маршрутизации; **NOT STARTED** |
 
