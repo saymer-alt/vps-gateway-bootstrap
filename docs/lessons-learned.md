@@ -671,3 +671,55 @@ error, not on proven absence.
 - Report artifact removal only from the removal command's exit code
   plus an independent post-check of absence — never `rm -f`, never
   from the intention to remove.
+
+
+## 36. A working VPS egress policy can be a small reviewed YAML overlay, not a new generator feature
+
+On 2026-11-06 the operator adapted Mihomo on SE2 with a one-off, reviewed V2 YAML derived from an existing generator export. The operator reported that Mihomo was working well, Gemini opened, and the external IP shown by 2IP belonged to Cloudflare. The intended policy was `mode: rule` with a manual `GLOBAL` group, sequential `AUTO-EXIT` tiers (WARP WireGuard → MASQUE H3 → MASQUE H2 → Geodema → Kyra → Gist), and Gemini-specific rules to `GEODEMA` before `MATCH,GLOBAL`. At the time of this initial SE2 entry the other VPS had not been changed; on 2026-11-06 SE and EE were subsequently updated and MSK recovered its DNS/Gateway baseline. See the later field-status addendum in the operator runbook; MSK's new Mihomo YAML has not yet been deployed.
+
+This is *functional smoke evidence*, not proof that Gemini's observed connection chain selected Geodema, or that complete failure of all tiers safely rejects packets. A `fallback` group switches among healthy candidates; `empty-fallback: REJECT` specifically blocks the implicit `COMPATIBLE` exit for an **empty** group and does not prove all-unhealthy failover. A `REJECT` in the last tier is a deliberate fail-closed policy, not a performance selector. Neither the absence of the word `DIRECT` from user groups nor one external-IP lookup proves that other services bypassing port 7890 cannot reach the host uplink.
+
+**Rules:**
+- Prefer a one-off operator-reviewed adaptation of an existing YAML over building and maintaining a universal generator feature when the economics and scope do not justify the latter.
+- Keep the actual Mihomo mode `rule` so Gemini-specific exceptions remain effective; manual `GLOBAL` is a selectable group, not core global mode.
+- Preserve host-local layering and chosen priority order; avoid assuming SE2's proxies, keys, subscriptions, unit paths or extra rules apply to SE, EE or MSK.
+- Separate service/control-plane bootstrap from user data-plane, keep `empty-fallback: REJECT` for potentially empty provider groups, and validate actual negative-path behavior before claiming no user DIRECT leak.
+- Protect secrets: never commit live WARP private keys, subscription URLs, HWIDs or full operator configs to this repository.
+
+See [operator runbook and evidence boundary](mihomo-manual-tiered-egress-se2.md).
+
+
+## 37. Mihomo config validation must prove the intended input exists; Gateway requires DNS and route checks after restart
+
+SE (06.11.2026) provided concrete evidence of two different classes of regression while applying a hand-edited V2 YAML on a live AmneziaWG gateway. When the proposed `/etc/mihomo/config.yaml.candidate` did not exist, the Mihomo 1.19.33 `-t -f` command logged `Can't find config, create a initial config file` and still ended with `test is successful`. The resulting initial config was then copied over the working YAML, eliminating `tun-mihomo`. Later a malformed text transfer produced `yaml: invalid leading UTF-8 octet`. A formerly created local backup was absent from its expected path. The operator recovered by editing the active file through `nano`; test PASS alone never established *which* config was tested.
+
+A second failure was independent of YAML syntax: Mihomo was active and its TUN present, while `systemd-resolved` occupied port 53 and Mihomo logged `Start DNS server ... bind: address already in use`. Also, after Mihomo restart, table 100 held only `unreachable default` until the project-owned `warp-docker-routing.service` reapplied `default dev tun-mihomo`. The host had a standalone immutable `/etc/resolv.conf` pointing to public DNS, so disabling `systemd-resolved` was safe *for this observed SE state*; the operator confirmed `getent`, fresh Mihomo start without bind warnings, DNS TCP/UDP bound to Mihomo and table 100 restored. UFW inbound default deny with no visible rule for 53 is only *configuration* evidence; no external port scan was performed. A connected AWG client was **not** used for final data-plane proof.
+
+**Rules:**
+- Before any `mihomo -t`, require `test -s` on the **intended file** and check expected profile sections. A successful parse of an automatically created initial config is **not** successful deployment. Check file encoding/integrity and refuse to apply a broken or missing candidate; never copy a generated skeleton over a working config.
+- Store a recoverable, path-verified, non-public backup outside directories subject to bulk replacement; verify content and rights before mutation, and do not assume a backup exists because a previous `cp` appeared in terminal history.
+- A running Mihomo process is not evidence that its DNS listener started. After restart, inspect actual `:53` ownership and new journal lines, not historical warnings.
+- For Amnezia Gateway, after restarting Mihomo revalidate TUN, policy rules and **the usable table-100 route**, and reapply the gateway-owned routing service when necessary. The preserved `unreachable default` is a protective block, not a successful working exit.
+- Keep DNS management and host ownership independent: do not disable `systemd-resolved` on a different VPS simply because doing so worked on SE; first inspect that host's `/etc/resolv.conf`, Docker DNS consumers and existing policies.
+- Avoid bundling a `gvisor`→`mips` stack experiment with recovery or an egress policy rollout. SE owner explicitly deferred MIPS (06.11.2026); record baseline without inferring speed or compatibility improvements.
+
+See [SE field outcome and separate EE/MSK backlog](mihomo-manual-tiered-egress-se2.md). No private YAML, WARP keys, provider URLs or HWIDs were added.
+
+## 38. Fail-safe watchdogs must have a first timer trigger, and unit Active does not prove routing
+
+MSK/Saymer3 (2026-11-06) had a project-owned routing service `active (exited)` despite missing policy rules `priority 40/100` and terminal table100 `unreachable default`. A separate `AMG_FAILSECURE` firewall chain and FORWARD DROP still existed, so no actual AWG direct leak was proven. The service was successfully applied 3 days earlier, but *the process that removed the rules later remains UNKNOWN*.
+
+Its systemd timer drop-in specified `OnUnitActiveSec=` (empty), then `OnUnitActiveSec=5min`. The empty timer directive **resets all On*Sec settings**, including the base unit's `OnBootSec=2min`. As no check unit activation had occurred, the only remaining `OnUnitActiveSec` could not bootstrap itself: the timer showed `active (elapsed)`, `NextElapseUSecMonotonic=infinity`, never ran, and never repaired missing policy rules. Merely checking `systemctl is-active timer` would have missed this.
+
+The operator confirmed the existing iptables guard, restored routing via project-owned `systemctl reload warp-docker-routing.service`, then used an owner-approved override with `OnActiveSec=2min` and `OnUnitActiveSec=5min`. The timer entered `active (waiting)`; a real check fired 22:53:40 MSK with SUCCESS and next activation 22:58:40; policy rules, table100 and guard were intact. Negative E2E fail-secure and induced recovery were **not** tested.
+
+**Engineering rule:** Validate (i) fail-safe guard independent of the service status, (ii) effective `ip rule` and both table100 routes, (iii) a finite next trigger and an actual completed watchdog run, and (iv) post-recovery invariants. Explicitly account for owner-local systemd drop-ins rather than assuming installed unit text describes effective timer behavior. Preserve the guard and terminal barrier during a maintenance restart. Track installer/doctor improvement in [AMG #61](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/61).
+
+## 39. WARP tunnel health and persisted selectors are independent failure modes
+
+EE V2 (2026-11-06) passed Mihomo syntax checking and had a working Gemini rule through Geodema, but the default `GLOBAL` selection after a reboot was persisted as a dead `WARP EE` peer (`alive:false` with 0 delay). `profile.store-selected:true` allowed a stale manual choice to **bypass** otherwise healthy `AUTO-EXIT` failover; this is distinct from the unresponsive WG connection itself.
+
+EE V4 used `store-selected:false`, `GLOBAL→AUTO-EXIT`, and three independent WARP WireGuard nodes with WARPSCOUT-chosen IPv4 endpoints on UDP 2408. Mihomo's targeted delay API reported 24/21/14 ms; `AUTO-EXIT` selected the **first available** (WG1, not the lowest delay WG3). Owner opted to retain three WG peers as ordered redundancy, not aggregation. This proved live per-node connectivity but did **not** isolate which of the old IP/port/credentials had been wrong, prove a full outage safety path or prove an actual AWG end-user session. Gemini chain to a Geodema node and repeated HTTP 200 requests were independently captured.
+
+**Engineering rule:** Treat `mihomo -t` as structure validation, not proxy health; after changes/reboot validate `GLOBAL.now`, `AUTO-EXIT.now`, each required WG peer `alive/delay`, real routed connection chains and the AWG client path. Keep distinct accounts/keys host-local, never commit secrets. See [VPS field runbook](mihomo-manual-tiered-egress-se2.md) and [link-generators #278](https://github.com/saymer-alt/link-generators/issues/278).
+
