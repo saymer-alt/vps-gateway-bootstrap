@@ -177,8 +177,30 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 | --- | --- |
 | SE2 (`Saymer2`) | V2 применена владельцем, функциональная smoke-проверка **reported PASS**, negative outage и точный маршрут Gemini — **UNKNOWN** |
 | SE (`Saymer`) | V2 с Gateway применена владельцем; `mihomo -t` PASS, unit/TUN/DNS/routes/firewall см. field evidence — **CONFIG + SERVICE OBSERVED PASS**; внешний egress с AWG-клиента / Gemini chain / outage — **UNKNOWN**. `gvisor` сохранён; MIPS отложен |
-| EE | **NEXT / NOT STARTED**. Исторически на EE был `tun-mihomo` и policy routing для AWG (09.2026): сначала прочитать текущие факты, проверить актуальность и сохранить TUN/rules, не подменять профилем SE2 |
-| MSK | **NEXT / NOT STARTED**. Возможны отдельные транзитные/меж-VPS пути, не перетирать и исключить циклы маршрутизации; нужны собственные discovery и операторская приёмка |
+| EE (`hungry-boyd`) | **V4 APPLIED / WG FIELD PASS:** три отдельных WARP-WG peer, API задержки 24/21/14 мс; `AUTO-EXIT.now=WARP-WG-EE-1`, `GLOBAL.now=AUTO-EXIT`. Gemini фактически `gemini.google.com → польский узел → GEODEMA`, HTTP 200. DNS TCP+UDP 53 и TUN/routes восстановлены; AWG client egress и outage ещё не доказаны |
+| MSK (`Saymer3`) | **GATEWAY BASELINE RESTORED / YAML V2 NOT STARTED:** `systemd-resolved` остановлен и disabled; Mihomo владеет TCP/UDP 53, `getent` PASS, через 7890 HTTP 204. Prio 40/100, route100 TUN + unreachable barrier восстановлены; timer проверен 22:53:40 MSK (`SUCCESS`), следующий 22:58:40. Ждём отдельный MSK YAML и WG endpoint; AWG client/outage не тестировались |
+
+
+## Полевое дополнение — EE V4 и MSK до нового YAML (06.11.2026)
+
+Эта секция актуализирует ранние записи «EE/MSK NOT STARTED» выше, не стирая историю решений и не выдавая результаты unit/локального прокси за клиентскую E2E-приёмку.
+
+### EE: отказ WG, затем три рабочих независимых WG
+
+- В EE V2 после перезагрузки `GLOBAL.now=WARP EE`, при этом `WARP EE.alive=false` и задержки 0. `profile.store-selected:true` восстановил ручной выбор сломанного WG в обход `AUTO-EXIT`; это отдельная ошибка от неисправного peer. Причину недоступности старой пары ключи/endpoint (`162.159.198.187:443`) **не выделили** из взаимозависимых изменений.
+- EE V4: `store-selected:false`; `GLOBAL → AUTO-EXIT`, первыми идут WG1 `8.34.146.122:2408`, WG2 `188.114.98.249:2408`, WG3 `188.114.97.113:2408`, далее MASQUE H3/H2 → Geodema → Kyra → Gist → REJECT. Владелец **явно решил сохранить все три WG** (не объединение каналов: fallback выбирает первый живой).
+- Mihomo `-t` PASS; API задержки трёх WG: 24/21/14 мс, `AUTO-EXIT.now=WG1`, `GLOBAL.now=AUTO-EXIT`; живой Gemini chain через Geodema подтверждён. Три рабочих WG сейчас — **не** доказательство отказоустойчивости при принудительной потере всех транспортов.
+- Код генератора по этому случаю не выпускается автоматически; требования сохранены в [link-generators #278](https://github.com/saymer-alt/link-generators/issues/278).
+
+### MSK: DNS и планировщик/маршруты — восстановлены оператором
+
+- Ubuntu 24.04.5, Mihomo 1.19.33, `gvisor`, `tun-mihomo`, Docker AWG bridge `172.29.172.0/24`, отдельный host-network контейнер radio. Начальный `mihomo.service active` не означал рабочий DNS: journal показал отказ TCP+UDP `0.0.0.0:53` из-за `systemd-resolved`. После проверки самостоятельного immutable `/etc/resolv.conf` владелец остановил и отключил resolved, рестартовал Mihomo и выполнил **reload** Gateway. Mihomo занял TCP+UDP 53; `getent github.com` PASS, прокси `gstatic generate_204` HTTP 204.
+- `warp-docker-routing.service` был `active (exited)`, хотя отсутствовали приоритеты `ip rule 40/100` и `unreachable default` в table 100. При этом independent `AMG_FAILSECURE` цепочка с REJECT и FORWARD DROP сохранились (отсутствие реальной утечки не доказано).
+- Root cause **несрабатывания watchdog**: локальный `check-warp-routing.timer.d/override.conf` имел пустой `OnUnitActiveSec=`, который сбрасывает все `On*Sec` из базового unit, включая `OnBootSec=2min`. Оставался лишь `OnUnitActiveSec=5min` без первого запуска: `active(elapsed)`, next infinity. Оператор добавил `OnActiveSec=2min`, сохранил `OnUnitActiveSec=5min`, выполнил `daemon-reload` + restart таймера. Первый реальный check `22:53:40 MSK`: `status=0/SUCCESS`, следующий через пять минут.
+- Маршруты восстановлены `systemctl reload warp-docker-routing.service`: `ip rule 40 fwmark 0x88 lookup main`, `ip rule 100 from AWG lookup mihomo`, `default dev tun-mihomo metric 10`, `unreachable default metric 42760`; `AMG_FAILSECURE` сохранён. Исходную причину исчезновения правил **не установили**.
+- Факты оформлены в [AMG #59](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/59) (DNS, реализованный install-time gate уже слит в main через PR #60) и [AMG #61](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/61) (таймер/маршруты; общего исправления в коде пока нет). Настройку YAML MSK V2 **ещё не выполняли**.
+
+**Общие границы:** live WG delays, локальный proxy HTTP 200/204, socket ownership, systemd active и даже один успешный watchdog check НЕ подтверждают end-to-end dataplane AWG, безопасный отрицательный outage, переносимость к другим хостам или доступность DNS 53 с внешнего интерфейса. Полные приватные YAML, WARP private keys, subscription/HWID не коммитить.
 
 ## Негативные тесты и условия STOP
 
