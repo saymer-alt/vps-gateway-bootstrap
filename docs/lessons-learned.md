@@ -671,3 +671,19 @@ error, not on proven absence.
 - Report artifact removal only from the removal command's exit code
   plus an independent post-check of absence — never `rm -f`, never
   from the intention to remove.
+
+
+## 36. A working VPS egress policy can be a small reviewed YAML overlay, not a new generator feature
+
+On 2026-11-06 the operator adapted Mihomo on SE2 with a one-off, reviewed V2 YAML derived from an existing generator export. The operator reported that Mihomo was working well, Gemini opened, and the external IP shown by 2IP belonged to Cloudflare. The intended policy was `mode: rule` with a manual `GLOBAL` group, sequential `AUTO-EXIT` tiers (WARP WireGuard → MASQUE H3 → MASQUE H2 → Geodema → Kyra → Gist), and Gemini-specific rules to `GEODEMA` before `MATCH,GLOBAL`. The other three VPS were not changed.
+
+This is *functional smoke evidence*, not proof that Gemini's observed connection chain selected Geodema, or that complete failure of all tiers safely rejects packets. A `fallback` group switches among healthy candidates; `empty-fallback: REJECT` specifically blocks the implicit `COMPATIBLE` exit for an **empty** group and does not prove all-unhealthy failover. A `REJECT` in the last tier is a deliberate fail-closed policy, not a performance selector. Neither the absence of the word `DIRECT` from user groups nor one external-IP lookup proves that other services bypassing port 7890 cannot reach the host uplink.
+
+**Rules:**
+- Prefer a one-off operator-reviewed adaptation of an existing YAML over building and maintaining a universal generator feature when the economics and scope do not justify the latter.
+- Keep the actual Mihomo mode `rule` so Gemini-specific exceptions remain effective; manual `GLOBAL` is a selectable group, not core global mode.
+- Preserve host-local layering and chosen priority order; avoid assuming SE2's proxies, keys, subscriptions, unit paths or extra rules apply to SE, EE or MSK.
+- Separate service/control-plane bootstrap from user data-plane, keep `empty-fallback: REJECT` for potentially empty provider groups, and validate actual negative-path behavior before claiming no user DIRECT leak.
+- Protect secrets: never commit live WARP private keys, subscription URLs, HWIDs or full operator configs to this repository.
+
+See [operator runbook and evidence boundary](mihomo-manual-tiered-egress-se2.md).
