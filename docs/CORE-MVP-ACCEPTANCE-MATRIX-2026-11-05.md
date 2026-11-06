@@ -30,3 +30,36 @@ CORE-MVP-STRATEGY §6 vocabulary: DONE (evidence) / BLOCKED / DEFERRED.
 - **Gates 6–7:** operator runbook truthfulness and any release labeling — only after lab/field evidence; no production promise.
 
 **Not done by this verification:** no real VPS contact, no releases, no merge, no ownership/trust-policy changes; lab = local disposable Linux sandbox only. CI PASS ≠ field PASS.
+
+---
+
+## Follow-up 2026-11-05: chain #60→#61 verification, legacy retirement plan, evidence fixation
+
+### Chain verification (ZAI-135)
+
+- #60 head `8377686` / #61 head `8d7cd73`, both OPEN and MERGEABLE; full suite on the stacked head: **39 packages, 0 FAIL** (Linux, go 1.26.8).
+- Real-binary CLI boundary forms all refuse with exit 2: `--approval ""`, `--approval "" --confirm <prefix>`, repeated `--approval` in any order combined with `--confirm`, missing flag value, unknown flag. Malformed/empty artifact files fail closed at parse (`TestParseApprovalArtifactFailsClosed`).
+- **What the synthetic-anchor tests prove — and what they don't:** every approval-boundary unit/tripwire test above runs against a synthetic test anchor (`ed25519.GenerateKey` inside the tests) or a source-level assertion. They prove the Verifier math (Ed25519 verification, canonical re-encode, fingerprint/machine-id/expiry binding, tamper and staleness rejection), the single-site verifier wiring, and the CLI boundary forms. They do **not** prove the operator ceremony: no test provisions a root:root anchor at the compiled location and no positive signed-approval run end-to-end exists. That positive E2E acceptance remains **BLOCKED** on separate owner authorization (see "Remaining criteria" above); a green unit matrix must not be read as a PASS for the positive scenario.
+- **CI gap (documented, not fixed):** `build.yml` triggers only on push to `main` and PRs targeting `main` — stacked PRs (base = feature branch) receive no CI run, #61 and #62 alike. Their coverage until retargeting is the local suite above; retargeting happens automatically when #60 merges.
+
+### Legacy `--confirm`: what still uses it, and the retirement plan
+
+Still-using scenarios (all documented transitional per security-model §6/§13 stage 2):
+
+1. Every current operator run: no production trust anchor exists (anchor ceremony is not provisioned), so `--approval` is fail-closed unusable and the pinned experiment executes only under the self-suppliable legacy prefix (standing G1 risk, contained by the §10 pins).
+2. `--confirm ""` — indistinguishable from an absent flag, falls to the interactive prompt, refuses on EOF; grants nothing beyond omitting the flag (pinned by `TestLegacyConfirmEmptyValueIsNotADowngrade`).
+
+No other implicit downgrade path exists: `o.ApprovalVerifier` is assigned in exactly one production site (`attachApprovalVerification`, reached only from the `--approval` branch); anchor and machine-id inputs are compile-time constants; a verifier configured mid-approval refuses legacy confirmations at Confirm (`internal/orchestrate/approval_test.go` tripwire) and at the CLI (`TestApplyApprovalEmptyPathNeverDowngradesToLegacy`, `TestApplyApprovalAndConfirmAreMutuallyExclusive`). The new tripwires pin the wiring (`TestApprovalVerifierWiredOnlyByApprovalFlag`) and the repeated-flag forms (`TestRepeatedApprovalFlagCannotBypassMutualExclusion`).
+
+**Retirement plan (owner-gated, no behavior change until GO):**
+
+1. Owner accepts the signed-approval path and provisions the anchor ceremony (root:root anchor at the compiled location — operator action outside the codebase) — BLOCKED until then.
+2. Disposable-lab positive acceptance of `--approval` end-to-end on the pinned experiment.
+3. Removal slice: delete the `--confirm` flag and the legacy branch of `runApplyWith`/`Confirm`; tripwire upgrades to: `--confirm` is an unknown flag; `Confirmation` without `Approval` is always refused; source-level assert that `confirmPrefix` no longer exists. Separate PR, only after 1–2.
+
+### Rollback-after-failure evidence (criterion "проверка rollback после отказов" — already implemented, fixated)
+
+- Positional reverse-order rollback after mid-transaction failures: `internal/apply/engine_test.go` (multi-action orderings), `TestEngineRegistryRollbackRestoresUpdatedFile` (updated file restored), `TestSSHFinalizeEngineRollbackRestoresDualListenerAfterReloadFailure`, `TestSSHFinalizeEngineRollbackOnProbeFailure`.
+- Rollback safety negatives: `TestRollbackFailsOnContentTampering/ChecksumTampering/TruncatedBackup/MissingContent/InconsistentManifest` — a corrupted backup refuses restore and latches RECOVERY_REQUIRED instead of guessing.
+- Stage-1 binding of rollback operations: `TestStage4RequiredCapabilitiesBindRollbackOperation` (a rollback op must itself be policy-permitted).
+- Unproven by design (needs disposable lab): rollback on a REAL failing systemd/Docker transaction, rollback after reboot from a crashed journal (unit-level recovery tests exist: `evidence_recover_test.go`, `journal_finalize_failure_test.go`), and management-access reachability across a real rollback.
