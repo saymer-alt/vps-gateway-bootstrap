@@ -39,7 +39,8 @@ CORE-MVP-STRATEGY §6 vocabulary: DONE (evidence) / BLOCKED / DEFERRED.
 
 - #60 head `8377686` / #61 head `8d7cd73`, both OPEN and MERGEABLE; full suite on the stacked head: **39 packages, 0 FAIL** (Linux, go 1.26.8).
 - Real-binary CLI boundary forms all refuse with exit 2: `--approval ""`, `--approval "" --confirm <prefix>`, repeated `--approval` in any order combined with `--confirm`, missing flag value, unknown flag. Malformed/empty artifact files fail closed at parse (`TestParseApprovalArtifactFailsClosed`).
-- **CI gap (documented, not fixed):** `build.yml` triggers only on push to `main` and PRs targeting `main` — stacked PRs (base = feature branch) receive no CI run. #61's coverage until retargeting is the local suite above; retargeting happens automatically when #60 merges.
+- **What the synthetic-anchor tests prove — and what they don't:** every approval-boundary unit/tripwire test above runs against a synthetic test anchor (`ed25519.GenerateKey` inside the tests) or a source-level assertion. They prove the Verifier math (Ed25519 verification, canonical re-encode, fingerprint/machine-id/expiry binding, tamper and staleness rejection), the single-site verifier wiring, and the CLI boundary forms. They do **not** prove the operator ceremony: no test provisions a root:root anchor at the compiled location and no positive signed-approval run end-to-end exists. That positive E2E acceptance remains **BLOCKED** on separate owner authorization (see "Remaining criteria" above); a green unit matrix must not be read as a PASS for the positive scenario.
+- **CI gap (documented, not fixed):** `build.yml` triggers only on push to `main` and PRs targeting `main` — stacked PRs (base = feature branch) receive no CI run, #61 and #62 alike. Their coverage until retargeting is the local suite above; retargeting happens automatically when #60 merges.
 
 ### Legacy `--confirm`: what still uses it, and the retirement plan
 
