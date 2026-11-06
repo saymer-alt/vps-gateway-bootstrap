@@ -124,8 +124,8 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 | --- | --- |
 | SE2 (`Saymer2`) | V2 применена владельцем, функциональная smoke-проверка **reported PASS**, negative outage и точный маршрут Gemini — **UNKNOWN** |
 | SE | Нужен текущий приватный YAML, discovery и отдельная адаптация; **NOT STARTED** |
-| EE | То же; **NOT STARTED** |
-| MSK | То же; возможны отдельные транзитные/меж-VPS пути, не перетирать; **NOT STARTED** |
+| EE | То же; **NOT STARTED**. Исторически на EE был `tun-mihomo` и policy routing для AWG (09.2026): проверить актуальность и сохранить TUN/rules, не подменять профилем SE2 |
+| MSK | То же; возможны отдельные транзитные/меж-VPS пути, не перетирать и исключить циклы маршрутизации; **NOT STARTED** |
 
 ## Негативные тесты и условия STOP
 
