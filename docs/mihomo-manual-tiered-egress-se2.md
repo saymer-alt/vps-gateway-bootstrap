@@ -19,7 +19,7 @@
 | Переключение при принудительном отказе WG, MASQUE, обеих подписок и при полном outage без DIRECT | **NOT YET VERIFIED** — нужна контролируемая отрицательная приёмка |
 | Все приложения/VPN-порты VPS автоматически попадают в Mihomo | **НЕ ДОКАЗАНО**: `mixed-port: 7890` обрабатывает только потоки, реально направленные на него, а не автоматически весь трафик хоста |
 
-## SE: Amnezia Gateway в отличие от локального SE2 (кандидат 06.11.2026, НЕ применён)
+## SE: Amnezia Gateway — полевая установка 06.11.2026 (gVisor сохранён)
 
 Владелец предоставил **два варианта генератора** для SE: (1) только `mixed-port: 7890`; (2) VPS Transparent Gateway с `tun-mihomo`, `auto-route: false`, `dns: fake-ip`, `dns-hijack` и sniffer. Для SE с работающим `amnezia-mihomo-gateway` **нельзя** переносить локальный вариант SE2 без TUN: AmneziaWG Docker-трафик использует Linux policy-routing в таблице 100 → `tun-mihomo`, а служебные ответы AWG намеренно идут через `fwmark 0x88` и host route. См. [документацию gateway](https://github.com/saymer-alt/amnezia-mihomo-gateway/blob/main/README.md).
 
@@ -27,8 +27,8 @@
 - Единственные нужные изменения в пользовательских правилах: `GLOBAL → AUTO-EXIT`, приоритеты WG/H3/H2/Geodema/Kyra/Gist, доменные Gemini → `GEODEMA`, no user DIRECT + empty fallback → REJECT. Не ломать существующие TUN/DNS/sniffer, `device: tun-mihomo`, `auto-route: false`.
 - **MIPS vs gVisor:** генератор предложил `stack: mips`, но gateway README фиксирует `gvisor` как сравнительно проверенный VPS baseline (21.09.2026). Не менять stack вместе с routing без фактического live-check и отдельного согласования. Переносить фактически работающий стек; при одинаковой функциональности предпочитать подтверждённый gVisor.
 - `dns.listen: 0.0.0.0:53` требует контроля конфликтов с другим DNS-слушателем и защиты от публичного доступа firewall'ом. Это операторская проверка, а не рекомендация открыть резолвер.
-- Для SE **нет** `exclude-filter` в двух представленных исходниках; не копировать ограничения SE2 на RU-узлы без отдельного решения владельца.
-- **Новые факты от владельца, 06.11.2026:** SE (`Saymer`) работает с `/usr/local/bin/mihomo` **v1.19.33**, вывод `Use tags: with_gvisor`; текущий файл `/etc/mihomo/config.yaml` содержит `tun.stack: gvisor`, `device: tun-mihomo`, `auto-route: false`, `mtu: 1420`, `gso: true`, DNS hijack и `disable-icmp-forwarding: true`. Это доказывает текущий baseline стека по конфигу, но **не** целостность маршрутов AWG и не безопасность обновления. Путь systemd `-d/-f`, firewall, table 100 и runtime connections на SE пока **UNKNOWN**.
+- Первые варианты SE были **без** `exclude-filter`; 06.11.2026 оператор отдельно дал свой фильтр российских узлов и Kyra Telegram. В окончательном рабочем YAML проверено **три вхождения** `exclude-filter` — по одному в Geodema/Kyra/MyGist. Сам приватный YAML/полный provider regex в публичный репозиторий не выкладывать.
+- **Подтверждено владельцем, 06.11.2026:** SE (`Saymer`) работает с `/usr/local/bin/mihomo` **v1.19.33** и `/etc/mihomo/config.yaml`, `ExecStart=/usr/local/bin/mihomo -d /etc/mihomo`. Рабочий `tun.stack: gvisor` (MIPS **не внедряли**, сравнительный тест отложен), `device: tun-mihomo`, `auto-route: false`, `mtu: 1420`, `gso: true`, DNS hijack, `disable-icmp-forwarding: true`. Следующие live-проверки маршрутов и firewall см. ниже.
 - До обновления: проверить `ps aux | grep '[m]ihomo'`, `systemctl cat mihomo`, `grep -A12 '^tun:' <active-yaml>` (без секретов), `ip -4 rule`, `ip -4 route show table 100`, `ip link show tun-mihomo`, `systemctl status warp-docker-routing.service check-warp-routing.timer`, `ss -lntup`; после — тест `mihomo -t`, явный owner-applied restart, внешний IP через 7890 **и** подключённого AWG-клиента, Gemini chain и fail-closed.
 
 ### Read-only факты SE (оператор, 06.11.2026 16:24 MSK)
@@ -43,7 +43,34 @@
 - Эти факты снимают неопределенность относительно маршрутов/юнита в момент вывода, но **не подтверждают** работу AWG клиентского dataplane после замены и реального отказа всех прокси.
 - Оператор хочет отдельное сравнительное испытание `gvisor` vs `mips` на SE, не меняя остальных параметров. Не считать факт поддержки MIPS доказательством выигрыша по скорости; эксперимент после сохранения baseline и с rollback.
 
-**Статус:** офлайн-сверка структуры и ключевых различий — PASS; бинарный Mihomo parse и live Gateway smoke — **NOT TESTED**.
+**Статус SE (06.11.2026, 17:00 MSK):** полный YAML изменён оператором и `mihomo -t` вернул PASS; `mihomo.service` ACTIVE; `tun-mihomo` и таблица 100 восстановлены; DNS TCP+UDP 53 обслуживает Mihomo без ошибки нового запуска; watchdog active; UFW active. **AWG client egress, Gemini фактический chain, speed и полный failover/отказ — NOT VERIFIED**. Итог рабочего состояния — только по фактам из предоставленных владельцем команд, не прямой доступ к VPS.
+
+### SE — фактическое завершение, инциденты и важные границы (06.11.2026)
+
+**Что сделал и проверил оператор на SE:**
+1. Исходный вариант Gateway имел `gvisor`; после редактирования через `nano` текущий V2 успешно прошёл `/usr/local/bin/mihomo -t -d /etc/mihomo`. При следующем запуске процесс `mihomo.service` — `active (running)`, интерфейс `tun-mihomo` присутствует, `198.18.0.0/30`.
+2. Из-за перезапуска Mihomo временно исчез `default dev tun-mihomo` из table 100, остался только `unreachable default metric 42760`. `systemctl restart warp-docker-routing.service` завершился с `SUCCESS`, вернул `default dev tun-mihomo scope link metric 10` при сохранении unreachable barrier; `check-warp-routing.timer` active. **Не считать присутствие TUN достаточной проверкой таблицы маршрутов!**
+3. `systemd-resolved` был active+enabled и владел портом 53 на `127.0.0.53/54`; Mihomo логировал `Start DNS server(TCP|UDP) ... bind: address already in use`, оставаясь `active`. `/etc/resolv.conf` уже был обычным, immutable-файлом с `1.1.1.1` и `8.8.8.8`, а не symlink на stub. После явного отключения `systemd-resolved` (`disable --now`) `getent ahostsv4 github.com` отработал; Mihomo перезапущен и Gateway routing перезапущен **ещё раз**. Финальные `ss` показывают, что только Mihomo слушает `*:53` TCP+UDP; в логах после нового запуска 17:00 не было bind errors.
+4. UFW active: default `deny (incoming)`, `deny (routed)`; в видимых правилах нет открытия 53 снаружи. `iptables -S INPUT` — DROP, вход через UFW. **Не доказано внешним сканированием**, что весь DNS ingress на 53 закрыт, поэтому это `CONFIG OBSERVED`, не `EXTERNAL EXPOSURE TEST PASS`.
+5. `grep -c 'exclude-filter:' /etc/mihomo/config.yaml` → **3**. Режим MIPS владелец явно **отложил**, оставив gVisor как рабочий baseline; не инициировать новый бенчмарк без нового запроса.
+
+**Инцидент процедуры:**
+- `mihomo -t -f /etc/mihomo/config.yaml.candidate` для **несуществующего** candidate вывел `Can't find config, create a initial config file` и `test is successful`; вслед за этим копирование созданной начальной конфигурации в `config.yaml` убрало TUN. Позже перезапись с неверной кодировкой привела к `yaml: invalid leading UTF-8 octet`. Полагаться на слово `successful` без проверки файла — **опасно**.
+- Резервная копия `/etc/mihomo/config.yaml.before-v2`, однажды существовавшая, позже оказалась отсутствующей по ожидаемому пути после файловых операций. Для будущих хостов **не рассчитывать на бэкап внутри каталога**, если его перезаписывают или заменяют целиком; держать отдельную копию в `/root/` с проверенным `test -s` и правами 600.
+- Перед применением требовать **ровно тот файл**, который изменён оператором, с корректным UTF-8, полноценными секциями `tun:`, `proxy-groups:` и `rules:`. Если candidate физически отсутствует, **не запускать тест по отсутствующему пути**, поскольку в этой версии это не fail-closed. Проверка по месту — обязательна:
+
+```bash
+# READ-ONLY, host-specific after discovery (пример SE):
+test -s /etc/mihomo/config.yaml || exit 1
+grep -q '^tun:' /etc/mihomo/config.yaml || exit 1
+grep -q '^proxy-groups:' /etc/mihomo/config.yaml || exit 1
+grep -q '^rules:' /etc/mihomo/config.yaml || exit 1
+/usr/local/bin/mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml || exit 1
+# Затем после разрешенного оператором restart — проверить не только unit, но и
+# TUN, ip rule/table 100, Gateway watchdog, DNS bind warnings и AWG egress.
+```
+
+**Нельзя автоматически переносить на EE/MSK** отключение `systemd-resolved`, `dns.listen: 0.0.0.0:53`, gVisor или gateway table 100: это было узко проверено только на SE, где `/etc/resolv.conf` уже независимый immutable-файл. Для иных хостов сначала определить владельца DNS, сервисный путь и контракт маршрутизации.
 
 ## Политика SE2 V2
 
@@ -149,9 +176,9 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 | Host | Состояние |
 | --- | --- |
 | SE2 (`Saymer2`) | V2 применена владельцем, функциональная smoke-проверка **reported PASS**, negative outage и точный маршрут Gemini — **UNKNOWN** |
-| SE | Приватный YAML от оператора рассмотрен, создан офлайн-кандидат V2 с Gateway; live discovery и установка — **NOT STARTED** |
-| EE | То же; **NOT STARTED**. Исторически на EE был `tun-mihomo` и policy routing для AWG (09.2026): проверить актуальность и сохранить TUN/rules, не подменять профилем SE2 |
-| MSK | То же; возможны отдельные транзитные/меж-VPS пути, не перетирать и исключить циклы маршрутизации; **NOT STARTED** |
+| SE (`Saymer`) | V2 с Gateway применена владельцем; `mihomo -t` PASS, unit/TUN/DNS/routes/firewall см. field evidence — **CONFIG + SERVICE OBSERVED PASS**; внешний egress с AWG-клиента / Gemini chain / outage — **UNKNOWN**. `gvisor` сохранён; MIPS отложен |
+| EE | **NEXT / NOT STARTED**. Исторически на EE был `tun-mihomo` и policy routing для AWG (09.2026): сначала прочитать текущие факты, проверить актуальность и сохранить TUN/rules, не подменять профилем SE2 |
+| MSK | **NEXT / NOT STARTED**. Возможны отдельные транзитные/меж-VPS пути, не перетирать и исключить циклы маршрутизации; нужны собственные discovery и операторская приёмка |
 
 ## Негативные тесты и условия STOP
 
