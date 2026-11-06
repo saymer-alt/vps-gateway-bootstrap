@@ -675,7 +675,7 @@ error, not on proven absence.
 
 ## 36. A working VPS egress policy can be a small reviewed YAML overlay, not a new generator feature
 
-On 2026-11-06 the operator adapted Mihomo on SE2 with a one-off, reviewed V2 YAML derived from an existing generator export. The operator reported that Mihomo was working well, Gemini opened, and the external IP shown by 2IP belonged to Cloudflare. The intended policy was `mode: rule` with a manual `GLOBAL` group, sequential `AUTO-EXIT` tiers (WARP WireGuard → MASQUE H3 → MASQUE H2 → Geodema → Kyra → Gist), and Gemini-specific rules to `GEODEMA` before `MATCH,GLOBAL`. The other three VPS were not changed.
+On 2026-11-06 the operator adapted Mihomo on SE2 with a one-off, reviewed V2 YAML derived from an existing generator export. The operator reported that Mihomo was working well, Gemini opened, and the external IP shown by 2IP belonged to Cloudflare. The intended policy was `mode: rule` with a manual `GLOBAL` group, sequential `AUTO-EXIT` tiers (WARP WireGuard → MASQUE H3 → MASQUE H2 → Geodema → Kyra → Gist), and Gemini-specific rules to `GEODEMA` before `MATCH,GLOBAL`. At that time the other three VPS were not changed; later on 2026-11-06 SE was updated by the operator. EE and MSK remain untouched.
 
 This is *functional smoke evidence*, not proof that Gemini's observed connection chain selected Geodema, or that complete failure of all tiers safely rejects packets. A `fallback` group switches among healthy candidates; `empty-fallback: REJECT` specifically blocks the implicit `COMPATIBLE` exit for an **empty** group and does not prove all-unhealthy failover. A `REJECT` in the last tier is a deliberate fail-closed policy, not a performance selector. Neither the absence of the word `DIRECT` from user groups nor one external-IP lookup proves that other services bypassing port 7890 cannot reach the host uplink.
 
@@ -687,3 +687,20 @@ This is *functional smoke evidence*, not proof that Gemini's observed connection
 - Protect secrets: never commit live WARP private keys, subscription URLs, HWIDs or full operator configs to this repository.
 
 See [operator runbook and evidence boundary](mihomo-manual-tiered-egress-se2.md).
+
+
+## 37. Mihomo config validation must prove the intended input exists; Gateway requires DNS and route checks after restart
+
+SE (06.11.2026) provided concrete evidence of two different classes of regression while applying a hand-edited V2 YAML on a live AmneziaWG gateway. When the proposed `/etc/mihomo/config.yaml.candidate` did not exist, the Mihomo 1.19.33 `-t -f` command logged `Can't find config, create a initial config file` and still ended with `test is successful`. The resulting initial config was then copied over the working YAML, eliminating `tun-mihomo`. Later a malformed text transfer produced `yaml: invalid leading UTF-8 octet`. A formerly created local backup was absent from its expected path. The operator recovered by editing the active file through `nano`; test PASS alone never established *which* config was tested.
+
+A second failure was independent of YAML syntax: Mihomo was active and its TUN present, while `systemd-resolved` occupied port 53 and Mihomo logged `Start DNS server ... bind: address already in use`. Also, after Mihomo restart, table 100 held only `unreachable default` until the project-owned `warp-docker-routing.service` reapplied `default dev tun-mihomo`. The host had a standalone immutable `/etc/resolv.conf` pointing to public DNS, so disabling `systemd-resolved` was safe *for this observed SE state*; the operator confirmed `getent`, fresh Mihomo start without bind warnings, DNS TCP/UDP bound to Mihomo and table 100 restored. UFW inbound default deny with no visible rule for 53 is only *configuration* evidence; no external port scan was performed. A connected AWG client was **not** used for final data-plane proof.
+
+**Rules:**
+- Before any `mihomo -t`, require `test -s` on the **intended file** and check expected profile sections. A successful parse of an automatically created initial config is **not** successful deployment. Check file encoding/integrity and refuse to apply a broken or missing candidate; never copy a generated skeleton over a working config.
+- Store a recoverable, path-verified, non-public backup outside directories subject to bulk replacement; verify content and rights before mutation, and do not assume a backup exists because a previous `cp` appeared in terminal history.
+- A running Mihomo process is not evidence that its DNS listener started. After restart, inspect actual `:53` ownership and new journal lines, not historical warnings.
+- For Amnezia Gateway, after restarting Mihomo revalidate TUN, policy rules and **the usable table-100 route**, and reapply the gateway-owned routing service when necessary. The preserved `unreachable default` is a protective block, not a successful working exit.
+- Keep DNS management and host ownership independent: do not disable `systemd-resolved` on a different VPS simply because doing so worked on SE; first inspect that host's `/etc/resolv.conf`, Docker DNS consumers and existing policies.
+- Avoid bundling a `gvisor`→`mips` stack experiment with recovery or an egress policy rollout. SE owner explicitly deferred MIPS (06.11.2026); record baseline without inferring speed or compatibility improvements.
+
+See [SE field outcome and separate EE/MSK backlog](mihomo-manual-tiered-egress-se2.md). No private YAML, WARP keys, provider URLs or HWIDs were added.
