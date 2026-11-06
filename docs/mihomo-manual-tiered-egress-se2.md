@@ -31,6 +31,18 @@
 - **Новые факты от владельца, 06.11.2026:** SE (`Saymer`) работает с `/usr/local/bin/mihomo` **v1.19.33**, вывод `Use tags: with_gvisor`; текущий файл `/etc/mihomo/config.yaml` содержит `tun.stack: gvisor`, `device: tun-mihomo`, `auto-route: false`, `mtu: 1420`, `gso: true`, DNS hijack и `disable-icmp-forwarding: true`. Это доказывает текущий baseline стека по конфигу, но **не** целостность маршрутов AWG и не безопасность обновления. Путь systemd `-d/-f`, firewall, table 100 и runtime connections на SE пока **UNKNOWN**.
 - До обновления: проверить `ps aux | grep '[m]ihomo'`, `systemctl cat mihomo`, `grep -A12 '^tun:' <active-yaml>` (без секретов), `ip -4 rule`, `ip -4 route show table 100`, `ip link show tun-mihomo`, `systemctl status warp-docker-routing.service check-warp-routing.timer`, `ss -lntup`; после — тест `mihomo -t`, явный owner-applied restart, внешний IP через 7890 **и** подключённого AWG-клиента, Gemini chain и fail-closed.
 
+### Read-only факты SE (оператор, 06.11.2026 16:24 MSK)
+
+- Unit: `/etc/systemd/system/mihomo.service`; `ExecStart=/usr/local/bin/mihomo -d /etc/mihomo`; бинарник Mihomo **v1.19.33**.
+- Реальный фрагмент активного YAML: `stack: gvisor`, `device: tun-mihomo`, `mtu: 1420`, `gso: true`, `auto-route: false`, `dns-hijack: [any:53, tcp://any:53]`, `disable-icmp-forwarding: true`.
+- `ip -4 rule`: `40: from all fwmark 0x88 lookup main`; `100: from 172.29.172.0/24 lookup mihomo`.
+- `ip -4 route show table 100`: `default dev tun-mihomo scope link metric 10` и `unreachable default metric 42760`; присутствие blackhole-предохранителя **CONFIG OBSERVED**, не равно end-to-end fail-closed proof.
+- `tun-mihomo`: `198.18.0.0/30`, `UNKNOWN` как link state для TUN — не автоматический признак ошибки.
+- `warp-docker-routing.service`: active (exited), success; `check-warp-routing.timer`: active (waiting), включен.
+- Память: total **913 MiB**, available **161 MiB**; swap used **368 MiB / 1.5 GiB**. При MIPS/gVisor бенчмарке фиксировать swap/CPU/load до и после, сравнивать **на AWG-клиенте**, а не через локальный mixed-port.
+- Эти факты снимают неопределенность относительно маршрутов/юнита в момент вывода, но **не подтверждают** работу AWG клиентского dataplane после замены и реального отказа всех прокси.
+- Оператор хочет отдельное сравнительное испытание `gvisor` vs `mips` на SE, не меняя остальных параметров. Не считать факт поддержки MIPS доказательством выигрыша по скорости; эксперимент после сохранения baseline и с rollback.
+
 **Статус:** офлайн-сверка структуры и ключевых различий — PASS; бинарный Mihomo parse и live Gateway smoke — **NOT TESTED**.
 
 ## Политика SE2 V2
