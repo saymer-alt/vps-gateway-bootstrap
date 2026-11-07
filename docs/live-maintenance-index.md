@@ -10,6 +10,19 @@ project-wide conclusions derived from multiple observations.
 None of these files authorises mutation of a live host. The repository safety
 contract remains authoritative.
 
+## LucX-UI .352 field rollout — 2026-11-07
+
+This session updated four externally managed panels. Treat their states as **dated observations**, not proof of all client paths, runtime kernel-module usage or approval for a repeat rollout.
+
+| Host | Evidence | Distinguishing result |
+|---|---|---|
+| `Saymer3` | [2026-11-07](live-maintenance-saymer3-2026-11-07.md) | .298 → .352 via local SHA-verified archive, manual AWG-installer skip; module unchanged |
+| `Saymer2` | [2026-11-07](live-maintenance-saymer2-2026-11-07.md) | In-panel update; AWG fresh handshakes; stale module marker vs installed DKMS |
+| `Saymer` | [2026-11-07](live-maintenance-saymer-2026-11-07.md) | New DKMS pin, old tools string; AWG recent handshake, tiny traffic delta |
+| `hungry-boyd` (EE) | [2026-11-07](live-maintenance-hungry-boyd-2026-11-07.md) | New DKMS pin, old tools string; fresh handshake, rounded zero 20s delta |
+
+Reusable, version-pinned [LucX-UI update/validation runbook](lucx-ui-safe-update-runbook.md). No automatic installer was added to Bootstrap, no live action was performed by the repository change, and no new release or main merge is implied.
+
 ## Fleet maintenance sessions — 2026-10-05
 
 | Host | OS | Evidence file | Main contribution |
