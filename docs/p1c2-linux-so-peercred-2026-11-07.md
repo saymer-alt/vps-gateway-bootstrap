@@ -1,0 +1,13 @@
+# P1-C2 — Linux SO_PEERCRED reader, no broker deployment
+
+Date: 2026-11-07. Baseline: `main` at `363ba4151ff250a250f6e33ff46807825f6526e8`. Tracks Core MVP #56 and merged P1-C1 #75.
+
+**Status: kernel-backed credential reader + disposable Unix-socket unit tests only. NOT a privileged broker, not a production listener, not OS user isolation, and not execution authority.**
+
+The new `internal/brokerpeer` package exposes `FromUnixConn(*net.UnixConn) (brokergate.Peer, error)`. On Linux it calls `syscall.GetsockoptUcred` with `SOL_SOCKET/SO_PEERCRED` inside the `UnixConn.SyscallConn().Control` callback. It never trusts JSON, caller-supplied UID/PID, socket path text, local process identity or the environment as peer authority. It checks PID and sentinel invalid UID/GID and refuses null/closed/invalid FDs. Non-Linux builds return an explicit error: no fallback.
+
+**Important semantics:** the kernel supplies credentials associated with the Unix socket connection. A future trusted broker must obtain them from the **accepted server-side connection**, keep each request bound to that connection, apply the pinned non-root UID/GID policy in `brokergate`, and independently verify signed v2 permissions against a fresh trusted Plan. SO_PEERCRED on Linux reflects credentials at connection establishment; it is not process-liveness proof, an executable identity, a session authorization token, or a guarantee against root compromise. It does not verify group membership, sudo, Docker socket access, file permissions, isolation, signed approvals, ownership or transaction state.
+
+**Local/CI tests:** create a 0600 AF_UNIX socket inside `t.TempDir()`, dial and accept in the Go test process, and compare kernel PID/UID/GID with `os.Getpid/Getuid/Getgid`. On the same connected socket, send deliberately forged JSON claiming unrelated UID/GID/PID and verify kernel credentials remain unchanged. Nil/closed sockets refuse. No fixture installs root services or touches existing `/etc` files. Linux amd64 test/race/vet and cross compilation (Linux arm64 and non-Linux stub) are supported; GitHub Actions additionally compiles `internal/brokerpeer` for each existing Linux architecture build matrix.
+
+**Next prerequisites before any live service:** user/group and socket ACL isolation in a disposable VM, authenticated accepted-connection request framing (bounded reads, timeouts, one request per connection), **real** trusted discovery and `orchestrate.Plan` with ownership/preflight, signed operator ceremony, revalidation under lock, journal/rollback/management probes, and removal of legacy `--confirm`. Stage 3 ownership and Stage 5 composition remain open. No deployed service, no release and no mutation authorized by this PR.
