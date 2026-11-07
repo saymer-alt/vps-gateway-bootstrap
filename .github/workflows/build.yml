@@ -34,6 +34,9 @@ jobs:
       - name: Privilege boundary contract (read-only P0/P1)
         run: python3 tools/check-privilege-boundary.py
 
+      - name: Kernel-backed peer credentials (disposable AF_UNIX)
+        run: go test ./internal/brokerpeer -count=1 -v
+
       - name: Test
         run: go test ./...
 
@@ -68,6 +71,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Cross-build SO_PEERCRED reader
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: go build ./internal/brokerpeer
 
       - name: Build
         env:
