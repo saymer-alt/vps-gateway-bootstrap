@@ -178,7 +178,7 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 | SE2 (`Saymer2`) | V2 применена владельцем, функциональная smoke-проверка **reported PASS**, negative outage и точный маршрут Gemini — **UNKNOWN** |
 | SE (`Saymer`) | V2 с Gateway применена владельцем; `mihomo -t` PASS, unit/TUN/DNS/routes/firewall см. field evidence — **CONFIG + SERVICE OBSERVED PASS**; внешний egress с AWG-клиента / Gemini chain / outage — **UNKNOWN**. `gvisor` сохранён; MIPS отложен |
 | EE (`hungry-boyd`) | **V4 APPLIED / WG FIELD PASS:** три отдельных WARP-WG peer, API задержки 24/21/14 мс; `AUTO-EXIT.now=WARP-WG-EE-1`, `GLOBAL.now=AUTO-EXIT`. Gemini фактически `gemini.google.com → польский узел → GEODEMA`, HTTP 200. DNS TCP+UDP 53 и TUN/routes восстановлены; AWG client egress и outage ещё не доказаны |
-| MSK (`Saymer3`) | **GATEWAY BASELINE RESTORED / YAML V2 NOT STARTED:** `systemd-resolved` остановлен и disabled; Mihomo владеет TCP/UDP 53, `getent` PASS, через 7890 HTTP 204. Prio 40/100, route100 TUN + unreachable barrier восстановлены; timer проверен 22:53:40 MSK (`SUCCESS`), следующий 22:58:40. Ждём отдельный MSK YAML и WG endpoint; AWG client/outage не тестировались |
+| MSK (`Saymer3`) | **V2 operator-applied and runtime smoke PASS; V3 operator reports improved, NOT YET VERIFIED.** 07.11 V2 — new Mihomo PID after restart, DNS TCP/UDP :53, TUN + policy rules 40/100 and table100 fail-secure terminal, watchdog next scheduled; local proxy HTTP 204, `GLOBAL→AUTO-EXIT→Estonia TUIC`. Mieru(TCP) and WARP had `alive=false`, provider group health unknown. V3 changed Mieru→UDP, AWG identity/options, removed duplicate visible REJECT; no post-V3 field API/negative outage proof. [MSK incident and gates](msk-mihomo-v2-v3-field-lessons-2026-11-07.md) |
 
 
 ## Полевое дополнение — EE V4 и MSK до нового YAML (06.11.2026)
@@ -201,6 +201,12 @@ cp -a /etc/mihomo/config.yaml /etc/mihomo/config.yaml.bak-$(date +%Y%m%d-%H%M%S)
 - Факты оформлены в [AMG #59](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/59) (DNS, реализованный install-time gate уже слит в main через PR #60) и [AMG #61](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/61) (таймер/маршруты; общего исправления в коде пока нет). Настройку YAML MSK V2 **ещё не выполняли**.
 
 **Общие границы:** live WG delays, локальный proxy HTTP 200/204, socket ownership, systemd active и даже один успешный watchdog check НЕ подтверждают end-to-end dataplane AWG, безопасный отрицательный outage, переносимость к другим хостам или доступность DNS 53 с внешнего интерфейса. Полные приватные YAML, WARP private keys, subscription/HWID не коммитить.
+
+## Московская адаптация V2→V3 (07.11.2026)
+
+Уже после восстановления baseline 06.11 оператор применил отдельный MSK V2, затем V3. **Читать текущую полевую отметку и regression checklist в [MSK V2→V3](msk-mihomo-v2-v3-field-lessons-2026-11-07.md)**. Не копировать приоритеты с EE: у Москвы порядок **Estonia Mieru UDP → Estonia TUIC → Geodema → Kyra → Gist → WARP MSK**, а Gemini всегда только через Geodema. 
+
+Запомнить отличие **дискового YAML от активного процесса**: на первом снимке после замены файл уже был новым, но прежний PID работал со вчера; после явного рестарта появился новый PID и прошёл реальный HTTP 204. Не утверждать, что V2 "сломал синтаксис" или что V3 полностью исправил WARP — таких подтверждений не было. Во вложенных fallback не дублировать видимый `REJECT`; `empty-fallback:REJECT` сохраняется как отдельная опция и не заменяет негативные тесты.
 
 ## Негативные тесты и условия STOP
 
