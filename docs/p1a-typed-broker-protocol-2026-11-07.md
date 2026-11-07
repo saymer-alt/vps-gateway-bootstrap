@@ -1,0 +1,11 @@
+# P1-A — offline-only typed broker protocol (2026-11-07)
+
+**Status: CODE + IN-MEMORY TESTS ONLY. Not a root broker, signature verifier, Unix socket, operating-system isolation, or production authorization.** Follows the separate Draft P0/P1 threat-model proposal [#72](https://github.com/saymer-alt/vps-gateway-bootstrap/pull/72), Core MVP [#56](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/56), and `main` baseline `7a90e379e50f8643656c9e48bad6767d30ec413f`.
+
+`internal/brokerproto` contains only a strict bounded parser and response DTO. It admits the single existing pinned operation `service.fail2ban.restart.v1`; unknown/freeform operations, service names, executable paths, caller-supplied UID, unsupported versions, repeated/unknown fields, malformed/oversized data and trailing JSON are rejected. The four required JSON fields are `schema_version`, `operation`, `approval_payload`, `approval_signature`. The last two are opaque base64-encoded bytes compatible in shape with the existing signed artifact; **64 signature bytes do not prove authenticity**. A parse success is explicitly `SHAPE_VALID_ONLY`, not `AUTHORIZED` or `EXECUTED`.
+
+The in-memory **test-only** fake uses a kernel-UID argument supplied outside the wire and a separately injected verifier gate. No verifier means refusal; a denying verifier means refusal; unknown operation or wrong UID never reaches the fake call counter. The test's explicit allow callback is **not cryptographic verification** and never appears in production. No real service, journal, root identity, systemd, `/etc`, or network connection is touched.
+
+Before a future P1-B integration can execute anything, a trusted broker must obtain peer credentials from the OS rather than request data, enforce real v2 signature purpose/capability/host/plan/expiry checks, rederive the typed Plan, and run all existing ownership/staleness/preflight/journal/rollback gates. The current `--confirm` remains a known open G1 path; Stage 3/5 and the separately approved positive signing ceremony remain OPEN. Do not add sudo/systemd/socket privileges or widen service allowlists as part of P1-A.
+
+Verification: `go test ./internal/brokerproto -count=1`, `go test ./...`, `go vet ./...` and exact-SHA CI. P1-A is not lab/field/production acceptance.
