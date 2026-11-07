@@ -27,6 +27,8 @@ The immediate blocker is **authority/safety completion**, not another protocol o
 - Stage 4 — capability set in Plan and fingerprint (minimal naming primitives already exist but are not authorization).
 - Stage 5 — whole-plan composition admission, before confirmation and again under lock.
 
+Stage 2 approval CLI code was partially integrated via PR #69, but legacy `--confirm`, the real positive operator ceremony, and the **non-root agent / trusted privileged executor** boundary remain OPEN. See the [P0/P1 least-privilege review](privilege-separation-p0p1-2026-11-07.md).
+
 Stage 2 requires the relevant Stage 4 vocabulary. Choose the smallest safe integration order without bypassing this dependency. **Do not widen** experiment pins, executor registries, resources or CLI mutation surfaces until the required gates are present, tested, reviewed and separately owner-authorized.
 
 ## 3. Core MVP exit gate: finite checklist
@@ -34,7 +36,7 @@ Stage 2 requires the relevant Stage 4 vocabulary. Choose the smallest safe integ
 Declare **Core MVP accepted** only with evidence for all of these, or explicitly record a narrower owner-approved scope. Do not silently mark a step complete.
 
 1. **One real operator task, not a framework demo:** document the single narrowly scoped resource/action scenario and its supported Debian/Ubuntu environment; demonstrate a usable operator-facing plan and result. Do not promise full gateway installation.
-2. **Authority holds under adversarial inputs:** an agent with root/config/state/CLI control cannot approve its own plan, adopt foreign resources or synthesize extra authority; signatures, host identity, expiry, named capabilities, composition and ownership are checked; invalid, tampered and stale artifacts are rejected.
+2. **Authority holds under adversarial inputs within the trusted-host boundary:** a **non-root delegated agent** can control its proposal/config/CLI but cannot attain root, write the broker or public anchor, approve its own plan, adopt foreign resources or synthesize authority. The trusted executor must enforce signature, purpose, exact capabilities, host identity, expiry, ownership and composition. Unrestricted hostile root is out of scope for an on-host-only guarantee; that requires independent enforcement. This exit gate is **NOT DONE** until P1 and the separately authorized isolated-lab acceptance pass.
 3. **Predictable lifecycle:** discovery → model → plan → preflight → approval → lock → execute → re-discover → validate → converge → durable journal → persist verified last-known-good. Preserve pre-existing foreign resources and SSH management.
 4. **Repeatability:** an identical second run does **NO_CHANGE** without mutation; partial work, interruption, restart, missing journal, unknown ownership and failed validation stop or safely recover, never falsely persist success.
 5. **Evidence beyond unit tests:** synthetic positive/negative regression suite + relevant integration tests, then a **separately approved disposable lab** for the bounded real change, failure/recovery and management reachability. Test reboot persistence where applicable; explicitly mark any unproven path UNKNOWN. Existing field evidence for other experiments must not be transferred by assumption.
