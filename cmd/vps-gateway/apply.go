@@ -136,7 +136,13 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 	timeout, rest := parseTimeout(args)
 	dryRun := false
 	observeReport := false
-	configPath, confirmPrefix := "", ""
+	configPath, confirmPrefix, approvalPath := "", "", ""
+	// approvalRequested tracks that the operator EXPLICITLY asked for the
+	// approval boundary, separately from the artifact path value: an empty
+	// path argument must be a usage error, never an implicit downgrade to
+	// the legacy fingerprint-prefix confirmation (docs/security-model.md §6;
+	// ZAI-134 review of the Stage 2 slice).
+	approvalRequested := false
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
 		case "--dry-run":
@@ -157,10 +163,26 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 			}
 			i++
 			confirmPrefix = rest[i]
+		case "--approval":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(stderr, "--approval requires the operator-signed approval artifact file")
+				return 2
+			}
+			i++
+			approvalPath = rest[i]
+			approvalRequested = true
 		default:
-			fmt.Fprintf(stderr, "unknown apply flag %q\nusage: vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--observe-service-report] [--timeout DURATION]\n", rest[i])
+			fmt.Fprintf(stderr, "unknown apply flag %q\nusage: vps-gateway apply [--dry-run] [--config FILE] [--confirm PREFIX] [--approval FILE] [--observe-service-report] [--timeout DURATION]\n", rest[i])
 			return 2
 		}
+	}
+	if approvalRequested && confirmPrefix != "" {
+		fmt.Fprintln(stderr, "--approval and --confirm are mutually exclusive: an operator-signed artifact replaces the legacy fingerprint-prefix confirmation (docs/security-model.md §6)")
+		return 2
+	}
+	if approvalRequested && approvalPath == "" {
+		fmt.Fprintln(stderr, "--approval requires a non-empty artifact file path: an explicitly requested approval never falls back to the legacy confirmation (docs/security-model.md §6)")
+		return 2
 	}
 
 	cfg := firstExperimentConfig()
@@ -244,30 +266,52 @@ func runApplyWith(args []string, o *orchestrate.Orchestrator, opts pipeline.Opti
 		return 0
 	}
 
-	// Phase 7: explicit, unambiguous operator confirmation. The operator
-	// types the fingerprint prefix of the exact plan shown above; a yes/no
-	// answer would be ambiguous and is deliberately not accepted.
-	var typed string
-	if confirmPrefix != "" {
-		typed = confirmPrefix
+	// Phase 7: explicit, unambiguous operator confirmation. Two forms:
+	//   - --approval FILE: an operator-signed approval artifact. Verification
+	//     is configured strictly from fixed policy inputs (the pinned trust
+	//     anchor and the local /etc/machine-id); anchor/machine-id failures
+	//     refuse the run before anything is asked or executed. Every artifact
+	//     invariant (signature under the anchor, canonical payload, exact
+	//     plan fingerprint, host binding, expiry) is enforced by the
+	//     orchestrator's Confirm (internal/orchestrate), not by this loader.
+	//   - the legacy fingerprint prefix: experiment containment only
+	//     (self-suppliable, docs/security-model.md §5 G1) — accepted until
+	//     --confirm is retired after the approval path is accepted.
+	// A yes/no answer would be ambiguous and is deliberately not accepted.
+	var conf orchestrate.Confirmation
+	if approvalPath != "" {
+		art, err := parseApprovalArtifact(approvalPath)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		if err := attachApprovalVerification(o); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 3
+		}
+		conf = orchestrate.Confirmation{PlanFingerprint: fp, ApprovedBy: operatorName(), At: time.Now().UTC(), Approval: &art}
 	} else {
-		fmt.Fprintln(stdout, "This will APPLY the plan above to this machine.")
-		fmt.Fprint(stdout, "Type the first 12 characters of the plan fingerprint to approve (anything else aborts): ")
-		reader := bufio.NewReader(stdin)
-		line, err := reader.ReadString('\n')
-		if err != nil && line == "" {
+		var typed string
+		if confirmPrefix != "" {
+			typed = confirmPrefix
+		} else {
+			fmt.Fprintln(stdout, "This will APPLY the plan above to this machine.")
+			fmt.Fprint(stdout, "Type the first 12 characters of the plan fingerprint to approve (anything else aborts): ")
+			reader := bufio.NewReader(stdin)
+			line, err := reader.ReadString('\n')
+			if err != nil && line == "" {
+				fmt.Fprintln(stderr, confirmHint)
+				return 2
+			}
+			typed = line
+		}
+		typed = strings.ToLower(strings.TrimSpace(typed))
+		if len(typed) < 12 || !strings.HasPrefix(fp, typed) {
 			fmt.Fprintln(stderr, confirmHint)
 			return 2
 		}
-		typed = line
+		conf = orchestrate.Confirmation{PlanFingerprint: fp, ApprovedBy: operatorName(), At: time.Now().UTC()}
 	}
-	typed = strings.ToLower(strings.TrimSpace(typed))
-	if len(typed) < 12 || !strings.HasPrefix(fp, typed) {
-		fmt.Fprintln(stderr, confirmHint)
-		return 2
-	}
-
-	conf := orchestrate.Confirmation{PlanFingerprint: fp, ApprovedBy: operatorName(), At: time.Now().UTC()}
 
 	// Phase 8-13: lock, transaction, re-discovery, final validation,
 	// convergence, persistence — all inside the orchestrator.
