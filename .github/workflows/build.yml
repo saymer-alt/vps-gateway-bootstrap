@@ -28,6 +28,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Agent startup contract
+        run: python3 tools/check-agent-guidance.py
+
       - name: Test
         run: go test ./...
 
