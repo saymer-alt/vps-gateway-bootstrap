@@ -37,6 +37,9 @@ jobs:
       - name: Kernel-backed peer credentials (disposable AF_UNIX)
         run: go test ./internal/brokerpeer -count=1 -v
 
+      - name: Kernel-bound bounded broker framing (disposable AF_UNIX)
+        run: go test ./internal/brokertransport -count=1 -v
+
       - name: Test
         run: go test ./...
 
@@ -78,6 +81,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: go build ./internal/brokerpeer
+
+      - name: Cross-build bounded broker transport
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: go build ./internal/brokertransport
 
       - name: Build
         env:
