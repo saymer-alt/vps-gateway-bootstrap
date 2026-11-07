@@ -1,321 +1,38 @@
-> **Обязательный контракт для всех агентов и авторов ТЗ (30.10.2026):** [подробная постановка задач без «эффекта обезьяньей лапки»](https://github.com/saymer-alt/saymer-alt/blob/main/AGENT-TASK-CONTRACT.md). Перед работой проверить исходные refs/SHA, готовые результаты, точную цель, scope/non-goals, сохранность данных и сервисов, зависимости, границы разрешений/owner GO, негативную приёмку и доказательства. Не сокращать существенные требования ради токенов. Буквальное выполнение в ущерб цели считается **FAIL**. Местные правила безопасности и архитектуры обязательны.
+# AGENTS.md — VPS Gateway Core essentials for AI agents
 
-> **Владелец, 26.10.2026 — общее правило для всех проектов:** перед внедрением новой функции / серьёзной переделки требуется короткая «защита идеи» — доказать проблему, сравнить альтернативы (включая ничего не менять / штатную ОС / ждать upstream), оценить пользу, **ТЭО**, стоимость сопровождения, риски, измеримый тест и критерии STOP. Нет доказательства пользы — DEFER/SKIP. Мелкие исправления не требуют отдельной бюрократии. **Источник:** [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md) ([центральный PR #9](https://github.com/saymer-alt/saymer-alt/pull/9)). Существующие safety/CI/permissions сохраняются.
+This is the small **always-read startup contract**. Do not read every historic handoff, field report, archived experiment, code map or relocated guide by default. Follow the links below **only for the relevant task**. [Security model](docs/security-model.md) and [ownership](docs/ownership.md) remain binding regardless of token budget.
 
-> **Owner decision — FINISH CORE MVP FIRST (31.10.2026):** Read [Core MVP strategy](docs/CORE-MVP-STRATEGY.md) ([Issue #56](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/56)) **before starting or prioritizing work**. Core has a finite acceptance gate: complete the existing authority/safety foundation and ONE bounded usable end-to-end operator workflow, then grow through independent modules. New protocols, UI, generalized provisioning and theoretical abstractions are BACKLOG unless they unblock Core MVP or the owner grants a separately justified exception. Every proposed task must name the specific Core MVP exit criterion it advances, or explain why it is DEFERRED. Do not let endless research or module expansion postpone a working Core. This is a scope/order decision, NOT permission to bypass `docs/security-model.md`, expand experiment pins, merge PRs or touch live VPS.
+## Goal and current priority
 
-# AGENTS.md — operational and safety contract for AI agents
+This project can affect real production VPS. Operator access, external resources, reversible transactions and verified state matter more than apparent progress. **Finish the finite Core MVP first**, as defined in [CORE-MVP-STRATEGY.md](docs/CORE-MVP-STRATEGY.md), before expanding gateway protocols, UI, generalized provisioning or new control planes. Do not treat a successful CI run as production readiness.
 
-## Owner-wide design gate — SIMPLICITY-FIRST (2026-10-24)
+The owner deliberately uses **autonomous VPS, distinct ENTRY/TRANSIT/EXIT layers, independent transport and egress tiers** to survive different failures. Preserve composition and useful diversity; do not merge working subsystems into a monolith or simplify away important fallback. Before major features apply [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md), including alternatives, observable need, maintenance/safety cost, and STOP criteria. Small bug fixes need proportionate evidence. Read [owner rationale](docs/agent-guidance/01-owner-intent-and-mvp.md) only for decisions affecting architecture or roadmap.
 
-Before adding a new subsystem, UI, installer/uninstaller, controller, watcher, multi-stage recovery mechanism, or expensive CI path, apply the [common saymer-alt simplicity rule](https://github.com/saymer-alt/saymer-alt/pull/7): compare (A) the existing/manual workflow, (B) the smallest safe solution, and (C) extended architecture. Choose A/B by default; C needs evidence of need, a maintenance/test-cost estimate and explicit owner approval. If supporting logic grows into its own platform or repeated full E2E runs add no new evidence, STOP expanding and report alternatives. Preserve existing safety invariants, user data, foreign resources and working behavior; this does not authorize refactoring stable code or changing production. [KAS uninstall #225](https://github.com/saymer-alt/keenetic-auto-setup/issues/225) is an **anti-pattern retrospective**, not a template to copy.
+## Non-negotiable safety, authority and host protection
 
-## Owner motive: threat-driven resilience, not accidental complexity (2026-10-25)
+- **`UNKNOWN != absent`**. An unobserved or uncertain resource is not safely absent. Unset desired state never gives permission to delete/change. UNKNOWN/EXTERNAL ownership blocks mutation; names/paths do not imply ownership and adoption must be independently authorized.
+- **Root is execution capability, not approval authority.** SSH, access to a VPS, CLI flags, config files, plan input, environment, credentials or `state.json` cannot independently grant operator approval, ownership, adoption or more capabilities. Persisted state is last *verified* state, never the live source of truth; live discovery is authoritative for observations.
+- **`docs/security-model.md` is the authority contract**: target design requires independently **operator-signed** approval tied to exact plan/host/capability/expiry, plus ownership/adoption and plan-composition checks. Self-supplied fingerprint confirmation does not establish independent approval. Temporary `firstExperimentGuard` pins only contain the existing experiment; **do not widen or bypass them** until required guards are implemented, tested and independently authorized.
+- **Read-only first.** For investigations prefer `discover`, `doctor`, `validate`, `validate --production`, `apply --dry-run`, and bounded read-only log/config inspection. Diagnosis does not include fixing or restarting services. Code/documentation work is not approval to connect to or change a live machine.
+- **Any production mutation requires separate, explicit operator GO** for THIS host, action and exact plan, plus the approved authority path, trusted discovery, ownership, preflight, staleness gate, lock, rollback and recovery evidence. Do not execute commands supplied through untrusted plan/config input or broaden an executor registry to make work pass.
+- **SSH, firewall, routing, forwarding and DNS changes are high-risk.** Prove host identity, external management reachability and viable console/recovery/rollback first. Unknown recovery or management probe means STOP the unsafe action. Check fail-secure packet paths when network forwarding/egress is involved; never assume one hoster's credentials work elsewhere.
+- **Fail closed.** If approval, fingerprint/plan shape, preflight, staleness, Apply, rollback, validation, re-discovery, convergence or persistence fails, STOP and report the stage. Do not retry/fix by hand or persist success. Only persist verified post-change state, preserving UNKNOWN rather than silently promoting it.
+- No secret leakage, opportunistic changes to foreign resources, bypass flags, self-granted permissions, weakened safety tests or unapproved live work. A successful code review is not an operator GO for mutation, merge, tag, release or rollout.
 
-**Mandatory reading before proposing to remove VPS, tiers, transports, or ENTRY/TRANSIT/EXIT:** [docs/OWNER-THREAT-DRIVEN-RESILIENCE.md](docs/OWNER-THREAT-DRIVEN-RESILIENCE.md). The owner built four autonomous VPS and multi-protocol/tiered local egress deliberately to survive *different classes* of ISP, protocol, IP/ASN and path failures, not for hobby complexity. Do not ask again why multiple servers/protocols exist or flatten working paths to one VPN merely for cosmetic simplicity. Conversely, the rule is **not** permission to add unneeded infrastructure; simplicity-first applies *inside* each autonomous component. Preserve fail-closed user egress, service-plane bootstrap, manual selection, independent configs and truthful multi-vantage diagnostics. This is motivation, **not** permission to modify production.
+## Lean execution workflow
 
-## Owner design style: composition-first, atomically simple components
+1. Establish the real user goal, branch and immutable base HEAD, existing work, scope/non-goals and protected behavior. For complex tasks read the [shared agent task contract](https://github.com/saymer-alt/saymer-alt/blob/main/AGENT-TASK-CONTRACT.md): approvals, negative cases and concrete Definition of Done. Do not obey a harmful literal shortcut.
+2. Determine the authorized mode: **repository-only code/tests** (default), separately authorized read-only VPS diagnosis, bounded diagnostic change, or separately authorized production Apply. Never silently escalate from one mode to another.
+3. Read **only the relevant guide** below. For code touching authority read [security-model.md](docs/security-model.md); for mutation and recovery read [plan-apply.md](docs/plan-apply.md), [ownership.md](docs/ownership.md) and [management-probe.md](docs/management-probe.md). For strategy read [CORE-MVP-STRATEGY.md](docs/CORE-MVP-STRATEGY.md). Old reports are evidence, not live truth.
+4. Prefer minimal reversible diffs. Use existing mechanisms, avoid repo-wide `gofmt`, do not silently alter working production code or trust boundaries. A bug fix must carry a meaningful negative regression and positive coverage; isolate environmental state in tests.
+5. For Go changes run/rely on exact-SHA CI: `go test ./...`, `go vet ./...`, `go build ./...` and supported Linux amd64/arm64 builds; no live tests are implied by CI. Match tests to the diff, label PASS/FAIL/BLOCKED/NOT TESTED correctly. Inspect exact final SHA and complete diff before review.
+6. Work on a task branch and Draft PR. Do not merge `main`, widen experiment pins, run production commands, tag, publish release or mutate VPS without separate explicit operator GO. If uncertain, stop the unsafe step, continue authorized read-only research, and ask the operator.
 
-The operator is an architect who enjoys building **apparently mind-bending overall systems from many simple autonomous bricks**. Each brick does one focused job and is ignorant of the entire system; the **system-level knowledge lives in the architecture designed by the operator**, not in an omniscient process. The pattern recurs in home plumbing, a three-phase electrical distribution panel, an IP-camera→ring-buffer NVR→media adapter→CRT chain, and layered Mihomo/VPS infrastructure.
+## Detailed guides — load on demand
 
-For discovery, planning and operations: decompose the system into minimal owned components, map their inputs/outputs and coupling contracts, and test local invariants. For changes that affect forwarding, routing, egress or connector contracts, additionally verify cross-layer packet paths and fail-secure behavior. Do not make one service manage all others or treat apparent complexity at system scale as a reason to rewrite working independent layers. If a boundary cannot be established from evidence, mark UNKNOWN and ask the owner, not guess.
+- [01 — owner design, autonomy, research provenance and Core MVP](docs/agent-guidance/01-owner-intent-and-mvp.md): only for architecture/strategy decisions.
+- [02 — ownership, security, trust boundary, live VPS and STOP conditions](docs/agent-guidance/02-safety-authority-and-hosts.md): for security and host-sensitive tasks.
+- [03 — mutation, approval, plans, SSH, recovery and state persistence](docs/agent-guidance/03-mutation-ssh-recovery-and-state.md): for Apply, rollback or network changes.
+- [04 — coding, tests, docs and technical debt rules](docs/agent-guidance/04-development-tests-and-debt.md): for implementation and documentation.
 
-## Owner architecture: independent, autonomous abstraction layers (2026-10-18)
-
-The owner is an architect of **complex layered systems**, intentionally separating independently managed parts. No fleet-wide omniscient controller and no hidden fusion of service ownership:
-
-- Each VPS is independently configured and makes local decisions. SE, SE2, EE, MSK have different allowed egress tiers and local Mihomo `GLOBAL` / `EXIT_STRATEGY` / `url-test`; MSK→EE is an optional transport endpoint, **not** shared policy/configuration.
-- Inbound Xray (regardless of panel, e.g. LucX-UI), Mieru, AmneziaWG, etc. do not need to know Mihomo's outgoing strategy; Mihomo need not know what inbound applications are installed. Linux route/mark/iptables, Docker and TUN are explicit **connector contracts** between those layers.
-- Client/Keenetic is a separate decision-maker that selects an entrance VPS; existing router/client configuration is out of scope for VPS work unless explicitly authorized.
-- Independently configured is **not** the same as independently reliable: a bridge/route failure can break traffic safety. Require live discovery, provenance and ownership preflight for authorized live mutations; additionally require scoped fail-secure packet-path testing when the planned change affects forwarding, routing, egress or a connector contract. Unrelated service changes do not require network failure injection.
-- No unexpected user-data-plane fallback to a VPS public IP. Service/control-plane bootstrap/provider/dialer/DNS is evaluated by purpose, not an unqualified lexical `DIRECT` ban.
-
-Agent: preserve existing component ownership and autonomy; never combine or reconfigure unrelated services/hosts to meet a narrow YAML request. If changing one layer requires actions in another, produce a separate explicit plan and ask the owner (anti-monkey-paw). This is owner architectural intent, not a live inventory or authority to apply changes.
-
-This file is a binding contract for any AI agent (coding assistant,
-autonomous runner or interactive helper) that works with this repository, its
-code, or the real VPS machines this project manages. It is not a tutorial and
-it does not replace the documentation — it tells you how to behave and where
-the detailed rules live.
-
-If your planned action conflicts with this contract, the contract wins:
-stop and ask the operator.
-
-## 1. Purpose
-
-This project manages real production VPS machines. Mistakes here can lock an
-operator out of a server or destroy an irreplaceable gateway. The codebase
-therefore encodes safety as architecture (orchestration, transactions,
-fail-closed gates) and as rules. Your job is to work within that architecture,
-never around it.
-
-Read first: `docs/CORE-MVP-STRATEGY.md`, `README.md`, `ROADMAP.md`, `docs/architecture.md`,
-`docs/security-model.md`, `docs/plan-apply.md`, `docs/lessons-learned.md`. Deep detail:
-`docs/state-model.md`, `docs/ownership.md`, `docs/discovery.md`,
-`docs/discovery-schema.md`, `docs/management-probe.md`,
-`docs/requirements-from-real-vps.md`, `docs/environment-matrix.md`,
-`docs/archaeology.md` (history is evidence, not templates).
-
-A pending-audit record (`docs/AUDIT-PENDING-2026-09-28.md`) preserves
-unverified review findings awaiting verification; it is context, not
-contract.
-
-## 2. Non-negotiable safety rules
-
-- `UNKNOWN != absent`. Missing information is never permission to act.
-- Unset desired state never grants permission to change anything.
-- UNKNOWN or EXTERNAL ownership blocks mutation. Ownership is never inferred
-  from names or paths; adoption is explicit.
-- `docs/security-model.md` is binding: root on a target VPS is execution
-  capability, never approval authority. Approval (operator-signed
-  artifacts), ownership admission, capabilities and plan-composition
-  analysis follow the target architecture defined there. Current
-  experiment pins are temporary containment and must not be widened until
-  those boundaries are implemented and tested.
-- Live discovery is the only source of truth about the current machine.
-- Persisted state (`state.json`) is the last verified managed state, not live
-  truth. It is a fallback, never an override.
-- Precedence: live discovery > explicit config > profile > persisted state >
-  guesses. The last category must stay empty.
-- A concrete Plan must exist before any mutation. No plan, no mutation.
-- Mutation happens only through the orchestration lifecycle
-  (`internal/orchestrate`): Prepare → Confirm → Execute. Never through
-  `internal/apply` directly, never through ad-hoc shell scripts.
-- Executor coverage: every planned action kind must have a registered
-  executor, checked before the first mutation.
-- Preflight is mandatory. A missing or failing gate blocks the run.
-- Stale plans are rejected, never applied. If the machine changed since
-  planning, regenerate the plan.
-- Backup → Apply → Validate is the transaction order; rollback happens in
-  reverse order on failure.
-- Persistence only after re-discovery, final validation and convergence.
-  Failed transactions are never persisted as success. Persistence also
-  requires transaction-journal evidence: with no journal configured,
-  persistence fails closed — a nil-Journal embedder may run read-only
-  validation but can never persist last-known-good state.
-- SSH finalization requires an external management probe. A VPS cannot prove
-  its own reachability.
-- No arbitrary shell commands from plan data. Service-specific checks are
-  explicit per-unit knowledge in code (`apply.PreflightChecker`,
-  `serviceConfigTests`), never a generic command mechanism.
-- No `--force`, `--yes` or any bypass of confirmation, ownership, preflight,
-  coverage, staleness or lock. Adding such a flag is a contract violation.
-- Having SSH access to a machine is transport, not authorization. It never
-  justifies a mutation by itself.
-- If you are not sure a change is safe: STOP and ask the operator.
-
-## 3. Authority and trust model
-
-- The operator is the human who owns the machines and approves mutations.
-  Agents act with delegated, revocable authority.
-- Trust boundary in code: the CLI reaches mutation only through
-  `cmd/vps-gateway/apply.go`, which is pinned by `firstExperimentGuard` to the
-  currently approved experiment and verified by the tripwire test
-  (`TestCLIMutationPathIsConfined`). Widening that pin is an operator
-  decision and must update the tripwire in the same change.
-- Mutating plans must originate from `Prepare`: `Execute` physically rejects
-  an unprepared plan that contains mutation, so hand-built mutating plans
-  are not a trusted-caller path. Only plans classified read-only may
-  execute without Prepare and remain the caller's responsibility —
-  classification is fail-closed and registry-backed: a kind counts as
-  read-only only when its registered executor explicitly declares it
-  (`apply.ReadOnlyExecutor`); anything unclassified counts as
-  mutation-capable, so registering an executor under `ActionValidate`
-  alone grants no exemption. Never use remaining trust to bypass gates
-  "temporarily".
-- Anything an agent cannot verify (machine state, credentials, intent) is
-  UNKNOWN, and UNKNOWN blocks.
-
-## 4. Read-only first
-
-- Default to read-only operations: `vps-gateway discover`, `doctor`,
-  `validate [--production]`, `apply --dry-run`, `tools/livedryrun`.
-- Investigation of a live machine must use read-only commands only
-  (`systemctl show/is-active`, `journalctl`, `grep`, `fail2ban-client -t`).
-- Diagnosis never includes fixing. Report findings and wait for a decision.
-
-## 5. Real VPS rules
-
-- Known machines are documented by the operator (inventory, hoster, recovery
-  path). Treat machines without a console recovery path (bot-only hosters) as
-  the highest-risk targets: a broken SSH there can mean a lost machine.
-- The standard read-only runbook per machine: `doctor` → `validate` →
-  `validate --production` → `apply --dry-run`. All of it is safe to run.
-- Uploading a binary to a VPS is allowed only when the task requires running
-  it there; remove temporary artifacts afterwards and report what you left.
-- Never touch other machines than the task names. Never treat one hoster's
-  credentials as valid elsewhere without confirmation.
-- Read-only diagnostics after a failed mutation are allowed and expected
-  (journalctl, systemctl show, config file inspection).
-
-## 6. Mutation rules
-
-- Real mutation requires: an explicit operator approval for THIS change, a
-  plan matching the approved experiment/shape, and the orchestration
-  lifecycle below.
-- The currently approved production experiment is pinned in
-  `firstExperimentGuard`: `SERVICE fail2ban.service restart, expected active,
-  OWNED` on Saymer3. Nothing else executes until the operator widens the pin.
-- If Apply/Validate/Re-discovery/Convergence/Persist fails: do NOT retry,
-  do NOT fix things by hand, do NOT persist anything. Report the exact stage
-  and outcome, and stop.
-- A failed transaction leaves the machine as the engine's rollback left it.
-  Recovery decisions belong to the operator.
-
-## 7. Plan, confirmation and stale-plan rules
-
-- The operator confirms a plan by its SHA-256 fingerprint, not by a yes/no
-  answer. A confirmation is valid only for that exact plan.
-- Plans cannot be edited through the CLI. If the situation changed, regenerate
-  the plan and re-confirm.
-- The staleness gate re-checks the machine under the lock before mutation.
-  Never disable, weaken or skip it.
-- If a prepared plan and a fresh plan disagree, the fresh machine wins: report
-  the mismatch and regenerate.
-
-## 8. SSH and recovery rules
-
-- SSH changes (port migration, hardening) are the highest-risk operations:
-  they require a staged transition, an executor preflight, a rollback path and
-  an external management probe before finalization
-  (`docs/management-probe.md`).
-- Check the recovery path BEFORE a risky change: does the operator have a
-  console? A bot-only hoster without console access means SSH breakage equals
-  machine loss — such machines require the strictest evidence gates.
-- Never assume the management path works. It is proven by a probe from
-  outside the machine, or it is UNKNOWN.
-
-## 9. State and persistence rules
-
-- `state.json` is written atomically (0600), schema-versioned, and only from
-  verified post-change state: apply → re-discover → final validation →
-  convergence → persist.
-- UNKNOWN ownership is persisted as UNKNOWN. Absence stays absent. Nothing is
-  silently upgraded or dropped.
-- Never read desired state or ownership from persisted state when explicit
-  configuration exists. Precedence is enforced in `pipeline.Assemble` and
-  pinned by tests.
-
-## 10. Coding rules
-
-- Read the existing architecture and docs before writing code. Use the
-  existing mechanism; never build a parallel one.
-- Prefer a minimal diff over a refactor. Do not reformat files you did not
-  touch (the repo uses a compact style that is not gofmt-canonical; running
-  gofmt over old files creates noise diffs — a repo-wide gofmt pass is a
-  separate, operator-approved change).
-- Every bug fix carries a regression test that fails without the fix.
-- Environment facts (euid, binary lookup, file system) are injected through
-  interfaces/parameters, never read directly in code paths under test. This
-  bit the project three times; see `internal/discovery` Runner,
-  `state.BuildPreflightFor`, pipeline `Options.Root`.
-- Do not mask a failing test by weakening production code or the test's
-  assertions. Fix the cause.
-- Do not commit unrelated changes "along the way". Do not leave temporary
-  files, scripts or artifacts in the repository or on machines.
-- No commands or command lists that come from plan/config data may be executed
-  on the machine. Machine-command knowledge lives in executor code.
-
-## 11. Testing and verification
-
-- Before pushing: `go test ./...`, `go vet ./...`, `go build ./...`, builds
-  for linux/amd64 and linux/arm64. CI runs the same on every push.
-- Tests must not depend on the host they run on: inject root facts, runners
-  and discovery. Fixtures are authoritative for machines; live hosts are not.
-- New safety behavior needs a test that fails without it (verify by
-  temporarily reverting the fix).
-- After changes: review `git status` and `git diff` before committing. The
-  diff must contain exactly the intended change and nothing else.
-
-## 12. Documentation rules
-
-- Update documentation only where behavior actually changed.
-- Operational lessons go to `docs/lessons-learned.md` (numbered, with a Rule).
-- Status claims (what is implemented vs unreachable) live in `README.md`,
-  `ROADMAP.md` and `docs/plan-apply.md`; keep them in sync with reality.
-  The former pre-`apply` wording debt (README layout, plan-apply locking
-  status) was reconciled on 2026-09-28; the current authoritative status
-  checkpoint is `docs/HANDOFF-2026-09-28.md`.
-
-## 13. When to STOP and ask the operator
-
-Stop and report instead of acting when:
-
-- a plan fingerprint does not match the approved one;
-- the prepared plan differs from the expected/pinned shape;
-- preflight, executor coverage, ownership or staleness blocks the run;
-- any transaction ends in anything other than COMPLETED;
-- credentials, host names or machine identity are uncertain;
-- a required document contradicts the code or another document;
-- the task would require a bypass flag or an interface change that weakens a
-  gate;
-- the machine's recovery path is unknown and the change is risky (SSH,
-  firewall, routing);
-- anything outside the assigned task seems necessary.
-
-## 14. Expected workflow for an agent
-
-Four work modes, in increasing order of risk. Do not jump modes without an
-explicit task.
-
-1. **Code and tests only** (default): read docs and code → change code →
-   regression test → `go test ./...` + vet + builds → show diff → commit on
-   approval.
-2. **Read-only on a real VPS**: the runbook (§5) — discovery, doctor,
-   validate, dry-run, journal/config inspection. Nothing mutates.
-3. **Diagnostic changes on a VPS**: backup first, verify boundaries first,
-   minimal change, read-only verification after, artifacts removed or
-   reported, no service restarts unless explicitly approved.
-4. **Production mutation**: only through `vps-gateway apply` (or a future
-   operator-approved path), only for a pinned experiment, only with the
-   operator's fingerprint confirmation.
-
-The mutation lifecycle, in full, is the orchestrator's contract:
-
-```text
-DISCOVER → UNDERSTAND → STATE → OWNERSHIP → DIFF → PLAN → PREFLIGHT
-→ OPERATOR CONFIRMATION → LOCK → BACKUP → APPLY → VALIDATE
-→ RE-DISCOVERY → FINAL VALIDATION → CONVERGENCE → PERSIST
-```
-
-Everything before OPERATOR CONFIRMATION is read-only. Any failure anywhere
-after it fails the run fail-closed, leaves the machine in the state the
-engine's rollback produced, and never persists unverified state.
-
-Two production experiments on Saymer3 (fail2ban repair) proved this contract
-on a live machine. Experiment #1 failed closed before any mutation — a
-plan-to-executor binding bug (`no action registry configured`) meant nothing
-ran and nothing was persisted; the fix (`eb93f8e`) added real-executor
-integration tests, because fakes had hidden the gap. After the operator
-repaired the machine's duplicate `[sshd]` section in `jail.local` and an
-executor preflight (`fail2ban-client -t`) was added (`bc5c0af`), experiment
-#2 completed the full lifecycle — restart, re-discovery, final validation,
-convergence, persistence — and fail2ban is active.
-
-
-## 15. Research provenance — external knowledge base
-
-- `https://github.com/saymer-alt/keenetic-knowledge-base` is an optional
-  research/provenance source: when designing a relevant VPS/networking
-  feature, check it for prior work that may help — operator observations,
-  failure cases, commands, experiments, design ideas. The historical VPS
-  cluster material lives in `amnezia.md`, `awg.md`, `check.md`,
-  `install.sh`, `uninstall.sh`.
-- That material is NOT authoritative production implementation. Old scripts
-  and AI-generated notes must never be copied blindly: verify every finding
-  against current upstream behavior/documentation, current discovery
-  evidence where applicable, and this repository's architecture and code.
-  `vps-gateway-bootstrap` remains the only source of truth for its own
-  production behavior.
-- KB material grants no ownership, adoption, approval, or execution
-  authority (docs/security-model.md); consulting it never widens what a
-  task may mutate.
-
-
-## Technical debt
-
-- Treat technical debt as an explicit engineering risk, but do not confuse it with cosmetics, personal style preferences, or merely "ugly" working code.
-- For each debt item, provide evidence first and classify its impact: **High** (breakage/security/data-loss risk or blocks operation), **Medium** (impedes development, duplicates/diverges logic, or materially increases maintenance cost), **Low** (local complexity with little current risk).
-- Do not refactor for cleanliness alone. Pay down debt when the benefit and risk reduction justify the change; do not rewrite stable, verified code without a concrete reason.
-- Debt fixes must keep minimal scope, preserve existing safety boundaries, and pass the project's normal regression/safety checks. If the fix creates greater risk or new debt, stop and propose a safer alternative.
-- If debt is discovered outside the current task, do not silently expand scope: record the finding and recommendation, and implement it only when it is in scope or explicitly approved by the operator.
+Dated experiments, host inventory, research notes and previous acceptance reports are **not current verification or permission to act**. Do not preload them automatically.
