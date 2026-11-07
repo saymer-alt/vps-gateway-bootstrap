@@ -31,6 +31,9 @@ jobs:
       - name: Agent startup contract
         run: python3 tools/check-agent-guidance.py
 
+      - name: Privilege boundary contract (read-only P0/P1)
+        run: python3 tools/check-privilege-boundary.py
+
       - name: Test
         run: go test ./...
 
