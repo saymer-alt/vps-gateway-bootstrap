@@ -3,8 +3,12 @@
 This document is the binding security and authority architecture for the
 project, alongside `AGENTS.md` (behavioural contract) and `docs/ownership.md`
 (ownership rules). It defines what authority is, where it may live, and what
-may never count as authority. The architecture described here was decided by
-the operator; implementation follows it, it does not re-open it.
+may never count as authority. The operator's safety policy remains binding.
+The least-privilege correction below is a REVIEW PROPOSAL, not an already
+implemented or approved deployment. See
+[least-privilege P0/P1 design](privilege-separation-p0p1-2026-11-07.md).
+A host with adversarial, unrestricted root needs an independent trust root;
+ordinary local code cannot provide this guarantee.
 
 Where this document and older prose disagree, this document wins for
 security and authority questions.
@@ -13,8 +17,11 @@ security and authority questions.
 
 1. A mutation of a real VPS happens only when a human operator approved
    exactly that mutation.
-2. No actor that can propose a mutation can also approve it, regardless of
-   that actor's privileges on the target machine — including root.
+2. A delegated, unprivileged agent cannot approve its own plan or use a
+   privileged mutation path without out-of-band operator authorization.
+   This is a TARGET, not a deployed guarantee. An adversary with unrestricted
+   root can replace the local verifier, trusted public key or executable;
+   hostile-root resistance requires an independent enforcement boundary.
 3. Data control (config files, state files, environment, CLI arguments)
    never converts into mutation or adoption authority by itself.
 4. The machine is never left worse by a failed change than the transaction
@@ -27,12 +34,12 @@ security and authority questions.
 Actors:
 
 - **Operator** — the human authority. Approves mutations out of band.
-- **Autonomous agent** — AI or automation that runs CLI/tools, edits files,
-  and may hold root on the target VPS in order to execute approved work.
-  Assumed to be able to: run any binary, read and write any file the
-  execution context allows (including `/etc/vps-gateway/state.json`),
-  supply any CLI arguments, and compose multiple invocations. Assumed NOT
-  to hold the operator's private signing key.
+- **Autonomous agent** — an untrusted proposer controlling its CLI and
+  agent-writable input (config/state/proposals). Under proposed P1 it runs
+  without root, unrestricted sudo/polkit, Docker/containerd socket access,
+  writable broker/anchor/journal paths or an operator signing key. This
+  separation is NOT DEPLOYED: existing root-run agents are outside this
+  local authorization guarantee.
 - **Remote attacker** — no legitimate access; covered by ordinary system
   hardening, not by this model, except where a bootstrap action could
   weaken the management path (SSH).
@@ -47,15 +54,30 @@ path (SSH), and the truthfulness of the project's own records.
 | Boundary | Inside | Outside |
 |---|---|---|
 | Approval authority | the operator; the operator's private signing key | everything on the target VPS, including root |
-| Verification | the public trust anchor embedded in project code | any secret stored on the VPS |
+| Verification | operator-provisioned public Ed25519 key in a root-owned file, trusted only against non-root writers | agent-writable data; NOT adversarial root |
 | Execution | authorized plan actions, run with root where required | anything root could do beyond the approved plan |
 | Policy | compiled project code (registries, allowlists, admission) | config files, state files, environment |
 | Memory | verified last-known-good state (`state.json`) | live machine state (only discovery may speak for it) |
 
-Root on the target VPS is **execution capability, not approval authority**.
-An agent may hold root to execute an authorized operation; possession of
-root must not let it approve new mutations, adopt resources, or widen its
-own capabilities.
+**Root is execution capability, not approval authority** expresses a policy
+separation, NOT an enforceable guarantee against a process with unrestricted
+root on the same OS. Host root can replace the public key, binary or journal
+and bypass local code. Proposed P1 uses a non-root agent and a separately
+trusted privileged executor. Its binary, unit and key must not be writable
+by the agent. The OS/bootstrap administrator remains trusted. An attacker
+controlling unrestricted root needs an external/hardware-enforced boundary.
+
+### Proposed P1 delegation boundary (NOT DEPLOYED)
+
+The non-root agent may inspect a typed plan and submit it with an operator
+signature; it cannot execute arbitrary privileged operations. A root-owned,
+minimal executor would independently derive and validate the exact plan,
+identity, signature, expiry, purpose, capability set, ownership, compiled
+allowlist, staleness, lock, journal and rollback. A Unix-socket peer UID may
+identify the caller but is never authority to mutate. No arbitrary shell,
+writable plugin, general sudo or Docker socket. The first experiment stays
+pinned to fail2ban.service restart; other services/SSH/network stay out of
+scope until separate GO and evidence. See the linked P0/P1 design.
 
 ## 4. State vocabulary
 
@@ -87,7 +109,10 @@ what may be trusted today:
   fingerprint in-process, prints it (including under `--dry-run`), and
   accepts a fingerprint prefix via `--confirm` from the same invoker. An
   actor that can run the CLI can act as proposer and approver in one flow.
-  Closed by Stage 2 (§13).
+  **OPEN**: PR #69 integrated an optional signed --approval path with a
+  no-downgrade fix, but the self-suppliable --confirm route remains. Stage 2
+  is PARTIAL, not production ready; only a later owner-approved retirement
+  with a negative tripwire can close G1.
 - **G2 — ownership is self-grantable.** The ownership map is installed
   wholesale from explicit config (or from persisted state in the planning
   path) with no provenance, no admission check, and no adoption record.
@@ -129,17 +154,22 @@ No guard may be treated as an authority boundary.
   and no CLI flag, config field, state field, environment variable, or Plan
   field can select or replace the anchor; executors refuse to manage
   anything under `/etc/vps-gateway/trust/`. Bootstrap and rotation of a
-  real anchor are operator-controlled actions outside the codebase.
+  real anchor are operator-controlled actions outside the codebase. A root:root
+  file/mode checks malformed or non-root changes, not key replacement by an
+  actor already holding root; synthetic PR #71 confirms this with a
+  disposable temporary file. The current production Confirm path also uses
+  verifier v1; v2 purpose and exact capability grant semantics exist but
+  are not yet wired in (authority_boundary_test.go).
 - An exact, approved Plan may be re-submitted within its validity period
   for now. Strict server-side single-use semantics are deferred to a
   future external approval controller. A future controller may replace or
   extend this architecture without weakening it; any such replacement must
   keep every invariant in §14.
-- The current fingerprint-prefix confirmation (G1) is transitional. It is
-  a plan-identity ritual, not an authority mechanism, and must not be
-  relied on as one. It is removed when Stage 2 lands; the `--confirm`
-  path is the first thing an approval implementation must retire, with a
-  tripwire test asserting its absence.
+- Fingerprint-prefix confirmation G1 remains TRANSITIONAL after the partial
+  Stage 2 code merge (#69). It is plan identity, NOT independent approval.
+  Retire --confirm in a separately reviewed slice only after a positive
+  operator-signature and disposable-lab acceptance. A tripwire must prove
+  its absence. Until then do not broaden the experiment pins.
 
 ## 7. Ownership and adoption architecture (decided)
 
@@ -303,9 +333,12 @@ pinned resources.
 - They receive **constrained high-level operations** ("ensure service X is
   active", "run doctor", "propose repair of owned resource Y"); trusted
   project code converts those operations into Plans internally.
-- An agent may propose and may execute approved work; it can never
-  approve, adopt, widen namespaces, or alter capability sets. Every
-  approval path routes through §6.
+- The delegated agent may propose and request authorized work but must not
+  receive unrestricted root, general sudo, a writable executor/anchor or
+  an alternate privileged channel. Execution belongs to a separately
+  trusted broker after independently verifying approval and every existing
+  lifecycle gate. This is PROPOSED, NOT DEPLOYED. All approval routes
+  remain subject to §6 and fail closed.
 - The operator's signing step remains a human action on a device that is
   outside the agent's authority, regardless of how the approval artifact
   reaches the CLI.
@@ -322,10 +355,12 @@ without it, and the widening rule of §10 binds throughout:
    future executor enforces a compiled allowlist of the resources it may
    touch (paths, units, ports); no executor remains "generic within its
    kind".
-3. **Stage 2 — approval artifacts.** Operator-signed approvals replacing
-   the prefix confirmation; trust anchor embedded; `--confirm` retired
-   with a tripwire. Requires a minimal capability vocabulary (Stage 4/B)
-   to bind, so B's naming work precedes or accompanies this stage.
+3. **Stage 2 — approval artifacts (PARTIAL, NOT ACCEPTED).** PR #69 merged
+   signed-v1 CLI approval and fail-closed tripwires, but --confirm remains.
+   Finish operator-controlled anchor/signing ceremony and positive lab,
+   purpose-bound exact capability grants at the Confirm boundary, P1
+   privilege separation and legacy retirement with absence tripwire;
+   Stage 4/B vocabulary is not itself mutation authority.
 4. **Stage 3 — ownership admission.** Compiled namespace policy, birthright
    inside it, explicit signed adoption for foreign/sensitive resources,
    provenance-verified ownership records, config/state demoted to
@@ -342,7 +377,9 @@ without it, and the widening rule of §10 binds throughout:
 ## 14. Security invariants
 
 Testable statements; each implementation stage must be able to point at
-the tests that hold its invariants:
+the tests that hold its invariants. These are TARGETS under a trusted OS and
+restricted agent, not current hostile-root guarantees. G1/G2/G3 and P1
+remain open as explicitly documented above:
 
 - **INV-1** No mutation executes without an approval bound to the exact
   plan fingerprint, the target host, the named capability set, and a live
