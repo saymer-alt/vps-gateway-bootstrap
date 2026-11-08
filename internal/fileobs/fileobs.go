@@ -241,6 +241,11 @@ var (
 	reservedExact = map[string]bool{
 		"/etc/vps-gateway/state.json": true,
 		"/etc/vps-gateway/apply.lock": true,
+		// The directory entries themselves are reserved too; the prefix
+		// checks below only cover their children.
+		"/etc/vps-gateway/trust": true,
+		"/etc/vps-gateway/journal": true,
+		"/etc/vps-gateway/backups": true,
 	}
 	reservedPrefixes = []string{
 		"/etc/vps-gateway/trust/",
