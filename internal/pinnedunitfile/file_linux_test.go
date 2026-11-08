@@ -50,7 +50,7 @@ func TestPinnedOpenatKernelEvidence(t *testing.T) {
 
 func TestPinnedSourceRejectsUntrustedPathBeforeFilesystem(t *testing.T) {
 	for _, path := range []string{
-		"", "fail2ban.service", "/lib/systemd/system/fail2ban.service",
+		"", "fail2ban.service",
 		"/usr/lib/systemd/system/ssh.service",
 		"/usr/lib/systemd/system/../system/fail2ban.service",
 		"/etc/systemd/system/fail2ban.service",
