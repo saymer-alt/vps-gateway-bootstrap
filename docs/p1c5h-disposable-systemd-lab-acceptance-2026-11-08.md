@@ -21,7 +21,7 @@ The disposable VM should have PID1 systemd, local /usr/bin/systemctl, /run/syste
 
 ## Default-off lab tripwire
 
-The real-manager test is isolated in a Go file with build tag linux && p1c5h_lab, absent from normal go test ./... and GitHub CI.
+The real-manager test is isolated in a Go file with build tag linux && p1c5h_lab, absent from normal go test ./.... GitHub CI separately COMPILES this tagged test but filters by test name to run ONLY the lab-guard fixture/denial tests, never TestP1C5HRealDisposableSystemdReadOnly. The tagged live probe itself is LAB NOT TESTED.
 
 Even with the tag, it FAILS before accessing systemd unless:
 
