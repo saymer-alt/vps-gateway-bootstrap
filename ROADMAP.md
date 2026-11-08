@@ -32,6 +32,8 @@ READY
 
 **Core MVP ≠ Gateway MVP ≠ complete multi-protocol platform.** Completing the first must have a finite, measurable STOP/acceptance gate, so unrelated future modules can keep evolving without keeping Core permanently unfinished.
 
+**8 November 2026 — FIRST Core MVP resource decision:** prioritize a single project-created, project-owned file in `/etc/vps-gateway/` for the first *trusted-operator* end-to-end acceptance. **Do not require foreign `fail2ban.service` adoption or a delegated-agent broker to finish that first milestone.** Keep all existing fail2ban policies/probes/tests and non-root broker research intact for separate later acceptance. No executable pins or safety gates change from this roadmap note. See [scenario decision](docs/CORE-MVP-FIRST-SCENARIO-DECISION-2026-11-08.md), [Core #56](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/56), [adoption #79](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/79) and [systemd lab #87](https://github.com/saymer-alt/vps-gateway-bootstrap/issues/87). Current code remains service-pinned; file authority/admission and lab are **NOT DONE**.
+
 ---
 
 ## Implementation status (2026-09-06)
