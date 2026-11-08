@@ -5,7 +5,6 @@ import (
     "errors"
     "fmt"
     "strings"
-    "syscall"
     "unicode/utf8"
 
     "github.com/saymer-alt/vps-gateway-bootstrap/internal/serviceunitmeta"
@@ -117,7 +116,7 @@ func pinnedReportedFragment(p string) bool {
 func diskEvidenceReviewable(e Evidence, uid uint32) bool {
     if e.Path != CanonicalFragment || e.UID != uid || e.Size < 1 ||
         e.Size > MaxBytes || e.Device == 0 || e.Inode == 0 ||
-        e.Mode&syscall.S_IFMT != syscall.S_IFREG || e.Mode&0022 != 0 ||
+        e.Mode&0170000 != 0100000 || e.Mode&0022 != 0 ||
         len(e.SHA256) != 64 {
         return false
     }
