@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Disposable systemd lab tag compile (NO live systemd probe)
+        run: go test -tags=p1c5h_lab ./internal/pinnedsystemd -run '^TestDisposableSystemdLabPermit' -count=1 -v
+
       - name: Owner experience — CLI refusal and guidance
         run: go test ./cmd/vps-gateway -run '^TestOwnerExperienceCLI$' -count=1 -v
 
