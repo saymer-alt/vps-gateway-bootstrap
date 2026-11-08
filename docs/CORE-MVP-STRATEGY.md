@@ -6,6 +6,12 @@
 
 This document is a **priority and completion policy**, not permission to bypass a safety gate. For security and authority, [security-model.md](security-model.md), [ownership.md](ownership.md), and root [AGENTS.md](../AGENTS.md) remain binding. [Proof Before Build](https://github.com/saymer-alt/saymer-alt/blob/main/PROOF-BEFORE-BUILD.md) applies to any new function.
 
+## Active first scenario (owner re-scope 2026-11-08)
+
+**For the FIRST Core MVP, prefer one harmless project-owned file in the compiled `/etc/vps-gateway/` namespace, not adoption of package-managed `fail2ban.service`.** Decision/evidence and exact pending gates: [CORE-MVP-FIRST-SCENARIO-DECISION-2026-11-08.md](CORE-MVP-FIRST-SCENARIO-DECISION-2026-11-08.md). The historic file experiment is reusable; the new independent signed/admission/rollback path is **NOT IMPLEMENTED**.
+
+**Scope split:** the FIRST Core MVP is an independently authorized **trusted-human-operated** bounded transaction; autonomous agents receive **no root or privileged execution rights** in that milestone. Delegated non-root agent + privileged broker belongs to a later, separately proven and authorized milestone. Existing fail2ban guards, service-adoption research (#79), default-off systemd lab (#87), all safety invariants, and the external operator signing requirement stay intact. The **non-root delegated agent** and privileged-broker boundary is a mandatory, separately accepted gate **before any agent-driven mutation**, never a waiver or automatic root entitlement. This documentation **does not** authorize changing any executable pin, acceptance gate or real VPS.
+
 ## 1. Separate the milestones and their promises
 
 | Milestone | Concrete deliverable | What it **does not** claim |
@@ -36,7 +42,7 @@ Stage 2 requires the relevant Stage 4 vocabulary. Choose the smallest safe integ
 Declare **Core MVP accepted** only with evidence for all of these, or explicitly record a narrower owner-approved scope. Do not silently mark a step complete.
 
 1. **One real operator task, not a framework demo:** document the single narrowly scoped resource/action scenario and its supported Debian/Ubuntu environment; demonstrate a usable operator-facing plan and result. Do not promise full gateway installation.
-2. **Authority holds under adversarial inputs within the trusted-host boundary:** a **non-root delegated agent** can control its proposal/config/CLI but cannot attain root, write the broker or public anchor, approve its own plan, adopt foreign resources or synthesize authority. The trusted executor must enforce signature, purpose, exact capabilities, host identity, expiry, ownership and composition. Unrestricted hostile root is out of scope for an on-host-only guarantee; that requires independent enforcement. This exit gate is **NOT DONE** until P1 and the separately authorized isolated-lab acceptance pass.
+2. **Authority holds for the FIRST trusted-operator scope:** a human-controlled bounded CLI transaction must enforce independent off-box signed approval, purpose, exact capabilities, host identity, expiry, trusted ownership/birthright and composition; the signer is not the proposing program. No autonomous agent, arbitrary/root-capable proposer or privileged broker listener is enabled in this first acceptance. A **later delegated-agent** milestone must separately prove non-root peer isolation and a trusted privileged broker before any agent mutation. Hostile unrestricted root is not contained by on-host-only controls. This first exit gate remains **NOT DONE** until independent disposable-lab acceptance and every applicable signed/ownership/composition/recovery check pass.
 3. **Predictable lifecycle:** discovery → model → plan → preflight → approval → lock → execute → re-discover → validate → converge → durable journal → persist verified last-known-good. Preserve pre-existing foreign resources and SSH management.
 4. **Repeatability:** an identical second run does **NO_CHANGE** without mutation; partial work, interruption, restart, missing journal, unknown ownership and failed validation stop or safely recover, never falsely persist success.
 5. **Evidence beyond unit tests:** synthetic positive/negative regression suite + relevant integration tests, then a **separately approved disposable lab** for the bounded real change, failure/recovery and management reachability. Test reboot persistence where applicable; explicitly mark any unproven path UNKNOWN. Existing field evidence for other experiments must not be transferred by assumption.
@@ -49,7 +55,7 @@ Once the bounded Core MVP passes, **stop adding abstractions to Core for hypothe
 
 **Now — P0: Core authority and safety gaps.** Audit existing `internal/approval`, `internal/ownership`, `internal/capability` and `internal/orchestrate` against the binding security model; reuse the primitives already present. Complete the smallest testable missing gate. Demonstrated defects that threaten the Core milestone are P0.
 
-**Next — P1: complete one vertical Core MVP flow.** Choose the smallest practical, owned scenario, finish its operator contract, tests, rollback/recovery and separately authorized lab acceptance. Prefer closing a finished task over starting three new foundations.
+**Next — P1: complete one vertical Core MVP flow.** Prefer the single project-owned file described in the [8 November scope decision](CORE-MVP-FIRST-SCENARIO-DECISION-2026-11-08.md); finish its operator contract, independent signed ownership/admission, tests, rollback/recovery and separately authorized lab acceptance. Defer package-managed fail2ban adoption and the delegated-agent broker from this first milestone; preserve existing research and safeguards.
 
 **After that — P2: Gateway MVP.** Compose a **single** user-visible network-gateway scenario from the proven Core and existing independent components, without flattening the user's multi-VPS, multi-transport design.
 
