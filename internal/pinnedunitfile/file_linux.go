@@ -15,10 +15,10 @@ var pinnedParts = [...]string{"usr", "lib", "systemd", "system", "fail2ban.servi
 
 // collectPinned is the sole production acquisition path. It always starts
 // at the kernel root and demands root-owned, non-group-writable ancestors.
-// A symlink at ANY traversed component is refused, rather than followed.
-// This intentionally rejects hosts with layouts outside the exact path.
-func collectPinned(ctx context.Context) (Evidence, error) {
-	return collectUnderRoot(ctx, "/", 0)
+// A symlink at ANY traversed component of the canonical path is refused.
+// The /lib usrmerge alias is verified separately without ever following it.
+func collectPinned(ctx context.Context, fragment string) (Evidence, error) {
+	return collectFragmentUnderRoot(ctx, "/", 0, fragment)
 }
 
 // collectUnderRoot is package-private and used to exercise the same kernel
