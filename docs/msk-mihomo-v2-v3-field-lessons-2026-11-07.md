@@ -55,3 +55,39 @@ After manually replacing the on-disk file, the operator initially reported that 
 - References: [shared runbook](mihomo-manual-tiered-egress-se2.md), [lessons #36–39](lessons-learned.md), [link-generators builder gaps #278](https://github.com/saymer-alt/link-generators/issues/278), [AMG runtime watchdog #61](https://github.com/saymer-alt/amnezia-mihomo-gateway/issues/61).
 
 **No release or live mutation GO:** This is documentation of the owner-operated private YAML workflow, not a sanctioned automated VPS change or a proof that a new generic config generator implementation is production-ready.
+
+## Newest field snapshot — MSK V3, WARP-only refresh (2026-11-07 ~18:57–19:18 MSK)
+
+This section **supersedes the old pending-check notes above** as of the timestamps shown. Earlier V2 observations remain historical, not a current claim.
+
+### Operator-observed state (read-only commands, except owner-installed private candidate)
+
+- **MSK V3 / Estonia UDP:** `mihomo.service=active`; API `GLOBAL.now=AUTO-EXIT`, `AUTO-EXIT.now=Estonia Mieru`, `ESTONIA.now=Estonia Mieru`. Mieru UDP and Estonia TUIC both `alive=true`; this is evidence that V3 successfully prefers Mieru, unlike earlier V2/TCP.
+- **Geodema** provider had **91 loaded / 53 alive** and its GEODEMA selector was `alive=true` (chosen FI node). **Kyra** had **2/2 alive**, selector `alive=true` (chosen PL node). **Gist EE** had **6/6 alive**, selector `alive=true` (chosen EE Reality node). Preserve Gist EE as a manual-only separate provider source.
+- **Gist VPS MSK** had **3 loaded VLESS nodes / 0 alive**. Per-leaf repeated health history `delay=0`; targeted health checks returned HTTP **503** for `VPNTYPE Fin`, **504** for `FRV-NL-Free` and **504** for the Germany node. Group delay check also returned 503. The provider download **is not empty**; actual cause of leaf health failures **unknown**, cannot blame missing subscription/URL/TCP/Reality without further evidence.
+- With V3's original WARP profile, `WARP MSK.alive=false`, targeted delay returned HTTP **504**.
+- **Owner manually applied a new private candidate that changed only the `WARP MSK` WireGuard/AWG definition** (including the correct matching key/endpoint identity and AWG v3 obfuscation/I1). Existing group name and references, Mieru UDP/TUIC, subscriber groups, 24 Gemini rules, TUN/DNS and priorities were preserved in the locally generated candidate. Owner reported "config works"; subsequently **live Mihomo API explicitly showed `WARP MSK.alive=true`**, alongside `GLOBAL→AUTO-EXIT→Estonia Mieru`, Mieru `alive=true`. This is **confirmed WARP health after refresh**, not just operator impression. Exact endpoint, private key and I1 are intentionally not stored.
+- Before the WARP-only refresh, the local HTTP proxy `https://www.gstatic.com/generate_204` returned **HTTP 204, ~0.245 s**. Following the WARP refresh, a separate operator note stated the config worked; there is no newer packet-level AWG client benchmark in this record. Do not attribute pre-refresh HTTP latency to the new WARP identity.
+- At 18:57 MSK the host kept `ip rule priority 40 fwmark 0x88 lookup main`, priority 100 AWG subnet `172.29.172.0/24` `lookup mihomo`, table 100 `default dev tun-mihomo metric 10` and terminal `unreachable default metric 42760`; `check-warp-routing.timer` had a finite next trigger at 18:57:05. These route/timer values were captured **before** installing refreshed WARP identity; no evidence of disappearance afterward, but repeat them for exact current validation. Historical `AMG_FAILSECURE` chain was observed on an earlier date, not retested in this snapshot.
+- Disk utilization was **79.5% of 8.65 GB** in one Ubuntu login banner. Operational cleanup should be based on separate `df`/`du`, not guessed or executed by documentation.
+
+### Independent WARPSCOUT scan — do not confuse with installed WG
+
+On the same host, WARPSCOUT ran `awg` probing, QUIC-format generated `i1`, excluding DME, `jt=10`, with speed ranking. Reported **30/30 reachable tunnels**, one highest observed speed **170.3 Mbps** (ping ~42 ms, 0% loss); candidate node label **FRA**, externally reported `Seen as: RU`. It produced a private `awg-fra-…conf` with owner-only 0600 permissions. **No evidence that this independently scanned .conf was installed in Mihomo**; live `WARP MSK.alive=true` corresponds to the previously applied private WARP-only candidate.
+
+### Effective status and next bounded checks
+
+| Area | State | Evidence limit |
+| --- | --- | --- |
+| Mihomo V3 + Mieru UDP / Estonia TUIC | **OBSERVED HEALTHY** | Selected active fallback Mieru. Not evidence of AWG-client UDP session. |
+| Geodema, Kyra, manual Gist EE | **OBSERVED HEALTHY** | Provider/selector health at a point in time. Gemini connection chain not shown. |
+| WARP MSK after private WG-only refresh | **OBSERVED HEALTHY (`alive=true`)** | Not current default egress, no explicit WARP-only routed HTTP/UDP measurement. |
+| Gist VPS MSK (three VLESS leaves) | **OBSERVED UNHEALTHY** | 3/3 leaf probes failed; root cause UNKNOWN. |
+| Policy routing / watchdog | **OBSERVED PRESENT/SCHEDULED** before latest WARP refresh | No induced failover, no latest firewall guard read-back, no E2E client no-leak test. |
+| Full client E2E, Gemini/YouTube routing and total outage | **NOT TESTED** | No fail-closed assertion from YAML, service active, group health or local 204. |
+
+**Next safe action** is read-only inspection of the current Mihomo controller, last fresh process journal, DNS/TUN/routing/firewall/watchdog, real Gemini `Connections` chain and remote AWG-client TCP+UDP paths. Treat an induced outage as a separate, explicitly approved high-risk test requiring rollback. Diagnose GIST's three leaves independently; do **not** change working Mieru/WARP identity, erase host routing barriers or paste secrets into public issues.
+
+**Engineering takeaway:** A valid new WG/AWG identity can turn `alive:false` into `alive:true` without restructuring the fallback hierarchy. Do not confuse a separate WARPSCOUT scan with applied node configuration, and do not mark every commercial provider fixed just because primary/WARP now work. The accepted policy stays: Estonia Mieru UDP → Estonia TUIC → Geodema → Kyra → Gist → WARP MSK; Gemini-only→Geodema. No visible REJECT member inside each nested automatic tier; keep `empty-fallback:REJECT` semantics distinct from full-outage no-leak proof.
+
+**Privacy:** no full private YAML, WARP/AWG key, large I1, provider URL/token/HWID, or exact private input artifact is stored here.
