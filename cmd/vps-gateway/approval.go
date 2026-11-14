@@ -36,7 +36,10 @@ const localMachineIDPath = "/etc/machine-id"
 // anchor (internal/approval). Malformed containers fail closed here so a
 // broken artifact can never reach the confirmation boundary.
 func parseApprovalArtifact(path string) (approval.Artifact, error) {
-	raw, err := os.ReadFile(path)
+	// Untrusted artifact paths may name huge files, FIFOs or symlinks.
+	// Bound and type-check the Linux file descriptor *before* JSON parse,
+	// without changing signature or trust-anchor verification semantics.
+	raw, err := readBoundedApprovalArtifact(path)
 	if err != nil {
 		return approval.Artifact{}, fmt.Errorf("approval artifact: %w", err)
 	}
