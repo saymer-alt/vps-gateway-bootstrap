@@ -36,3 +36,10 @@ The owner deliberately uses **autonomous VPS, distinct ENTRY/TRANSIT/EXIT layers
 - [04 — coding, tests, docs and technical debt rules](docs/agent-guidance/04-development-tests-and-debt.md): for implementation and documentation.
 
 Dated experiments, host inventory, research notes and previous acceptance reports are **not current verification or permission to act**. Do not preload them automatically.
+
+## Public field-evidence privacy
+
+- Never include real user/site labels, actual VPS public IPs, management addresses, private network identifiers or correlated ISP × location/date × NODE/endpoint × uptime/throughput/availability measurements in public repository code, docs, issues, PRs, comments, CI logs or artifacts.
+- WARP/WARPSCOUT field matrices, real packet captures, full scans and private host labels are restricted operational data; public documents use methods and anonymized/synthetic examples only.
+- Authorised agents with internal access consult their own restricted research context; never publish the repo name, URL, internal path or mapping of case IDs. Keep old public documentation URLs as neutral compatibility stubs.
+- Review public diff and generated output for sensitive values. Normal edits do not erase old Git history, PR diffs, forks or external caches.
